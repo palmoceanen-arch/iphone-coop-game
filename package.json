@@ -1,0 +1,24 @@
+{
+  "name": "physball-arena",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Casual multiplayer 2D physics football arena (HaxBall-inspired) for web and mobile.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "lint": "eslint . --max-warnings=0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "matter-js": "^0.20.0",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.13.0"
+  }
+}
