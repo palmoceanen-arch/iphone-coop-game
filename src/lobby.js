@@ -42,7 +42,19 @@ export class Lobby {
     if (codeEl) codeEl.textContent = code;
 
     // Build join URL: same origin, /controller.html?code=XXXX
-    const joinUrl = `${location.origin}/controller.html?code=${code}`;
+    // When the host page is opened on localhost the iPhone won't be able to
+    // reach it, so we swap in a LAN host. Override priority:
+    //   1) ?host=...  query param on the host page
+    //   2) hardcoded LAN_HOST below (set this to your Wi-Fi LAN IP / port)
+    //   3) fallback to location.origin
+    const LAN_HOST = '192.168.0.7:3000';
+    const params = new URLSearchParams(location.search);
+    let base = location.origin;
+    const overrideHost = params.get('host');
+    const isLoopback = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (overrideHost) base = `${location.protocol}//${overrideHost}`;
+    else if (isLoopback && LAN_HOST) base = `http://${LAN_HOST}`;
+    const joinUrl = `${base}/controller.html?code=${code}`;
     const urlEl = document.getElementById('lobby-url');
     if (urlEl) {
       urlEl.textContent = joinUrl.replace(/^https?:\/\//, '');
