@@ -162,9 +162,42 @@ setInterval(() => {
   socket.volatile.emit('input:state', state);
 }, 1000 / 30);
 
-// Suppress iOS Safari pull-to-refresh / context menus
+// ----------------------------------------------------------------------
+// Aggressively suppress iOS Safari gestures: pinch-zoom, double-tap-zoom,
+// swipe-back, pull-to-refresh, long-press context menu, callouts.
+// ----------------------------------------------------------------------
+function isInteractive(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A';
+}
+
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('gesturechange', (e) => e.preventDefault());
+document.addEventListener('gestureend', (e) => e.preventDefault());
+document.addEventListener('dblclick', (e) => e.preventDefault());
+
+// Block multi-touch (pinch) and any non-interactive touch from scrolling/zooming.
+document.addEventListener('touchstart', (e) => {
+  if (e.touches.length > 1) { e.preventDefault(); return; }
+  if (!isInteractive(e.target)) e.preventDefault();
+}, { passive: false });
+document.addEventListener('touchmove', (e) => {
+  if (!isInteractive(e.target)) e.preventDefault();
+}, { passive: false });
+document.addEventListener('touchend', (e) => {
+  if (!isInteractive(e.target)) e.preventDefault();
+}, { passive: false });
+
+// Manual double-tap-zoom guard for older iOS that ignores user-scalable=no.
+let _lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => {
+  const now = Date.now();
+  if (now - _lastTouchEnd < 350) e.preventDefault();
+  _lastTouchEnd = now;
+}, { passive: false });
+
 window.addEventListener('beforeunload', () => { try { socket.disconnect(); } catch { /* ignore */ } });
 
 // Visual: started flag could be used to reduce hint visibility
