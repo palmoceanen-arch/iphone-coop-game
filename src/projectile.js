@@ -19,10 +19,6 @@ export class Projectile {
     );
     this.mesh.position.set(this.pos.x, 1.2, this.pos.z);
     scene.add(this.mesh);
-    // tail
-    this.trail = new THREE.PointLight(this.color, 0.7, 4, 2);
-    this.trail.position.copy(this.mesh.position);
-    scene.add(this.trail);
   }
   update(dt, players, world) {
     if (!this.alive) return;
@@ -33,7 +29,6 @@ export class Projectile {
     // wall bounds
     if (!world.isClear(this.pos.x, this.pos.z, 0.18)) { this._destroy(); return; }
     this.mesh.position.set(this.pos.x, 1.2, this.pos.z);
-    this.trail.position.copy(this.mesh.position);
     for (const p of players) {
       if (!p.alive) continue;
       if (vdist(this.pos, p.pos) < p.radius + 0.25) {
@@ -46,7 +41,6 @@ export class Projectile {
   _destroy() {
     this.alive = false;
     this.scene.remove(this.mesh);
-    this.scene.remove(this.trail);
     this.mesh.geometry.dispose(); this.mesh.material.dispose();
   }
 }

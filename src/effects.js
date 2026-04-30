@@ -18,21 +18,26 @@ export class Effects {
   }
 
   burst(x, y, z, color = 0xffe28a, count = 12, speed = 6, life = 0.45) {
+    // Share geometry across particles in this burst; clone the material per
+    // particle so each fades independently.
     const geo = new THREE.SphereGeometry(0.12, 6, 6);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
+    const baseMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
+    const refs = { count: 0, geo };
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(geo, mat.clone());
+      const m = new THREE.Mesh(geo, baseMat.clone());
       m.position.set(x, y, z);
       this.scene.add(m);
       const a = Math.random() * Math.PI * 2;
       const s = rand(speed * 0.4, speed);
       this.particles.push({
-        mesh: m,
+        mesh: m, refs,
         vx: Math.cos(a) * s, vy: rand(2, 5), vz: Math.sin(a) * s,
         life: 0, ttl: life * (0.7 + Math.random() * 0.6),
         scale: 1.0,
       });
+      refs.count++;
     }
+    baseMat.dispose();
   }
 
   ring(x, y, z, color = 0xffffff, radius = 1.5, life = 0.35) {
@@ -73,7 +78,6 @@ export class Effects {
   }
 
   update(dt) {
-    // particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.life += dt;
@@ -81,6 +85,10 @@ export class Effects {
       if (t >= 1) {
         this.scene.remove(p.mesh);
         p.mesh.material.dispose();
+        if (p.refs) {
+          p.refs.count--;
+          if (p.refs.count <= 0) p.refs.geo.dispose();
+        }
         this.particles.splice(i, 1);
         continue;
       }

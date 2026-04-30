@@ -117,7 +117,10 @@ export class Enemy {
         body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: 0x9dfcff, transparent: true, opacity: 0.85 }));
         body.position.y = 1.2;
         grp.add(body);
-        const halo = new THREE.PointLight(0x9dfcff, 0.8, 5, 2);
+        const halo = new THREE.Mesh(
+          new THREE.SphereGeometry(0.85, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0x9dfcff, transparent: true, opacity: 0.18, depthWrite: false }),
+        );
         halo.position.y = 1.2;
         grp.add(halo);
         this.body = body;
