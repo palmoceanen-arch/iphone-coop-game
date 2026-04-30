@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { World, WORLD_SIZE } from './world.js';
+import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Projectile } from './projectile.js';
@@ -9,16 +9,27 @@ import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
 import { Input } from './input.js';
 import { UPGRADES, buy, renderShop } from './upgrades.js';
-import { vdist, clamp, rand } from './utils.js';
+import { vdist, clamp, hashString } from './utils.js';
 
-const LEASH_WARN = 14; // distance at which screen starts greying
-const LEASH_MAX  = 22; // beyond this, both bleed
-const LEASH_DRAIN = 14; // hp/sec drain when beyond max
-const SPAWN_CAP_BASE = 18;
-const ENEMY_KINDS = ['slime', 'archer', 'bomber', 'wisp', 'ogre'];
+const LEASH_WARN = 14;
+const LEASH_MAX  = 22;
+const LEASH_DRAIN = 14;
+
+function getSeedFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  let seed = params.get('seed');
+  if (!seed) {
+    // generate a memorable 6-char alphanumeric and put it in URL
+    seed = Math.floor(Math.random() * 1_000_000).toString(36).toUpperCase().padStart(4, '0');
+    params.set('seed', seed);
+    const newUrl = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    window.history.replaceState({}, '', newUrl);
+  }
+  return { display: seed, value: hashString(seed) };
+}
 
 export class Game {
-  constructor() {
+  constructor(opts = {}) {
     this.canvas = document.getElementById('canvas');
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -27,7 +38,9 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.world = new World(this.scene);
+    const seedInfo = opts.seed ? { display: String(opts.seed), value: hashString(String(opts.seed)) } : getSeedFromUrl();
+    this.seedDisplay = seedInfo.display;
+    this.world = new World(this.scene, seedInfo.value);
     this.followCam = new FollowCamera(this.canvas);
 
     this.sound = new Sound();
@@ -42,8 +55,8 @@ export class Game {
     this.projectiles = [];
     this.pickups = [];
 
-    this.spawnCooldown = 1.5;
-    this.dangerLevel = 1;
+    this._spawnInitialEnemies();
+
     this.totalKills = 0;
     this.elapsed = 0;
 
@@ -65,19 +78,19 @@ export class Game {
   }
 
   _bindUI() {
-    const start = () => {
-      const intro = document.getElementById('intro');
-      if (intro) intro.style.display = 'none';
-      this._waitingForStart = false;
-      this.sound.resume();
-      this.sound.bell();
-    };
-    document.getElementById('start')?.addEventListener('click', start);
     window.addEventListener('keydown', (e) => {
-      if (this._waitingForStart) start();
       if (e.code === 'KeyP') this.paused = !this.paused;
     });
     document.getElementById('restart')?.addEventListener('click', () => this.restart());
+  }
+
+  _startGame() {
+    if (!this._waitingForStart) return;
+    const intro = document.getElementById('intro');
+    if (intro) intro.style.display = 'none';
+    this._waitingForStart = false;
+    this.sound.resume();
+    this.sound.bell();
   }
 
   restart() {
@@ -93,44 +106,16 @@ export class Game {
       p.revive();
     }
     this.dead = false;
-    this.spawnCooldown = 1.0;
-    this.dangerLevel = 1;
     this.totalKills = 0;
+    this._spawnInitialEnemies();
     document.getElementById('death').classList.remove('open');
   }
 
-  _spawnEnemy() {
-    // Wave/danger curve: increases over time + at night
-    const isNight = this.world.isNight();
-    const cap = SPAWN_CAP_BASE + Math.floor(this.dangerLevel * 1.5) + (isNight ? 6 : 0);
-    if (this.enemies.filter(e => e.alive).length >= cap) return;
-    // Don't spawn too close to players
-    let x, z, ok = false;
-    for (let i = 0; i < 30; i++) {
-      const a = rand(0, Math.PI * 2);
-      const r = rand(20, WORLD_SIZE - 6);
-      x = Math.cos(a) * r; z = Math.sin(a) * r;
-      const minD = Math.min(...this.players.map(p => vdist({x,z}, p.pos)));
-      if (minD > 16 && this.world.isClear(x, z, 1.5)) { ok = true; break; }
+  _spawnInitialEnemies() {
+    for (const s of this.world.enemySpawns) {
+      const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, { homeX: s.homeX, homeZ: s.homeZ });
+      this.enemies.push(e);
     }
-    if (!ok) return;
-    // Pick kind weighted by danger level
-    const weights = {
-      slime:  Math.max(0.8, 2.5 - this.dangerLevel * 0.15),
-      archer: 0.9 + this.dangerLevel * 0.05,
-      bomber: 0.5 + this.dangerLevel * 0.08 + (isNight ? 0.4 : 0),
-      wisp:   0.4 + this.dangerLevel * 0.06 + (isNight ? 0.3 : 0),
-      ogre:   0.15 + this.dangerLevel * 0.06,
-    };
-    const total = Object.values(weights).reduce((a, b) => a + b, 0);
-    let r = Math.random() * total;
-    let kind = 'slime';
-    for (const k of ENEMY_KINDS) {
-      r -= weights[k];
-      if (r <= 0) { kind = k; break; }
-    }
-    const lvl = 1 + Math.floor(this.dangerLevel / 3) + (isNight ? 1 : 0);
-    this.enemies.push(new Enemy(this.world, this.effects, this.sound, kind, x, z, lvl));
   }
 
   _onPlayerHitsEnemy(player, enemy) {
@@ -146,7 +131,6 @@ export class Game {
 
   _onEnemyDies(killer, enemy) {
     this.totalKills += 1;
-    if (this.totalKills % 6 === 0) this.dangerLevel += 1;
     const dropFood = Math.random() < 0.18;
     const drops = spawnDrops(this.scene, enemy.pos.x, enemy.pos.z, enemy.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
@@ -250,14 +234,6 @@ export class Game {
       }
     }
 
-    // Spawn enemies
-    this.spawnCooldown -= dt;
-    if (this.spawnCooldown <= 0) {
-      const interval = clamp(2.0 - this.dangerLevel * 0.05 - (this.world.isNight() ? 0.5 : 0), 0.4, 2.0);
-      this.spawnCooldown = interval;
-      this._spawnEnemy();
-    }
-
     // Death check (both fallen)
     if (this.players.every(p => !p.alive)) {
       this.dead = true;
@@ -288,6 +264,7 @@ export class Game {
     const mm = Math.floor((total % 1) * 60).toString().padStart(2, '0');
     const phase = this.world.isNight() ? 'Night' : 'Day';
     set('clock', `${phase} · ${hh}:${mm}`);
+    set('seedlabel', this.seedDisplay);
     const dot = document.getElementById('clockdot');
     if (dot) dot.style.background = this.world.isNight() ? '#7aa6ff' : '#ffd166';
     // leash overlay

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0c0f17" />
+    <title>Twin Hearts — Controller</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        background: radial-gradient(ellipse at top, #1a2236 0%, #0c0f17 60%);
+        color: #e0e6f3;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      #lobby, #controller {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        padding: env(safe-area-inset-top, 16px) 16px env(safe-area-inset-bottom, 16px);
+      }
+      #controller { display: none; }
+      h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.5px; }
+      .sub { color: #9aa6c0; font-size: 14px; margin-bottom: 24px; text-align: center; max-width: 320px; }
+      .codeinput {
+        width: 220px;
+        padding: 16px;
+        font-size: 32px;
+        text-align: center;
+        letter-spacing: 8px;
+        text-transform: uppercase;
+        background: #1a2030;
+        color: #e0e6f3;
+        border: 2px solid #2a3550;
+        border-radius: 12px;
+        outline: none;
+        margin-bottom: 14px;
+      }
+      .codeinput:focus { border-color: #6ad0ff; }
+      .btn {
+        background: linear-gradient(180deg, #3a83d0 0%, #2563b0 100%);
+        color: white;
+        padding: 14px 28px;
+        border-radius: 12px;
+        border: none;
+        font-size: 18px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        margin-top: 6px;
+      }
+      .btn:disabled { opacity: 0.5; }
+      .err { color: #ff8a8a; margin-top: 10px; font-size: 14px; min-height: 1.2em; }
+
+      /* Controller surface */
+      #controller .badge {
+        position: absolute; top: max(env(safe-area-inset-top, 0px), 12px); left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 16px;
+        border-radius: 999px;
+        background: rgba(20, 28, 48, 0.85);
+        border: 1px solid rgba(255,255,255,0.12);
+        font-weight: 600;
+        font-size: 14px;
+        z-index: 5;
+      }
+      #controller .badge .p { color: var(--p1); }
+      #controller .status {
+        position: absolute; top: max(env(safe-area-inset-top, 0px), 50px); left: 50%;
+        transform: translateX(-50%);
+        font-size: 12px; color: #8e9bb8;
+      }
+      .joystick {
+        position: absolute;
+        bottom: max(env(safe-area-inset-bottom, 0px), 32px);
+        left: 24px;
+        width: 180px; height: 180px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.06);
+        border: 2px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        touch-action: none;
+      }
+      .joystick .knob {
+        position: absolute; top: 50%; left: 50%;
+        width: 70px; height: 70px;
+        border-radius: 50%;
+        margin: -35px 0 0 -35px;
+        background: radial-gradient(circle at 35% 35%, #ffffff 0%, #b8c4dd 70%);
+        box-shadow: 0 6px 14px rgba(0,0,0,0.45);
+        pointer-events: none;
+      }
+      .actions {
+        position: absolute;
+        bottom: max(env(safe-area-inset-bottom, 0px), 32px);
+        right: 24px;
+        display: flex; flex-direction: column; gap: 14px;
+      }
+      .action {
+        width: 92px; height: 92px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.18);
+        background: linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 100%);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: none;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      .action.attack { background: linear-gradient(180deg, rgba(255,138,138,0.55) 0%, rgba(220,80,80,0.4) 100%); border-color: rgba(255,138,138,0.6); }
+      .action.dash { background: linear-gradient(180deg, rgba(106,208,255,0.55) 0%, rgba(60,148,200,0.4) 100%); border-color: rgba(106,208,255,0.6); }
+      .action.pressed { transform: scale(0.92); filter: brightness(1.4); }
+      .hint {
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center; color: #6e7a96; font-size: 13px;
+        max-width: 280px; pointer-events: none;
+      }
+      :root { --p1: #6ad0ff; --p2: #ff8a8a; }
+      #controller.p1 .badge .p { color: var(--p1); }
+      #controller.p2 .badge .p { color: var(--p2); }
+    </style>
+  </head>
+  <body>
+    <div id="lobby">
+      <h1>Twin Hearts</h1>
+      <div class="sub">Введи 4-значный код, отображённый на экране ноутбука/телевизора, чтобы подключить контроллер.</div>
+      <input id="code" class="codeinput" autocomplete="off" autocapitalize="characters" inputmode="text" maxlength="4" placeholder="ABCD" />
+      <button id="join" class="btn">Подключиться</button>
+      <div id="err" class="err"></div>
+    </div>
+
+    <div id="controller">
+      <div class="badge">Игрок <span class="p">?</span> · комната <span id="roomcode">····</span></div>
+      <div class="status" id="status">Жди старта игры…</div>
+      <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
+      <div class="actions">
+        <div class="action attack" id="btnAttack">⚔</div>
+        <div class="action dash" id="btnDash">⇢</div>
+      </div>
+      <div class="hint" id="hint">Левый стик — движение · правые кнопки — удар и рывок</div>
+    </div>
+
+    <script type="module" src="/src/controller.js"></script>
+  </body>
+</html>

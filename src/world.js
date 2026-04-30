@@ -1,20 +1,24 @@
 import * as THREE from 'three';
-import { rand, randInt, chance, vdist } from './utils.js';
+import { vdist, makeRng } from './utils.js';
 
 export const WORLD_SIZE = 80; // world spans -WORLD_SIZE..+WORLD_SIZE
 
 export class World {
-  constructor(scene) {
+  constructor(scene, seed = 1) {
     this.scene = scene;
+    this.seed = seed >>> 0;
+    this.rng = makeRng(this.seed);
     this.colliders = []; // { x, z, r } circles for trees/rocks
     this.props = [];
+    this.enemySpawns = []; // { kind, x, z, level }
     this._buildSky();
     this._buildLights();
     this._buildGround();
     this._scatterProps();
     this._buildCampfire();
+    this._planEnemySpawns();
     this.dayTime = 0.25; // 0=midnight, 0.25=morning, 0.5=noon, 0.75=evening
-    this.dayLength = 180; // seconds for full cycle
+    this.dayLength = 240; // seconds for full cycle
     this.update(0);
   }
 
@@ -45,26 +49,25 @@ export class World {
   }
 
   _buildGround() {
+    const r = this.rng;
     const size = WORLD_SIZE * 2;
     const seg = 96;
     const geo = new THREE.PlaneGeometry(size, size, seg, seg);
     geo.rotateX(-Math.PI / 2);
-    // small height variation for visual interest
     const pos = geo.attributes.position;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i);
-      const h = Math.sin(x * 0.07) * 0.18 + Math.cos(z * 0.09) * 0.15 + (Math.random() - 0.5) * 0.05;
+      const h = Math.sin(x * 0.07) * 0.18 + Math.cos(z * 0.09) * 0.15 + (r.next() - 0.5) * 0.05;
       pos.setY(i, h);
     }
     geo.computeVertexNormals();
-    // vertex colors for grass variation
     const colors = new Float32Array(pos.count * 3);
     const c1 = new THREE.Color(0x6db050);
     const c2 = new THREE.Color(0x4a8a3a);
     const c3 = new THREE.Color(0x88c562);
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), z = pos.getZ(i);
-      const t = (Math.sin(x * 0.13) + Math.cos(z * 0.17) + Math.random() * 0.6) * 0.2 + 0.5;
+      const t = (Math.sin(x * 0.13) + Math.cos(z * 0.17) + r.next() * 0.6) * 0.2 + 0.5;
       const c = (t < 0.4) ? c2 : (t > 0.7) ? c3 : c1;
       colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
     }
@@ -76,31 +79,32 @@ export class World {
 
     // Stylized water ponds
     for (let i = 0; i < 3; i++) {
-      const r = rand(4, 7);
-      const pondGeo = new THREE.CircleGeometry(r, 32);
+      const rad = r.range(4, 7);
+      const pondGeo = new THREE.CircleGeometry(rad, 32);
       pondGeo.rotateX(-Math.PI / 2);
       const pondMat = new THREE.MeshPhongMaterial({ color: 0x3aa6ff, shininess: 80, transparent: true, opacity: 0.85 });
       const pond = new THREE.Mesh(pondGeo, pondMat);
-      const x = rand(-WORLD_SIZE * 0.7, WORLD_SIZE * 0.7);
-      const z = rand(-WORLD_SIZE * 0.7, WORLD_SIZE * 0.7);
+      const x = r.range(-WORLD_SIZE * 0.7, WORLD_SIZE * 0.7);
+      const z = r.range(-WORLD_SIZE * 0.7, WORLD_SIZE * 0.7);
       pond.position.set(x, 0.06, z);
       this.scene.add(pond);
-      this.colliders.push({ x, z, r: r * 0.85 });
+      this.colliders.push({ x, z, r: rad * 0.85 });
     }
 
     // Stone walkway / paths (decorative)
     const pathMat = new THREE.MeshLambertMaterial({ color: 0xb8a587 });
     for (let i = 0; i < 24; i++) {
-      const stone = new THREE.Mesh(new THREE.BoxGeometry(rand(0.6, 1.4), 0.12, rand(0.6, 1.4)), pathMat);
+      const stone = new THREE.Mesh(new THREE.BoxGeometry(r.range(0.6, 1.4), 0.12, r.range(0.6, 1.4)), pathMat);
       const a = (i / 24) * Math.PI * 2;
-      stone.position.set(Math.cos(a) * 14 + rand(-1,1), 0.1, Math.sin(a) * 14 + rand(-1,1));
-      stone.rotation.y = rand(0, Math.PI);
+      stone.position.set(Math.cos(a) * 14 + r.range(-1,1), 0.1, Math.sin(a) * 14 + r.range(-1,1));
+      stone.rotation.y = r.range(0, Math.PI);
       stone.receiveShadow = true;
       this.scene.add(stone);
     }
   }
 
   _scatterProps() {
+    const r = this.rng;
     const { scene, colliders } = this;
     const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6b3f1c });
     const leafMats = [
@@ -113,38 +117,36 @@ export class World {
 
     const tries = 220;
     for (let i = 0; i < tries; i++) {
-      const x = rand(-WORLD_SIZE + 4, WORLD_SIZE - 4);
-      const z = rand(-WORLD_SIZE + 4, WORLD_SIZE - 4);
+      const x = r.range(-WORLD_SIZE + 4, WORLD_SIZE - 4);
+      const z = r.range(-WORLD_SIZE + 4, WORLD_SIZE - 4);
       // keep a clearing near the spawn / campfire
-      if (Math.hypot(x, z) < 8) continue;
-      // avoid placing on ponds / existing colliders
+      if (Math.hypot(x, z) < 9) continue;
       let ok = true;
       for (const c of colliders) { if (vdist({x,z}, {x:c.x, z:c.z}) < c.r + 1.5) { ok = false; break; } }
       if (!ok) continue;
-      const r = chance(0.6) ? 'tree' : chance(0.5) ? 'rock' : 'bush';
-      if (r === 'tree') {
+      const kind = r.chance(0.6) ? 'tree' : r.chance(0.5) ? 'rock' : 'bush';
+      if (kind === 'tree') {
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 2.2, 8), trunkMat);
         trunk.position.set(x, 1.1, z);
         trunk.castShadow = true; trunk.receiveShadow = true;
         scene.add(trunk);
-        const top = new THREE.Mesh(new THREE.ConeGeometry(rand(1.2, 2.0), rand(2.4, 3.4), 8), leafMats[randInt(0, leafMats.length-1)]);
-        top.position.set(x, 3.2 + rand(-0.2, 0.4), z);
+        const top = new THREE.Mesh(new THREE.ConeGeometry(r.range(1.2, 2.0), r.range(2.4, 3.4), 8), leafMats[r.int(0, leafMats.length-1)]);
+        top.position.set(x, 3.2 + r.range(-0.2, 0.4), z);
         top.castShadow = true;
         scene.add(top);
         colliders.push({ x, z, r: 1.0 });
-      } else if (r === 'rock') {
-        const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(rand(0.7, 1.4)), rockMat);
+      } else if (kind === 'rock') {
+        const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(r.range(0.7, 1.4)), rockMat);
         rk.position.set(x, 0.6, z);
-        rk.rotation.y = rand(0, Math.PI);
+        rk.rotation.y = r.range(0, Math.PI);
         rk.castShadow = true; rk.receiveShadow = true;
         scene.add(rk);
         colliders.push({ x, z, r: 1.0 });
       } else {
-        const bs = new THREE.Mesh(new THREE.IcosahedronGeometry(rand(0.6, 1.0), 0), bushMat);
-        bs.position.set(x, 0.5, z);
+        const bs = new THREE.Mesh(new THREE.IcosahedronGeometry(r.range(0.4, 0.7), 0), bushMat);
+        bs.position.set(x, 0.4, z);
         bs.castShadow = true;
         scene.add(bs);
-        // bushes are decorative, no collider
       }
     }
 
@@ -173,13 +175,11 @@ export class World {
       s.castShadow = true;
       ring.add(s);
     }
-    // wood
     const log = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 1.2, 8), new THREE.MeshLambertMaterial({ color: 0x4d2f17 }));
     log.position.y = 0.3; log.rotation.z = Math.PI / 2;
     ring.add(log);
     const log2 = log.clone(); log2.rotation.z = Math.PI / 2; log2.rotation.y = Math.PI / 3;
     ring.add(log2);
-    // fire (animated)
     this.fire = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.0, 12), new THREE.MeshBasicMaterial({ color: 0xff8a30, transparent: true, opacity: 0.9 }));
     this.fire.position.y = 0.9;
     ring.add(this.fire);
@@ -191,20 +191,90 @@ export class World {
     this.campfire = ring;
   }
 
-  // 0..1 sun angle proxy: 0=noon, 0.5=midnight
+  // Plan a small number of scattered enemy encampments / wandering creatures.
+  // Deterministic from seed. Every entry: { kind, x, z, level }.
+  _planEnemySpawns() {
+    const r = this.rng;
+    // Total ~20-26 enemies, grouped into ~6-9 camps spread around the world.
+    const camps = r.int(6, 9);
+    const placed = [];
+    const minDistFromSpawn = 18;
+    const minDistBetweenCamps = 14;
+    let attempts = 0;
+    while (placed.length < camps && attempts < 200) {
+      attempts++;
+      const a = r.range(0, Math.PI * 2);
+      const radius = r.range(minDistFromSpawn, WORLD_SIZE - 8);
+      const cx = Math.cos(a) * radius;
+      const cz = Math.sin(a) * radius;
+      // not on top of a collider
+      if (!this.isClear(cx, cz, 2.5)) continue;
+      // not too close to another camp
+      let ok = true;
+      for (const p of placed) {
+        if (Math.hypot(cx - p.x, cz - p.z) < minDistBetweenCamps) { ok = false; break; }
+      }
+      if (!ok) continue;
+      placed.push({ x: cx, z: cz });
+    }
+
+    // Define camp templates
+    const templates = [
+      { kinds: ['slime', 'slime', 'slime'], levelBoost: 0 },
+      { kinds: ['slime', 'slime'], levelBoost: 0 },
+      { kinds: ['archer', 'slime', 'slime'], levelBoost: 0 },
+      { kinds: ['archer', 'archer'], levelBoost: 0 },
+      { kinds: ['bomber', 'slime'], levelBoost: 0 },
+      { kinds: ['wisp', 'wisp'], levelBoost: 0 },
+      { kinds: ['ogre'], levelBoost: 1 },
+      { kinds: ['ogre', 'slime'], levelBoost: 1 },
+    ];
+    // Lone wanderers (single slimes and wisps far apart)
+    const loners = ['slime', 'slime', 'slime', 'wisp'];
+
+    for (const camp of placed) {
+      const tpl = r.pick(templates);
+      const lvl = 1 + tpl.levelBoost + Math.floor(Math.hypot(camp.x, camp.z) / 30);
+      for (const k of tpl.kinds) {
+        const ox = r.range(-2.5, 2.5);
+        const oz = r.range(-2.5, 2.5);
+        const x = camp.x + ox, z = camp.z + oz;
+        if (!this.isClear(x, z, 1.0)) continue;
+        this.enemySpawns.push({ kind: k, x, z, level: lvl, homeX: camp.x, homeZ: camp.z });
+      }
+    }
+    // Add loners
+    for (const k of loners) {
+      let x, z;
+      let placedOk = false;
+      for (let i = 0; i < 30; i++) {
+        const a = r.range(0, Math.PI * 2);
+        const radius = r.range(20, WORLD_SIZE - 6);
+        x = Math.cos(a) * radius;
+        z = Math.sin(a) * radius;
+        if (!this.isClear(x, z, 1.0)) continue;
+        // not on top of another camp
+        const tooClose = this.enemySpawns.some(e => Math.hypot(e.x - x, e.z - z) < 8);
+        if (tooClose) continue;
+        placedOk = true; break;
+      }
+      if (!placedOk) continue;
+      const lvl = 1 + Math.floor(Math.hypot(x, z) / 35);
+      this.enemySpawns.push({ kind: k, x, z, level: lvl, homeX: x, homeZ: z });
+    }
+  }
+
   isNight() { return this.dayTime < 0.22 || this.dayTime > 0.78; }
 
   update(dt) {
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
-    // sun position based on dayTime
-    const a = (this.dayTime - 0.25) * Math.PI * 2; // 0.25 -> 0 (noon zenith)
+    const a = (this.dayTime - 0.25) * Math.PI * 2;
     const sunY = Math.cos(a);
     const sunX = Math.sin(a);
     this.sun.position.set(sunX * 50, Math.max(-10, sunY * 50 + 5), 25);
     this.sun.intensity = Math.max(0, sunY) * 1.15;
 
-    // Color shifts
-    const t = (Math.sin(this.dayTime * Math.PI * 2 - Math.PI / 2) + 1) / 2; // 0 night, 1 day
+    const t = (Math.sin(this.dayTime * Math.PI * 2 - Math.PI / 2) + 1) / 2;
     const dayCol = new THREE.Color(0x6cb6ff);
     const nightCol = new THREE.Color(0x0a1126);
     const sunset = new THREE.Color(0xff9a55);
@@ -216,16 +286,13 @@ export class World {
     this.ambient.intensity = 0.25 + tt * 0.4;
     this.moonHelper.intensity = (1 - tt) * 0.45;
 
-    // animate fire flicker
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
       this.fireLight.intensity = 1.4 + Math.random() * 0.3;
     }
   }
 
-  // Resolve circle vs static colliders (in-place pos mutation)
   resolveCollisions(pos, radius) {
-    // bounds
     const lim = WORLD_SIZE - 2 - radius;
     if (pos.x > lim) pos.x = lim;
     if (pos.x < -lim) pos.x = -lim;
@@ -244,7 +311,6 @@ export class World {
     }
   }
 
-  // sample-clear: is point free of any obstacle?
   isClear(x, z, radius) {
     if (Math.abs(x) > WORLD_SIZE - 2 - radius) return false;
     if (Math.abs(z) > WORLD_SIZE - 2 - radius) return false;
@@ -254,15 +320,5 @@ export class World {
       if (dx*dx + dz*dz < r*r) return false;
     }
     return true;
-  }
-
-  randomClearPoint(minDistFromOrigin = 14, radius = 1) {
-    for (let i = 0; i < 80; i++) {
-      const x = rand(-WORLD_SIZE + 4, WORLD_SIZE - 4);
-      const z = rand(-WORLD_SIZE + 4, WORLD_SIZE - 4);
-      if (Math.hypot(x, z) < minDistFromOrigin) continue;
-      if (this.isClear(x, z, radius)) return { x, z };
-    }
-    return { x: 0, z: 0 };
   }
 }

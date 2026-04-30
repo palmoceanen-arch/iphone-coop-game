@@ -16,4 +16,15 @@ export default [
       'no-constant-condition': ['error', { checkLoops: false }],
     },
   },
+  {
+    files: ['server.js', 'vite.config.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+    },
+  },
 ];

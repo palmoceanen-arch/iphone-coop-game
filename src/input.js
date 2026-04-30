@@ -1,4 +1,5 @@
-// Two-player local input. Reads keys and exposes per-player intent each frame.
+// Two-player local input. Reads keys (and optional remote/touch state) and
+// exposes per-player intent each frame.
 const P1_KEYS = {
   up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
   attack: ['KeyF'], dash: ['KeyR'], interact: ['KeyE'],
@@ -13,8 +14,13 @@ export class Input {
     this.down = new Set();
     this.pressed = new Set(); // edge-triggered, cleared after consume
     this.consumedThisFrame = new Set();
+    // Remote (mobile) state per slot. Each entry: { moveX, moveZ, attackHeld, dashHeld }
+    // Edge events (attack/dash) come through pressed flags below, set true once and consumed by .intent().
+    this.remote = [
+      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false },
+      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false },
+    ];
     this._onDown = (e) => {
-      // Prevent page scroll for arrow / space / tab
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(e.code)) e.preventDefault();
       if (!this.down.has(e.code)) this.pressed.add(e.code);
       this.down.add(e.code);
@@ -32,10 +38,23 @@ export class Input {
     window.removeEventListener('blur', this._onBlur);
   }
 
-  // anyDown(codes): is any in this list currently held
-  anyDown(codes) { for (const c of codes) if (this.down.has(c)) return true; return false; }
+  setRemoteState(slot, state) {
+    if (slot < 0 || slot > 1) return;
+    const r = this.remote[slot];
+    if (typeof state.moveX === 'number') r.moveX = Math.max(-1, Math.min(1, state.moveX));
+    if (typeof state.moveZ === 'number') r.moveZ = Math.max(-1, Math.min(1, state.moveZ));
+    if (typeof state.attack === 'boolean') r.attackHeld = state.attack;
+    if (typeof state.dash === 'boolean') r.dashHeld = state.dash;
+  }
 
-  // consumePressed: returns true if any code was edge-pressed since last consume
+  remoteEvent(slot, type) {
+    if (slot < 0 || slot > 1) return;
+    const r = this.remote[slot];
+    if (type === 'attack') r.attackEdge = true;
+    else if (type === 'dash') r.dashEdge = true;
+  }
+
+  anyDown(codes) { for (const c of codes) if (this.down.has(c)) return true; return false; }
   consumePressed(codes) {
     for (const c of codes) {
       if (this.pressed.has(c)) { this.pressed.delete(c); return true; }
@@ -43,27 +62,35 @@ export class Input {
     return false;
   }
 
-  // Returns intent for player index 0 (P1) or 1 (P2)
   intent(playerIndex) {
     const map = playerIndex === 0 ? P1_KEYS : P2_KEYS;
+    const r = this.remote[playerIndex];
     let mx = 0, mz = 0;
     if (this.anyDown(map.up)) mz -= 1;
     if (this.anyDown(map.down)) mz += 1;
     if (this.anyDown(map.left)) mx -= 1;
     if (this.anyDown(map.right)) mx += 1;
+    // Mobile stick adds/overrides; if magnitude > keyboard, use mobile.
+    if (Math.abs(r.moveX) > Math.abs(mx)) mx = r.moveX;
+    if (Math.abs(r.moveZ) > Math.abs(mz)) mz = r.moveZ;
     const len = Math.hypot(mx, mz);
     if (len > 1) { mx /= len; mz /= len; }
+
+    const attackPressed = this.consumePressed(map.attack);
+    const dashPressed = this.consumePressed(map.dash);
+    const remoteAttackEdge = r.attackEdge; r.attackEdge = false;
+    const remoteDashEdge = r.dashEdge; r.dashEdge = false;
+
     return {
       moveX: mx,
       moveZ: mz,
-      attack: this.consumePressed(map.attack),
-      attackHeld: this.anyDown(map.attack),
-      dash: this.consumePressed(map.dash),
+      attack: attackPressed || remoteAttackEdge,
+      attackHeld: this.anyDown(map.attack) || r.attackHeld,
+      dash: dashPressed || remoteDashEdge,
       interact: this.consumePressed(map.interact),
     };
   }
 
-  // Global presses (shop, pause, restart)
   consumeGlobal(code) {
     if (this.pressed.has(code)) { this.pressed.delete(code); return true; }
     return false;

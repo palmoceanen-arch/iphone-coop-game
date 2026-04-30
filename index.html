@@ -73,6 +73,26 @@
       #intro p { margin: 6px 0; opacity: 0.85; font-size: 14px; line-height: 1.6; }
       #intro button { margin-top: 14px; pointer-events: auto; background: linear-gradient(180deg,#3b82f6,#2563eb); color: white; border: none; padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; box-shadow: 0 6px 16px rgba(37,99,235,0.4); }
       #intro button:hover { filter: brightness(1.1); }
+      #intro button:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+      #intro .panel { width: min(640px, 94vw); }
+      .lobby { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
+      .lobby-row { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; }
+      .lobby-qr-wrap { background: #e0e6f3; padding: 6px; border-radius: 10px; }
+      .lobby-qr { width: 160px; height: 160px; display: flex; align-items: center; justify-content: center; }
+      .lobby-qr svg { display: block; width: 100%; height: 100%; }
+      .lobby-meta { text-align: left; min-width: 180px; }
+      .lobby-label { font-size: 11px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+      .lobby-code { font-size: 36px; letter-spacing: 8px; font-weight: 800; font-family: ui-monospace, monospace; color: #fff; }
+      .lobby-instr { font-size: 13px; opacity: 0.85; margin-top: 8px; line-height: 1.5; }
+      .lobby-instr a { color: #6ad0ff; word-break: break-all; }
+      .lobby-slots { margin-top: 12px; display: flex; gap: 10px; }
+      .lobby-slots .slot { padding: 4px 10px; font-size: 12px; border-radius: 999px; background: #1a2029; border: 1px solid rgba(255,255,255,0.1); opacity: 0.5; }
+      .lobby-slots .slot.p1 { color: #6ad0ff; }
+      .lobby-slots .slot.p2 { color: #ff8a8a; }
+      .lobby-slots .slot.on { opacity: 1; background: #233040; border-color: currentColor; }
+      .lobby-or { text-align: center; opacity: 0.45; font-size: 12px; margin-top: 14px; letter-spacing: 1px; text-transform: uppercase; }
+      .lobby-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+      #start-keyboard { background: #2a313b !important; box-shadow: none !important; }
       #death { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); pointer-events: auto; }
       #death.open { display: flex; }
       #death .panel { background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
@@ -90,6 +110,7 @@
           <span id="clock">Day · 06:00</span>
           <span class="dot" id="clockdot"></span>
           <span id="dist">0m apart</span>
+          <span id="seedwrap" style="opacity:0.6;">· seed <code id="seedlabel">····</code></span>
         </div>
         <div class="hud left">
           <div class="name">P1 · Cyan</div>
@@ -141,10 +162,31 @@
         <div id="intro">
           <div class="panel">
             <h1>Twin Hearts</h1>
-            <p>A two-player local-coop adventure. Stay near your partner — drift too far and the world fades and drains your life.</p>
-            <p>Slay enemies, collect food and gold, then upgrade at the campfire. Survive the night.</p>
-            <p style="opacity:0.6;font-size:12px;">Two players, one keyboard. Click anywhere or press a key to begin.</p>
-            <button id="start">Begin Adventure</button>
+            <p>Кооп-приключение на двоих. Не уходите далеко друг от друга — мир сереет и здоровье тает.</p>
+            <p>Убивайте врагов, собирайте золото и еду, прокачивайтесь у костра. Доживите до утра.</p>
+            <div class="lobby">
+              <div class="lobby-row">
+                <div class="lobby-qr-wrap">
+                  <div id="lobby-qr" class="lobby-qr"></div>
+                </div>
+                <div class="lobby-meta">
+                  <div class="lobby-codeblock">
+                    <div class="lobby-label">Код комнаты</div>
+                    <div class="lobby-code" id="lobby-code">····</div>
+                  </div>
+                  <div class="lobby-instr">Зайди с iPhone на<br><a id="lobby-url" href="#" target="_blank" rel="noreferrer noopener">…</a><br>и введи код.</div>
+                  <div class="lobby-slots">
+                    <span class="slot p1" id="lobby-slot-1">P1</span>
+                    <span class="slot p2" id="lobby-slot-2">P2</span>
+                  </div>
+                </div>
+              </div>
+              <div class="lobby-or">или играй на одной клавиатуре</div>
+            </div>
+            <div class="lobby-buttons">
+              <button id="lobby-start" disabled>Ждём игроков… (0/2)</button>
+              <button id="start-keyboard">Начать на клавиатуре</button>
+            </div>
           </div>
         </div>
       </div>

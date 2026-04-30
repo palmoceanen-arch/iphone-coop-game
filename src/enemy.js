@@ -3,12 +3,13 @@ import { vdist } from './utils.js';
 
 // Base enemy class with 5 distinct subtypes.
 export class Enemy {
-  constructor(world, effects, sound, kind, x, z, level = 1) {
+  constructor(world, effects, sound, kind, x, z, level = 1, opts = {}) {
     this.world = world;
     this.effects = effects;
     this.sound = sound;
     this.kind = kind;
     this.pos = { x, z };
+    this.home = { x: opts.homeX ?? x, z: opts.homeZ ?? z };
     this.vel = { x: 0, z: 0 };
     this.knockback = { x: 0, z: 0 };
     this.facing = { x: 0, z: -1 };
@@ -20,6 +21,11 @@ export class Enemy {
     this.flashTimer = 0;
     this.level = level;
     this.tint = null;
+    // AI state: 'idle' (wander near home) | 'chase' (engage player) | 'return'
+    this.state = 'idle';
+    this.stateTimer = 0;
+    this.wanderTarget = { x, z };
+    this.wanderTimer = 0;
     this.config(level);
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
@@ -27,31 +33,37 @@ export class Enemy {
 
   config(level) {
     const L = level - 1;
+    // Common: aggro/disengage radii. Disengage is larger so enemies don't constantly flip-flop.
     switch (this.kind) {
       case 'slime':
         this.radius = 0.55; this.maxHP = 22 + L * 8; this.hp = this.maxHP; this.speed = 2.6;
         this.touchDamage = 8 + L * 2; this.gold = [2, 5]; this.xp = 5 + L * 2;
         this.attackRange = 0.9; this.attackCooldown = 0.8;
+        this.aggroRange = 7; this.disengageRange = 14; this.leashRange = 14;
         break;
       case 'archer':
         this.radius = 0.5; this.maxHP = 16 + L * 6; this.hp = this.maxHP; this.speed = 3.2;
         this.touchDamage = 0; this.gold = [3, 7]; this.xp = 8 + L * 2;
         this.attackRange = 12; this.attackCooldown = 1.6; this.preferredDist = 8.5; this.projectileDmg = 8 + L * 2;
+        this.aggroRange = 11; this.disengageRange = 18; this.leashRange = 16;
         break;
       case 'bomber':
         this.radius = 0.55; this.maxHP = 18 + L * 6; this.hp = this.maxHP; this.speed = 3.6;
         this.touchDamage = 0; this.gold = [3, 6]; this.xp = 8 + L * 2;
-        this.aggro = 7; this.fuse = 1.0; this.boomRadius = 2.6; this.boomDamage = 24 + L * 4;
+        this.fuse = 1.0; this.boomRadius = 2.6; this.boomDamage = 24 + L * 4;
+        this.aggroRange = 7; this.disengageRange = 13; this.leashRange = 14;
         break;
       case 'wisp':
         this.radius = 0.45; this.maxHP = 14 + L * 5; this.hp = this.maxHP; this.speed = 4.2;
         this.touchDamage = 0; this.gold = [2, 6]; this.xp = 7 + L * 2;
         this.dashWindup = 0.4; this.dashSpeed = 22; this.dashDmg = 10 + L * 3; this.dashCooldown = 2.4;
+        this.aggroRange = 8; this.disengageRange = 16; this.leashRange = 16;
         break;
       case 'ogre':
         this.radius = 0.95; this.maxHP = 60 + L * 18; this.hp = this.maxHP; this.speed = 1.7;
         this.touchDamage = 0; this.gold = [10, 18]; this.xp = 18 + L * 4;
         this.attackRange = 2.4; this.attackCooldown = 1.8; this.swingDmg = 18 + L * 4;
+        this.aggroRange = 6; this.disengageRange = 14; this.leashRange = 12;
         break;
     }
   }
@@ -146,6 +158,8 @@ export class Enemy {
     this.hp -= amount;
     this.invuln = 0.08;
     this.flashTimer = 0.12;
+    // Aggro on hit
+    if (this.state !== 'chase') { this.state = 'chase'; this.stateTimer = 0; }
     const dx = this.pos.x - fromX, dz = this.pos.z - fromZ;
     const len = Math.hypot(dx, dz) || 1;
     this.knockback.x += (dx / len) * knockback;
@@ -191,13 +205,95 @@ export class Enemy {
     this.invuln = Math.max(0, this.invuln - dt);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
     this.attackTimer = Math.max(0, this.attackTimer - dt);
+    this.stateTimer += dt;
+    this.wanderTimer = Math.max(0, this.wanderTimer - dt);
     const prevWindup = this.windup;
     if (this.windup > 0) this.windup = Math.max(0, this.windup - dt);
     const windupFired = prevWindup > 0 && this.windup === 0;
 
     const { target, dist } = this._aimTarget(players);
+    const distFromHome = Math.hypot(this.pos.x - this.home.x, this.pos.z - this.home.z);
 
+    // -----------------------------------------------------------------
+    // AI state machine: idle <-> chase, with a 'return' state when leashed
+    // -----------------------------------------------------------------
+    if (this.state === 'idle' || this.state === 'return') {
+      // Become aggressive only if a player gets close enough.
+      if (target && dist < this.aggroRange) {
+        this.state = 'chase';
+        this.stateTimer = 0;
+      }
+    } else if (this.state === 'chase') {
+      // Lose aggro when no target in range, or pulled too far from home, or already taking damage repeatedly.
+      const tooFar = !target || dist > this.disengageRange;
+      const leashed = distFromHome > this.leashRange;
+      if (tooFar || leashed) {
+        this.state = 'return';
+        this.stateTimer = 0;
+        // bombers shouldn't fizzle their fuse — but if not yet started, abort and walk home
+        if (this.kind === 'bomber' && !this.fuseStarted) {
+          // ok, just walk home
+        }
+      }
+    }
+
+    // ------ MOVEMENT INTENT ------
     let move = { x: 0, z: 0 };
+    const idleSpeed = this.speed * 0.35;
+
+    if (this.state === 'idle' || this.state === 'return') {
+      // Wander around home: pick a new wander target when reached or timer elapsed.
+      const dxw = this.wanderTarget.x - this.pos.x;
+      const dzw = this.wanderTarget.z - this.pos.z;
+      const dw = Math.hypot(dxw, dzw);
+      if (dw < 0.6 || this.wanderTimer <= 0 || this.state === 'return') {
+        // Pick a new wander point near home (or directly home if returning)
+        if (this.state === 'return') {
+          this.wanderTarget.x = this.home.x;
+          this.wanderTarget.z = this.home.z;
+          this.wanderTimer = 6;
+          if (distFromHome < 1.5) {
+            this.state = 'idle';
+            this.stateTimer = 0;
+          }
+        } else {
+          const ang = Math.random() * Math.PI * 2;
+          const rad = 1.5 + Math.random() * 3.5;
+          this.wanderTarget.x = this.home.x + Math.cos(ang) * rad;
+          this.wanderTarget.z = this.home.z + Math.sin(ang) * rad;
+          this.wanderTimer = 2 + Math.random() * 3;
+        }
+      }
+      if (dw > 0.05) {
+        move.x = dxw / dw; move.z = dzw / dw;
+      }
+      // pause occasionally during wander
+      if (this.state === 'idle' && (this.wanderTimer % 1.0) > 0.7) {
+        move.x = 0; move.z = 0;
+      }
+      // Move in idle/return slowly
+      this.pos.x += move.x * idleSpeed * dt;
+      this.pos.z += move.z * idleSpeed * dt;
+
+      // knockback contribution
+      this.pos.x += this.knockback.x * dt;
+      this.pos.z += this.knockback.z * dt;
+      const kfac = Math.exp(-7 * dt);
+      this.knockback.x *= kfac;
+      this.knockback.z *= kfac;
+
+      if (Math.abs(move.x) > 0.01 || Math.abs(move.z) > 0.01) {
+        this.facing.x = move.x; this.facing.z = move.z;
+      }
+      this.world.resolveCollisions(this.pos, this.radius);
+      this.mesh.position.set(this.pos.x, 0, this.pos.z);
+      const yawIdle = Math.atan2(this.facing.x, this.facing.z);
+      this.mesh.rotation.y = yawIdle;
+      this._updateVisualEffects();
+      return;
+    }
+
+    // ------ CHASE state: original engage behavior ------
     if (target) {
       const dx = target.pos.x - this.pos.x, dz = target.pos.z - this.pos.z;
       const len = Math.hypot(dx, dz) || 1;
@@ -239,7 +335,7 @@ export class Enemy {
           break;
         }
         case 'bomber': {
-          if (dist < this.aggro) { move.x = nx; move.z = nz; }
+          move.x = nx; move.z = nz;
           if (dist < this.radius + target.radius + 0.6) {
             // begin fuse if not started
             if (!this.fuseStarted) { this.fuseStarted = true; this.fuseTimer = this.fuse; this.sound.tone({ freq: 880, type: 'square', dur: 0.05, gain: 0.08 }); }
@@ -347,6 +443,10 @@ export class Enemy {
     const yaw = Math.atan2(this.facing.x, this.facing.z);
     this.mesh.rotation.y = yaw;
 
+    this._updateVisualEffects();
+  }
+
+  _updateVisualEffects() {
     // hit flash
     if (this.body) {
       if (this.flashTimer > 0) {
@@ -356,6 +456,13 @@ export class Enemy {
       } else if (this.body.material.emissive) {
         this.body.material.emissiveIntensity = 0;
       }
+    }
+    // gentle hop / float for some kinds even when idle
+    if (this.kind === 'slime' && this.body) {
+      this.body.position.y = 0.5 + Math.abs(Math.sin(performance.now() * 0.006)) * 0.12;
+    }
+    if (this.kind === 'wisp' && this.body) {
+      this.body.position.y = 1.2 + Math.sin(performance.now() * 0.004) * 0.12;
     }
   }
 }
