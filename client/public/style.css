@@ -1,0 +1,315 @@
+:root {
+  --bg: #0b1f16;
+  --bg-soft: #123326;
+  --fg: #e8f3ec;
+  --muted: #8fa59a;
+  --accent: #ffd166;
+  --red: #e14b4b;
+  --blue: #4b7ae1;
+  --ok: #34d399;
+  --field: #2d6a4f;
+  --border: #1b4332;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: radial-gradient(1200px 800px at 50% -10%, #17402f 0%, var(--bg) 60%);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial,
+    sans-serif;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.hidden {
+  display: none !important;
+}
+
+/* -------- Menu -------- */
+#screen-menu {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.menu-card {
+  width: min(460px, 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: var(--shadow);
+}
+
+.menu-card h1 {
+  margin: 0 0 6px;
+  font-size: clamp(28px, 5vw, 36px);
+  letter-spacing: -0.02em;
+}
+.accent {
+  color: var(--accent);
+}
+.tagline {
+  margin: 0 0 20px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+.field span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.field input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #0f2a1f;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 10px;
+  font-size: 16px;
+  outline: none;
+}
+.field input:focus {
+  border-color: var(--accent);
+}
+
+button.primary {
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--accent);
+  color: #3d2a00;
+  border: 0;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 16px;
+  cursor: pointer;
+  transition: transform 0.05s ease, filter 0.15s ease;
+}
+button.primary:hover {
+  filter: brightness(1.05);
+}
+button.primary:active {
+  transform: translateY(1px);
+}
+button.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.ghost {
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button.ghost:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  min-height: 18px;
+  font-size: 13px;
+}
+.help {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.help ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  line-height: 1.5;
+}
+
+/* -------- HUD -------- */
+.hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.score .team {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.score .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.score .red .dot {
+  background: var(--red);
+}
+.score .blue .dot {
+  background: var(--blue);
+}
+.score .divider {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.hud-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.pill {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* -------- Stage / Canvas -------- */
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+#game {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  background: var(--field);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  touch-action: none;
+}
+
+.banner {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 22px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: clamp(18px, 3.2vw, 28px);
+  font-weight: 700;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.banner.win-red {
+  color: var(--red);
+}
+.banner.win-blue {
+  color: var(--blue);
+}
+
+/* -------- Touch controls -------- */
+.touch {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.touch .stick,
+.touch .kick {
+  pointer-events: auto;
+}
+.stick {
+  position: absolute;
+  left: 24px;
+  bottom: 28px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  touch-action: none;
+}
+.stick-thumb {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60px;
+  height: 60px;
+  margin-left: -30px;
+  margin-top: -30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+}
+.kick {
+  position: absolute;
+  right: 24px;
+  bottom: 40px;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #3d2a00;
+  border: 0;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  touch-action: none;
+}
+.kick:active {
+  transform: translateY(2px);
+  filter: brightness(0.95);
+}
+
+/* Show touch UI only on devices without a fine pointer (mobile / tablet). */
+@media (hover: none) and (pointer: coarse) {
+  #touch.active {
+    display: block;
+  }
+}

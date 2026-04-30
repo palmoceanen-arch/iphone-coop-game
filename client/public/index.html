@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b1f16" />
+    <title>PhysBall Arena — multiplayer physics football</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <div id="screen-menu" class="screen">
+      <div class="menu-card">
+        <h1>PhysBall <span class="accent">Arena</span></h1>
+        <p class="tagline">
+          Casual 2D multiplayer physics football. Arrow keys + Space, or touch joystick on mobile.
+        </p>
+        <label class="field">
+          <span>Nickname</span>
+          <input
+            id="nickname"
+            type="text"
+            maxlength="16"
+            autocomplete="off"
+            placeholder="Striker"
+          />
+        </label>
+        <button id="btn-play" class="primary" type="button">Play</button>
+        <p class="hint" id="menu-hint"></p>
+        <details class="help">
+          <summary>How to play</summary>
+          <ul>
+            <li><b>Move:</b> WASD / Arrow keys, or left-side virtual joystick on mobile.</li>
+            <li><b>Kick:</b> Space / X / Enter, or the right-side kick button on mobile.</li>
+            <li>Push the ball into the opposing team's goal. First to 5 wins.</li>
+            <li>You're auto-assigned to the smaller team on join.</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+
+    <div id="screen-game" class="screen hidden">
+      <header class="hud">
+        <div class="score">
+          <span class="team red"><span class="dot"></span><span id="score-red">0</span></span>
+          <span class="divider">:</span>
+          <span class="team blue"><span id="score-blue">0</span><span class="dot"></span></span>
+        </div>
+        <div class="hud-right">
+          <span id="players-count" class="pill">1</span>
+          <span id="ping" class="pill mono">— ms</span>
+          <button id="btn-leave" class="ghost" type="button">Leave</button>
+        </div>
+      </header>
+
+      <div class="stage">
+        <canvas id="game" width="1200" height="700"></canvas>
+        <div id="banner" class="banner hidden"></div>
+      </div>
+
+      <!-- Touch controls (only shown on coarse pointers). -->
+      <div id="touch" class="touch hidden">
+        <div id="stick" class="stick">
+          <div id="stick-thumb" class="stick-thumb"></div>
+        </div>
+        <button id="btn-kick" class="kick" type="button" aria-label="Kick">KICK</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>
