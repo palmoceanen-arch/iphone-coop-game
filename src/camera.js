@@ -8,11 +8,11 @@ export class FollowCamera {
     this.cam = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 600);
     this.cam.position.set(0, 18, 18);
     this.cam.lookAt(0, 0, 0);
-    this.minDistance = 14;
-    this.maxDistance = 36;
-    this.tilt = Math.PI * 0.32; // ~57° from straight down
-    this.dist = 18;
-    this.targetDist = 18;
+    this.minDistance = 16;
+    this.maxDistance = 42;
+    this.tilt = Math.PI * 0.18; // ~32° from straight down — much more top-down
+    this.dist = 22;
+    this.targetDist = 22;
     this.center = new THREE.Vector3();
     this.smoothCenter = new THREE.Vector3();
     this.canvas = canvas;

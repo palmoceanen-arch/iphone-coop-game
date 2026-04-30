@@ -8,7 +8,7 @@ import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
 import { Input } from './input.js';
-import { UPGRADES, buy, renderShop } from './upgrades.js';
+import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString } from './utils.js';
 
 const LEASH_WARN = 14;
@@ -62,6 +62,11 @@ export class Game {
 
     this.paused = false;
     this.shopOpen = false;
+    this._keyboardShop = false;
+    // Per-slot phone shop state (independent from desktop Tab-shop):
+    this.phoneShopOpen = [false, false];
+    this.lobby = null; // injected from main.js
+    this._stateSyncT = 0;
     this.dead = false;
     this.leashRatio = 0;
     this.timescale = 1;
@@ -82,6 +87,64 @@ export class Game {
       if (e.code === 'KeyP') this.paused = !this.paused;
     });
     document.getElementById('restart')?.addEventListener('click', () => this.restart());
+  }
+
+  // ---- Phone gamepad shop ------------------------------------------------
+  handleRemoteEvent(slot, event) {
+    if (!event || typeof event.type !== 'string') return;
+    if (event.type === 'shop') {
+      this.phoneShopOpen[slot] = !this.phoneShopOpen[slot];
+      this._refreshShopState();
+      this._pushPlayerState(slot);
+      return;
+    }
+    if (event.type === 'buy' && this.phoneShopOpen[slot]) {
+      const idx = UPGRADES.findIndex(u => u.id === event.id);
+      if (idx >= 0) {
+        const ok = buy(this.players[slot], UPGRADES[idx], this.sound);
+        if (ok && this.shopOpen) renderShop(this.players[0], this.players[1]);
+        this._pushPlayerState(slot);
+      }
+      return;
+    }
+    if (event.type === 'closeShop') {
+      this.phoneShopOpen[slot] = false;
+      this._refreshShopState();
+      this._pushPlayerState(slot);
+      return;
+    }
+    // Otherwise treat as input edge (attack, dash)
+    this.input.remoteEvent(slot, event.type);
+  }
+
+  _refreshShopState() {
+    // Game pauses if EITHER phone is in shop OR keyboard shop is open.
+    this.shopOpen = !!(this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1]);
+    document.getElementById('shop')?.classList.toggle('open', !!this._keyboardShop);
+    if (this._keyboardShop) renderShop(this.players[0], this.players[1]);
+  }
+
+  _pushPlayerState(slot) {
+    if (!this.lobby) return;
+    const p = this.players[slot];
+    if (!p) return;
+    const upgrades = UPGRADES.map(u => ({
+      id: u.id,
+      name: u.name,
+      desc: u.desc,
+      level: p.upgradeLevels[u.id] || 0,
+      price: priceFor(p, u),
+    }));
+    this.lobby.sendToSlot(slot, 'state:player', {
+      slot,
+      hp: Math.round(p.hp),
+      maxHp: Math.round(p.maxHP),
+      gold: p.gold,
+      level: p.level,
+      damage: Math.round(p.stats.damage),
+      shopOpen: this.phoneShopOpen[slot],
+      upgrades,
+    });
   }
 
   _startGame() {
@@ -164,6 +227,13 @@ export class Game {
     // Always update FX timing using real dt0 (so shake decays even paused)
     this.effects.update(dt > 0 ? dt : dt0 * 0);
     this.world.update(dt);
+    // Throttled state sync to phones (uses real dt0 so it works while paused)
+    this._stateSyncT += dt0;
+    if (this._stateSyncT > 0.25 && this.lobby) {
+      this._stateSyncT = 0;
+      this._pushPlayerState(0);
+      this._pushPlayerState(1);
+    }
     if (dt <= 0) { this._updateUI(); return; }
     this.elapsed += dt;
 
@@ -173,9 +243,8 @@ export class Game {
 
     // Toggle shop with Tab if near campfire (or always allow)
     if (this.input.consumeGlobal('Tab')) {
-      this.shopOpen = !this.shopOpen;
-      document.getElementById('shop').classList.toggle('open', this.shopOpen);
-      if (this.shopOpen) renderShop(this.players[0], this.players[1]);
+      this._keyboardShop = !this._keyboardShop;
+      this._refreshShopState();
     }
 
     // Quick-buy keys 1-4 for P1, 7-0 for P2 (only when shop open)

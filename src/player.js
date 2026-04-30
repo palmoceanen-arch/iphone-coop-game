@@ -16,6 +16,8 @@ export class Player {
     this.pos = { x: index === 0 ? -3 : 3, z: 4 };
     this.vel = { x: 0, z: 0 };
     this.facing = { x: 0, z: -1 };
+    this.yaw = 0;        // smoothed render yaw (shortest-arc to target)
+    this.smoothPos = { x: this.pos.x, z: this.pos.z };
     this.radius = 0.55;
     this.maxHP = 100;
     this.hp = this.maxHP;
@@ -238,10 +240,18 @@ export class Player {
       }
     }
 
-    // Update mesh transform
-    this.mesh.position.set(this.pos.x, 0, this.pos.z);
-    const yaw = Math.atan2(this.facing.x, this.facing.z);
-    this.mesh.rotation.y = yaw;
+    // Smoothed render transform — lerp position by exponential smoothing and
+    // yaw by shortest-arc to avoid 180° flip on direction reversal.
+    const posLerp = 1 - Math.exp(-30 * dt);
+    this.smoothPos.x += (this.pos.x - this.smoothPos.x) * posLerp;
+    this.smoothPos.z += (this.pos.z - this.smoothPos.z) * posLerp;
+    this.mesh.position.set(this.smoothPos.x, 0, this.smoothPos.z);
+    const targetYaw = Math.atan2(this.facing.x, this.facing.z);
+    let dy = targetYaw - this.yaw;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    this.yaw += dy * (1 - Math.exp(-18 * dt));
+    this.mesh.rotation.y = this.yaw;
 
     // Sword anim: rotate around y from -arc/2 to +arc/2
     if (this.swingActive) {

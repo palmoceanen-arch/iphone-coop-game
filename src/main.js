@@ -14,13 +14,19 @@ window.addEventListener('DOMContentLoaded', () => {
     lobby = new Lobby();
     lobby.connect();
     window.__lobby = lobby;
+    game.lobby = lobby;
 
     // Mobile controllers feed remote state straight into the game's Input.
     lobby.onInputState = (slot, state) => {
       if (game && game.input) game.input.setRemoteState(slot, state);
     };
+    // Edge events (attack/dash/shop/buy) routed through Game so it can also
+    // handle gamepad-driven shop & purchases.
     lobby.onInputEvent = (slot, event) => {
-      if (game && game.input) game.input.remoteEvent(slot, event.type);
+      if (game) game.handleRemoteEvent(slot, event);
+    };
+    lobby.onControllerJoined = (slot) => {
+      if (game) game._pushPlayerState(slot);
     };
 
     const startBtn = document.getElementById('lobby-start');

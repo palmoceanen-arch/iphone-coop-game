@@ -17,6 +17,10 @@ const stick = document.getElementById('stick');
 const knob = document.getElementById('knob');
 const btnAttack = document.getElementById('btnAttack');
 const btnDash = document.getElementById('btnDash');
+const btnShop = document.getElementById('btnShop');
+const shopOverlay = document.getElementById('shopOverlay');
+const shopList = document.getElementById('shopList');
+const shopClose = document.getElementById('shopClose');
 
 const socket = io({ transports: ['websocket', 'polling'] });
 
@@ -156,6 +160,65 @@ function bindButton(el, key, eventName) {
 bindButton(btnAttack, 'attack', 'attack');
 bindButton(btnDash, 'dash', 'dash');
 
+// Shop button: toggle (no held-state). Tap → emit 'shop' event.
+btnShop.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  btnShop.classList.add('pressed');
+  btnShop.setPointerCapture(e.pointerId);
+  if (navigator.vibrate) navigator.vibrate(10);
+  if (assignedSlot >= 0) socket.emit('input:event', { type: 'shop' });
+});
+const shopRelease = () => btnShop.classList.remove('pressed');
+btnShop.addEventListener('pointerup', shopRelease);
+btnShop.addEventListener('pointercancel', shopRelease);
+btnShop.addEventListener('pointerleave', shopRelease);
+
+shopClose.addEventListener('click', (e) => {
+  e.preventDefault();
+  if (assignedSlot >= 0) socket.emit('input:event', { type: 'closeShop' });
+});
+
+// ----------------------------------------------------------------------
+// Player-state push from host: render HUD + shop list.
+// ----------------------------------------------------------------------
+socket.on('state:player', (s) => {
+  if (!s || typeof s.slot !== 'number') return;
+  document.getElementById('stHp').textContent = s.hp;
+  document.getElementById('stMaxHp').textContent = s.maxHp;
+  document.getElementById('stGold').textContent = s.gold;
+  document.getElementById('stDmg').textContent = s.damage;
+  document.getElementById('shopHp').textContent = s.hp;
+  document.getElementById('shopMaxHp').textContent = s.maxHp;
+  document.getElementById('shopGold').textContent = s.gold;
+  shopOverlay.classList.toggle('open', !!s.shopOpen);
+  // Render upgrades list
+  shopList.innerHTML = '';
+  for (const u of (s.upgrades || [])) {
+    const can = s.gold >= u.price;
+    const row = document.createElement('div');
+    row.className = 'upg-row' + (can ? '' : ' locked');
+    row.innerHTML = `
+      <div>
+        <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
+        <div class="desc">${u.desc}</div>
+      </div>
+      <button class="price-btn" data-id="${u.id}">⛁ ${u.price}</button>
+    `;
+    shopList.appendChild(row);
+  }
+});
+
+shopList.addEventListener('click', (e) => {
+  const btn = e.target.closest('.price-btn');
+  if (!btn) return;
+  e.preventDefault();
+  const id = btn.dataset.id;
+  if (id && assignedSlot >= 0) {
+    if (navigator.vibrate) navigator.vibrate(20);
+    socket.emit('input:event', { type: 'buy', id });
+  }
+});
+
 // Send state at ~30Hz
 setInterval(() => {
   if (assignedSlot < 0) return;
@@ -169,7 +232,10 @@ setInterval(() => {
 function isInteractive(el) {
   if (!el) return false;
   const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
+  // Allow scrolling inside the shop overlay
+  if (el.closest && el.closest('.shop-overlay')) return true;
+  return false;
 }
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());

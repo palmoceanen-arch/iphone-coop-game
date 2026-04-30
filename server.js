@@ -83,6 +83,21 @@ async function main() {
       io.to(room.hostId).emit('input:event', { slot, event });
     });
 
+    socket.on('host:to-slot', ({ slot, event, payload }) => {
+      const code = socket.data.code;
+      if (!code || socket.data.role !== 'host') return;
+      const room = rooms.get(code);
+      if (!room) return;
+      const target = room.controllers[slot];
+      if (target) io.to(target).emit(event, payload);
+    });
+
+    socket.on('host:broadcast', ({ event, payload }) => {
+      const code = socket.data.code;
+      if (!code || socket.data.role !== 'host') return;
+      socket.to(code).emit(event, payload);
+    });
+
     socket.on('host:start', () => {
       const code = socket.data.code;
       if (!code) return;

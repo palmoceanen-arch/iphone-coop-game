@@ -11,6 +11,7 @@ export class Lobby {
     this.onInputState = null;          // (slot, state) => void
     this.onInputEvent = null;          // (slot, event) => void
     this.onStart = null;               // () => void
+    this.onControllerJoined = null;    // (slot) => void
   }
 
   connect() {
@@ -20,6 +21,7 @@ export class Lobby {
     this.socket.on('controller:joined', ({ slot }) => {
       this.controllers[slot] = true;
       this._renderControllers();
+      this.onControllerJoined && this.onControllerJoined(slot);
     });
     this.socket.on('controller:left', ({ slot }) => {
       this.controllers[slot] = false;
@@ -35,6 +37,16 @@ export class Lobby {
   }
 
   endGame() { this.socket && this.socket.emit('host:end'); }
+
+  sendToSlot(slot, event, payload) {
+    if (!this.socket || !this.controllers[slot]) return;
+    this.socket.emit('host:to-slot', { slot, event, payload });
+  }
+
+  broadcast(event, payload) {
+    if (!this.socket) return;
+    this.socket.emit('host:broadcast', { event, payload });
+  }
 
   async _renderCode(code) {
     this.code = code;
