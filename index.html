@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Twin Hearts — Coop Adventure</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1015; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e8e8; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #ui-root { position: absolute; inset: 0; pointer-events: none; }
+      .hud {
+        position: absolute; top: 12px; padding: 10px 12px;
+        background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px; backdrop-filter: blur(4px);
+        min-width: 180px; user-select: none;
+      }
+      .hud.left { left: 12px; }
+      .hud.right { right: 12px; text-align: right; }
+      .hud .name { font-weight: 700; letter-spacing: 0.5px; font-size: 13px; }
+      .hud.left .name { color: #6ad0ff; }
+      .hud.right .name { color: #ff8a8a; }
+      .hpbar { position: relative; height: 12px; background: #1a1f28; border-radius: 6px; overflow: hidden; margin-top: 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+      .hpbar > .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg,#52e07a,#2bb14a); transition: width 120ms linear; }
+      .meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; opacity: 0.9; }
+      .hud.right .meta { justify-content: flex-end; }
+      .gold { color: #ffd166; font-weight: 700; }
+      #topbar {
+        position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+        background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
+        padding: 8px 14px; border-radius: 999px; font-size: 13px;
+        display: flex; gap: 14px; align-items: center;
+      }
+      #topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; }
+      #leash {
+        position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%);
+        opacity: 0; transition: opacity 200ms linear;
+        mix-blend-mode: multiply;
+      }
+      #grey { position: absolute; inset: 0; pointer-events: none; backdrop-filter: grayscale(0%); transition: backdrop-filter 200ms; }
+      #toast { position: absolute; left: 50%; top: 80px; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); font-size: 14px; opacity: 0; transition: opacity 200ms; }
+      #shop {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.55); pointer-events: auto;
+      }
+      #shop.open { display: flex; }
+      .shop-panel { width: min(720px, 92vw); background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 18px 20px; }
+      .shop-panel h2 { margin: 0 0 6px; font-size: 18px; }
+      .shop-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.7; }
+      .shop-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .shop-col { background: #0e1218; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 12px; }
+      .shop-col.p1 { border-color: #6ad0ff44; }
+      .shop-col.p2 { border-color: #ff8a8a44; }
+      .shop-col h3 { margin: 0 0 8px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+      .shop-col.p1 h3 .who { color: #6ad0ff; }
+      .shop-col.p2 h3 .who { color: #ff8a8a; }
+      .upg { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin: 6px 0; background: #1a2029; border-radius: 8px; font-size: 13px; }
+      .upg .lvl { font-size: 11px; opacity: 0.7; }
+      .upg .price { color: #ffd166; font-weight: 700; }
+      .upg.locked { opacity: 0.4; }
+      kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
+      #help { position: absolute; left: 12px; bottom: 12px; font-size: 12px; opacity: 0.85; background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 12px; max-width: 360px; line-height: 1.55; }
+      #help .row { display: flex; gap: 8px; align-items: center; }
+      #help .row + .row { margin-top: 4px; }
+      #help .who.p1 { color: #6ad0ff; font-weight: 700; }
+      #help .who.p2 { color: #ff8a8a; font-weight: 700; }
+      #intro { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); pointer-events: auto; }
+      #intro .panel { width: min(560px, 92vw); background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
+      #intro h1 { margin: 0 0 8px; font-size: 26px; letter-spacing: 0.5px; }
+      #intro p { margin: 6px 0; opacity: 0.85; font-size: 14px; line-height: 1.6; }
+      #intro button { margin-top: 14px; pointer-events: auto; background: linear-gradient(180deg,#3b82f6,#2563eb); color: white; border: none; padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; box-shadow: 0 6px 16px rgba(37,99,235,0.4); }
+      #intro button:hover { filter: brightness(1.1); }
+      #death { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); pointer-events: auto; }
+      #death.open { display: flex; }
+      #death .panel { background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
+      #death h1 { margin: 0 0 12px; color: #ff6a6a; }
+      #death button { margin-top: 12px; background: #2a313b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="canvas"></canvas>
+      <div id="ui-root">
+        <div id="leash"></div>
+        <div id="grey"></div>
+        <div id="topbar">
+          <span id="clock">Day · 06:00</span>
+          <span class="dot" id="clockdot"></span>
+          <span id="dist">0m apart</span>
+        </div>
+        <div class="hud left">
+          <div class="name">P1 · Cyan</div>
+          <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div></div>
+          <div class="meta">
+            <span class="gold">⛁ <span id="gold1">0</span></span>
+            <span>LV <span id="lvl1">1</span></span>
+            <span>DMG <span id="dmg1">10</span></span>
+          </div>
+        </div>
+        <div class="hud right">
+          <div class="name">P2 · Coral</div>
+          <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div></div>
+          <div class="meta">
+            <span>DMG <span id="dmg2">10</span></span>
+            <span>LV <span id="lvl2">1</span></span>
+            <span class="gold">⛁ <span id="gold2">0</span></span>
+          </div>
+        </div>
+        <div id="help">
+          <div class="row"><span class="who p1">P1</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>F</kbd> attack · <kbd>R</kbd> dash</div>
+          <div class="row"><span class="who p2">P2</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> move · <kbd>L</kbd> attack · <kbd>K</kbd> dash</div>
+          <div class="row"><kbd>Tab</kbd> upgrade shop · <kbd>1</kbd>‥<kbd>4</kbd> P1 buy · <kbd>7</kbd>‥<kbd>0</kbd> P2 buy · <kbd>P</kbd> pause</div>
+        </div>
+        <div id="toast"></div>
+        <div id="shop">
+          <div class="shop-panel">
+            <h2>Campfire Upgrades</h2>
+            <p>Spend gold to permanently upgrade your hero. Press <kbd>Tab</kbd> to close.</p>
+            <div class="shop-row">
+              <div class="shop-col p1">
+                <h3><span class="who">Player 1 — Cyan</span><span class="gold">⛁ <span id="shop-gold1">0</span></span></h3>
+                <div id="shop-upgs-1"></div>
+              </div>
+              <div class="shop-col p2">
+                <h3><span class="who">Player 2 — Coral</span><span class="gold">⛁ <span id="shop-gold2">0</span></span></h3>
+                <div id="shop-upgs-2"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="death">
+          <div class="panel">
+            <h1>You both fell.</h1>
+            <p>Stay close to each other — the bond is your lifeline.</p>
+            <button id="restart">Restart</button>
+          </div>
+        </div>
+        <div id="intro">
+          <div class="panel">
+            <h1>Twin Hearts</h1>
+            <p>A two-player local-coop adventure. Stay near your partner — drift too far and the world fades and drains your life.</p>
+            <p>Slay enemies, collect food and gold, then upgrade at the campfire. Survive the night.</p>
+            <p style="opacity:0.6;font-size:12px;">Two players, one keyboard. Click anywhere or press a key to begin.</p>
+            <button id="start">Begin Adventure</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
