@@ -23,6 +23,23 @@ const MANIFEST = {
   skel_minion: { url: 'models/Skeleton_Minion.glb' },
 };
 
+// Static nature props (Kenney Nature Kit, CC0 — kenney.nl/assets/nature-kit).
+// Loaded once and cloned cheaply for each placed instance.
+const NATURE_MANIFEST = {
+  tree_pine_a: { url: 'models/nature/tree_pineTallA.glb' },
+  tree_pine_b: { url: 'models/nature/tree_pineTallB.glb' },
+  tree_pine_c: { url: 'models/nature/tree_pineTallC.glb' },
+  tree_default: { url: 'models/nature/tree_default.glb' },
+  tree_oak: { url: 'models/nature/tree_oak.glb' },
+  rock_largeA: { url: 'models/nature/rock_largeA.glb' },
+  rock_largeB: { url: 'models/nature/rock_largeB.glb' },
+  rock_largeC: { url: 'models/nature/rock_largeC.glb' },
+  rock_smallA: { url: 'models/nature/rock_smallA.glb' },
+  rock_smallB: { url: 'models/nature/rock_smallB.glb' },
+  bush: { url: 'models/nature/plant_bush.glb' },
+  bush_large: { url: 'models/nature/plant_bushLarge.glb' },
+};
+
 // Animation aliases — pick the closest baked animation for each gameplay slot.
 // All KayKit models share the same naming convention so this map works for both
 // the Knight and the Skeleton variants.
@@ -41,6 +58,7 @@ const ANIM_MAP = {
 };
 
 const cache = {};
+const propCache = {};
 let loaderPromise = null;
 
 export function preloadModels(onProgress) {
@@ -48,9 +66,11 @@ export function preloadModels(onProgress) {
   const loader = new GLTFLoader();
   loader.setMeshoptDecoder(MeshoptDecoder);
 
-  const entries = Object.entries(MANIFEST);
+  const charEntries = Object.entries(MANIFEST);
+  const propEntries = Object.entries(NATURE_MANIFEST);
+  const total = charEntries.length + propEntries.length;
   let done = 0;
-  loaderPromise = Promise.all(entries.map(([key, { url }]) =>
+  const charPromises = charEntries.map(([key, { url }]) =>
     new Promise((resolve, reject) => {
       loader.load(url, (gltf) => {
         cache[key] = {
@@ -58,15 +78,92 @@ export function preloadModels(onProgress) {
           animations: gltf.animations || [],
         };
         done += 1;
-        onProgress?.(done, entries.length, key);
+        onProgress?.(done, total, key);
         resolve();
       }, undefined, (err) => {
         console.error('[models] failed to load', url, err);
         reject(err);
       });
     })
-  )).then(() => cache);
+  );
+  const propPromises = propEntries.map(([key, { url }]) =>
+    new Promise((resolve, reject) => {
+      loader.load(url, (gltf) => {
+        // Convert each PBR material into a Lambert and remap Kenney's stylised
+        // teal/pink palette to a more conventional green/brown forest palette.
+        gltf.scene.traverse((obj) => {
+          if (obj.isMesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            const replaced = mats.map((m) => {
+              if (!m) return m;
+              const color = remapNatureColor(m.name || '', m.color);
+              return new THREE.MeshLambertMaterial({
+                color,
+                map: m.map || null,
+                transparent: !!m.transparent,
+                opacity: m.opacity ?? 1,
+                side: THREE.FrontSide,
+              });
+            });
+            obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
+          }
+        });
+        propCache[key] = gltf.scene;
+        done += 1;
+        onProgress?.(done, total, key);
+        resolve();
+      }, undefined, (err) => {
+        console.error('[models] failed to load', url, err);
+        reject(err);
+      });
+    })
+  );
+  loaderPromise = Promise.all([...charPromises, ...propPromises]).then(() => ({ cache, propCache }));
   return loaderPromise;
+}
+
+// Map Kenney Nature Kit material names to natural forest colors. Falls back
+// to the source material's color so unknown materials still render reasonably.
+function remapNatureColor(name, srcColor) {
+  const n = name.toLowerCase();
+  if (n.includes('leaf')) {
+    // pick variant: dark/light to keep some variation across models
+    if (n.includes('dark')) return new THREE.Color(0x2c5d22);
+    if (n.includes('light')) return new THREE.Color(0x6cb850);
+    return new THREE.Color(0x4a8f3a);
+  }
+  if (n.includes('wood') || n.includes('bark') || n.includes('trunk')) {
+    return new THREE.Color(0x6b3f1c);
+  }
+  if (n.includes('grass') || n.includes('foliage')) {
+    return new THREE.Color(0x4f9a3a);
+  }
+  if (n.includes('stone') || n.includes('rock') || n.includes('cliff')) {
+    return new THREE.Color(0x8a8e95);
+  }
+  if (n.includes('dirt') || n.includes('ground') || n.includes('earth')) {
+    return new THREE.Color(0x6b5430);
+  }
+  return srcColor ? srcColor.clone() : new THREE.Color(0xffffff);
+}
+
+// Clone a static nature prop. Materials are shared between instances since
+// they're never tinted/animated individually — keeps GPU memory low.
+export function spawnProp(kind, { scale = 1, rotationY = 0 } = {}) {
+  const src = propCache[kind];
+  if (!src) {
+    throw new Error(`[models] unknown prop kind "${kind}"`);
+  }
+  const root = src.clone(true);
+  root.scale.setScalar(scale);
+  root.rotation.y = rotationY;
+  return root;
+}
+
+export function getPropKinds() {
+  return Object.keys(propCache);
 }
 
 // Reusable color buffer to convert hex tints into linear-space color (matches

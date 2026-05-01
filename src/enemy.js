@@ -266,9 +266,11 @@ export class Enemy {
       this.knockback.x *= kfac;
       this.knockback.z *= kfac;
 
-      if (Math.abs(move.x) > 0.01 || Math.abs(move.z) > 0.01) {
+      const movingNow = Math.abs(move.x) > 0.01 || Math.abs(move.z) > 0.01;
+      if (movingNow) {
         this.facing.x = move.x; this.facing.z = move.z;
       }
+      this._isMoving = movingNow;
       this.world.resolveCollisions(this.pos, this.radius);
       this.mesh.position.set(this.pos.x, 0, this.pos.z);
       const yawIdle = Math.atan2(this.facing.x, this.facing.z);
@@ -418,9 +420,11 @@ export class Enemy {
     this.knockback.x *= kfac;
     this.knockback.z *= kfac;
 
-    if (Math.abs(move.x) > 0.01 || Math.abs(move.z) > 0.01) {
+    const movingChase = Math.abs(move.x) > 0.01 || Math.abs(move.z) > 0.01;
+    if (movingChase) {
       this.facing.x = move.x; this.facing.z = move.z;
     }
+    this._isMoving = movingChase || (this.kind === 'wisp' && this.dashing > 0);
 
     this.world.resolveCollisions(this.pos, this.radius);
     this.mesh.position.set(this.pos.x, 0, this.pos.z);
@@ -454,14 +458,25 @@ export class Enemy {
         root.position.y = base;
       }
     }
-    // Drive locomotion animation: walk/run when actively moving (chase),
-    // idle otherwise.
+    // Drive locomotion animation: walk when wandering (idle/return state),
+    // run when chasing, idle when truly stopped.
     const speed2 = this.knockback.x * this.knockback.x + this.knockback.z * this.knockback.z;
-    const moving = (this.state === 'chase' && this.windup <= 0 && this.attackTimer < this.attackCooldown * 0.6) || speed2 > 0.5;
-    const desired = moving ? 'run' : 'idle';
+    const isMoving = this._isMoving || speed2 > 0.5;
+    let desired;
+    if (!isMoving) {
+      desired = 'idle';
+    } else if (this.state === 'chase') {
+      desired = 'run';
+    } else {
+      // Wandering / returning home — slower walk anim if available.
+      desired = (this._character?.actions?.walk) ? 'walk' : 'run';
+    }
     if (desired !== this._animState) {
       crossFadeTo(this._character?.actions, desired, 0.18);
       this._animState = desired;
+    }
+    if (this._animState === 'walk' && this._character?.actions?.walk) {
+      this._character.actions.walk.timeScale = 0.85;
     }
     this._character?.mixer?.update(dt);
   }

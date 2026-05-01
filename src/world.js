@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { vdist, makeRng } from './utils.js';
+import { spawnProp } from './models.js';
 
 export const WORLD_SIZE = 80; // world spans -WORLD_SIZE..+WORLD_SIZE
 
@@ -106,16 +107,15 @@ export class World {
   _scatterProps() {
     const r = this.rng;
     const { scene, colliders } = this;
-    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x6b3f1c });
-    const leafMats = [
-      new THREE.MeshLambertMaterial({ color: 0x2f6f2a }),
-      new THREE.MeshLambertMaterial({ color: 0x418f33 }),
-      new THREE.MeshLambertMaterial({ color: 0x589f3b }),
-    ];
-    const rockMat = new THREE.MeshLambertMaterial({ color: 0x8a8e95 });
-    const bushMat = new THREE.MeshLambertMaterial({ color: 0x4f9a3a });
 
-    const tries = 220;
+    // Variant pools — Kenney Nature Kit GLBs. Trees and rocks have collider
+    // radii roughly matching the model footprint.
+    const treeKinds = ['tree_pine_a', 'tree_pine_b', 'tree_pine_c', 'tree_default', 'tree_oak'];
+    const rockLargeKinds = ['rock_largeA', 'rock_largeB', 'rock_largeC'];
+    const rockSmallKinds = ['rock_smallA', 'rock_smallB'];
+    const bushKinds = ['bush', 'bush_large'];
+
+    const tries = 240;
     for (let i = 0; i < tries; i++) {
       const x = r.range(-WORLD_SIZE + 4, WORLD_SIZE - 4);
       const z = r.range(-WORLD_SIZE + 4, WORLD_SIZE - 4);
@@ -124,30 +124,30 @@ export class World {
       let ok = true;
       for (const c of colliders) { if (vdist({x,z}, {x:c.x, z:c.z}) < c.r + 1.5) { ok = false; break; } }
       if (!ok) continue;
-      const kind = r.chance(0.6) ? 'tree' : r.chance(0.5) ? 'rock' : 'bush';
+
+      const kind = r.chance(0.55) ? 'tree' : r.chance(0.55) ? 'rock' : 'bush';
+      const yaw = r.range(0, Math.PI * 2);
+      let mesh;
       if (kind === 'tree') {
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 2.2, 8), trunkMat);
-        trunk.position.set(x, 1.1, z);
-        trunk.castShadow = true; trunk.receiveShadow = true;
-        scene.add(trunk);
-        const top = new THREE.Mesh(new THREE.ConeGeometry(r.range(1.2, 2.0), r.range(2.4, 3.4), 8), leafMats[r.int(0, leafMats.length-1)]);
-        top.position.set(x, 3.2 + r.range(-0.2, 0.4), z);
-        top.castShadow = true;
-        scene.add(top);
+        const id = treeKinds[r.int(0, treeKinds.length - 1)];
+        const scale = r.range(2.4, 3.6);
+        mesh = spawnProp(id, { scale, rotationY: yaw });
+        mesh.position.set(x, 0, z);
         colliders.push({ x, z, r: 1.0 });
       } else if (kind === 'rock') {
-        const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(r.range(0.7, 1.4)), rockMat);
-        rk.position.set(x, 0.6, z);
-        rk.rotation.y = r.range(0, Math.PI);
-        rk.castShadow = true; rk.receiveShadow = true;
-        scene.add(rk);
-        colliders.push({ x, z, r: 1.0 });
+        const big = r.chance(0.55);
+        const id = (big ? rockLargeKinds : rockSmallKinds)[r.int(0, (big ? rockLargeKinds : rockSmallKinds).length - 1)];
+        const scale = big ? r.range(1.4, 2.0) : r.range(0.8, 1.2);
+        mesh = spawnProp(id, { scale, rotationY: yaw });
+        mesh.position.set(x, 0, z);
+        if (big) colliders.push({ x, z, r: 0.9 });
       } else {
-        const bs = new THREE.Mesh(new THREE.IcosahedronGeometry(r.range(0.4, 0.7), 0), bushMat);
-        bs.position.set(x, 0.4, z);
-        bs.castShadow = true;
-        scene.add(bs);
+        const id = bushKinds[r.int(0, bushKinds.length - 1)];
+        const scale = r.range(1.2, 2.0);
+        mesh = spawnProp(id, { scale, rotationY: yaw });
+        mesh.position.set(x, 0, z);
       }
+      scene.add(mesh);
     }
 
     // Outer fence (low stone wall)

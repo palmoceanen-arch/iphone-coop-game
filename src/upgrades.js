@@ -20,8 +20,8 @@ export function buy(player, upg, sound) {
   return true;
 }
 
-export function renderShop(player1, player2) {
-  const rebuild = (containerId, player) => {
+export function renderShop(player1, player2, onBuy) {
+  const rebuild = (containerId, player, slot) => {
     const el = document.getElementById(containerId);
     if (!el) return;
     el.innerHTML = '';
@@ -31,7 +31,7 @@ export function renderShop(player1, player2) {
       const can = player.gold >= price;
       const div = document.createElement('div');
       div.className = 'upg' + (can ? '' : ' locked');
-      const playerKey = containerId.endsWith('-1') ? '1234' : '7890';
+      const playerKey = slot === 0 ? '1234' : '7890';
       const idxKey = playerKey[idx];
       div.innerHTML = `
         <div>
@@ -42,11 +42,15 @@ export function renderShop(player1, player2) {
           <span class="price">⛁ ${price}</span>
           <kbd>${idxKey}</kbd>
         </div>`;
+      if (onBuy) {
+        div.style.cursor = 'pointer';
+        div.addEventListener('click', () => onBuy(slot, idx));
+      }
       el.appendChild(div);
     });
   };
-  rebuild('shop-upgs-1', player1);
-  rebuild('shop-upgs-2', player2);
+  rebuild('shop-upgs-1', player1, 0);
+  rebuild('shop-upgs-2', player2, 1);
   document.getElementById('shop-gold1').textContent = String(player1.gold);
   document.getElementById('shop-gold2').textContent = String(player2.gold);
 }

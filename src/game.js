@@ -102,7 +102,9 @@ export class Game {
       const idx = UPGRADES.findIndex(u => u.id === event.id);
       if (idx >= 0) {
         const ok = buy(this.players[slot], UPGRADES[idx], this.sound);
-        if (ok && this.shopOpen) renderShop(this.players[0], this.players[1]);
+        if (ok && this._keyboardShop) {
+          renderShop(this.players[0], this.players[1], (s, i) => this._tryBuy(s, i));
+        }
         this._pushPlayerState(slot);
       }
       return;
@@ -121,7 +123,22 @@ export class Game {
     // Game pauses if EITHER phone is in shop OR keyboard shop is open.
     this.shopOpen = !!(this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1]);
     document.getElementById('shop')?.classList.toggle('open', !!this._keyboardShop);
-    if (this._keyboardShop) renderShop(this.players[0], this.players[1]);
+    if (this._keyboardShop) {
+      renderShop(this.players[0], this.players[1], (slot, idx) => this._tryBuy(slot, idx));
+    }
+  }
+
+  _tryBuy(slot, idx) {
+    const upg = UPGRADES[idx];
+    if (!upg) return;
+    const player = this.players[slot];
+    if (!player) return;
+    if (buy(player, upg, this.sound)) {
+      if (this._keyboardShop) {
+        renderShop(this.players[0], this.players[1], (s, i) => this._tryBuy(s, i));
+      }
+      this._pushPlayerState(slot);
+    }
   }
 
   _pushPlayerState(slot) {
@@ -234,34 +251,32 @@ export class Game {
       this._pushPlayerState(0);
       this._pushPlayerState(1);
     }
-    if (dt <= 0) { this._updateUI(); return; }
-    this.elapsed += dt;
-
-    // Player intents
-    const i1 = this.input.intent(0);
-    const i2 = this.input.intent(1);
-
-    // Toggle shop with Tab if near campfire (or always allow)
+    // ---- Shop toggle / quick-buy (works while paused too) ----
+    // Toggle shop with Tab — must run BEFORE the dt<=0 early return so the
+    // user can re-press Tab to close the shop.
     if (this.input.consumeGlobal('Tab')) {
       this._keyboardShop = !this._keyboardShop;
       this._refreshShopState();
     }
 
-    // Quick-buy keys 1-4 for P1, 7-0 for P2 (only when shop open)
-    if (this.shopOpen) {
+    // Quick-buy keys 1-4 for P1, 7-0 for P2 (only when keyboard shop open)
+    if (this._keyboardShop) {
       const map1 = { 'Digit1': 0, 'Digit2': 1, 'Digit3': 2, 'Digit4': 3 };
       const map2 = { 'Digit7': 0, 'Digit8': 1, 'Digit9': 2, 'Digit0': 3 };
       for (const code of Object.keys(map1)) {
-        if (this.input.consumeGlobal(code)) {
-          if (buy(this.players[0], UPGRADES[map1[code]], this.sound)) renderShop(this.players[0], this.players[1]);
-        }
+        if (this.input.consumeGlobal(code)) this._tryBuy(0, map1[code]);
       }
       for (const code of Object.keys(map2)) {
-        if (this.input.consumeGlobal(code)) {
-          if (buy(this.players[1], UPGRADES[map2[code]], this.sound)) renderShop(this.players[0], this.players[1]);
-        }
+        if (this.input.consumeGlobal(code)) this._tryBuy(1, map2[code]);
       }
     }
+
+    if (dt <= 0) { this._updateUI(); this.input.endFrame(); return; }
+    this.elapsed += dt;
+
+    // Player intents
+    const i1 = this.input.intent(0);
+    const i2 = this.input.intent(1);
 
     // Update players
     this.players[0].update(dt, i1, this.players[1], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));
