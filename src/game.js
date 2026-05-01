@@ -239,10 +239,29 @@ export class Game {
   }
 
   _spawnInitialEnemies() {
-    for (const s of this.world.enemySpawns) {
+    // Drain any pending enemy spawns produced by chunk generation (origin
+    // chunk and immediate neighbours are loaded in World.constructor).
+    this._drainPendingEnemySpawns();
+  }
+
+  _drainPendingEnemySpawns() {
+    while (this.world.enemySpawns.length > 0) {
+      const s = this.world.enemySpawns.shift();
       const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, { homeX: s.homeX, homeZ: s.homeZ });
       this.enemies.push(e);
     }
+  }
+
+  // Walk every loaded player position and ask the world to materialise any
+  // missing chunks around them. Cheap: it only allocates new chunks on the
+  // edges of the active region.
+  _streamChunks() {
+    if (!this.players) return;
+    for (const p of this.players) {
+      if (!p) continue;
+      this.world.ensureChunksAround(p.pos.x, p.pos.z);
+    }
+    this._drainPendingEnemySpawns();
   }
 
   _onPlayerHitsEnemy(player, enemy) {
@@ -291,6 +310,9 @@ export class Game {
     // Always update FX timing using real dt0 (so shake decays even paused)
     this.effects.update(dt > 0 ? dt : dt0 * 0);
     this.world.update(dt);
+    // Stream chunks around the players (lazy generation; cheap when nothing
+    // changed). Done every frame because crossing a chunk boundary is rare.
+    this._streamChunks();
     // Throttled state sync to phones (uses real dt0 so it works while paused)
     this._stateSyncT += dt0;
     if (this._stateSyncT > 0.25 && this.lobby) {
