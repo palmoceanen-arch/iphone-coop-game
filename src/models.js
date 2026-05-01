@@ -95,7 +95,11 @@ export function preloadModels(onProgress) {
       loader.load(url, (gltf) => {
         // Convert each PBR material into a toon material (cel-shaded), and
         // remap Kenney's stylised teal/pink palette to a conventional
-        // green/brown forest palette.
+        // green/brown forest palette. Material names in Kenney's Nature Kit
+        // are inconsistent (sometimes "stone", sometimes "_defaultMat", etc.),
+        // so we additionally key off the prop's filename: any prop whose
+        // identifier starts with "rock" gets forced to a gray rock palette.
+        const isRockProp = key.startsWith('rock');
         gltf.scene.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
@@ -103,7 +107,12 @@ export function preloadModels(onProgress) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const replaced = mats.map((m) => {
               if (!m) return m;
-              const color = remapNatureColor(m.name || '', m.color);
+              let color;
+              if (isRockProp) {
+                color = new THREE.Color(0x8a8e95);
+              } else {
+                color = remapNatureColor(m.name || '', m.color);
+              }
               const fakeSrc = {
                 color,
                 map: m.map || null,
