@@ -1,5 +1,19 @@
 import * as THREE from 'three';
 import { vdist } from './utils.js';
+import { spawnCharacter, crossFadeTo } from './models.js';
+
+// Map each enemy archetype to a CC0 character model + per-kind tint, scale,
+// vertical offset and which animation slot to use for its primary attack.
+// Characters face +Z by default in the source GLBs, which matches our
+// atan2(facing.x,facing.z) convention, so no yaw offset is needed.
+const MODEL_YAW_OFFSET = 0;
+const ENEMY_VISUALS = {
+  slime:  { kind: 'skel_minion',  tint: 0x6cd25b, scale: 0.5, yOffset: 0,    attackAnim: 'attack_unarmed', transparent: 0.92 },
+  archer: { kind: 'skel_rogue',   tint: 0xc9a3ff, scale: 0.55, yOffset: 0,    attackAnim: 'attack_ranged' },
+  bomber: { kind: 'skel_mage',    tint: 0xff8a30, scale: 0.55,  yOffset: 0,    attackAnim: 'attack_throw' },
+  wisp:   { kind: 'skel_minion',  tint: 0x9dfcff, scale: 0.45,  yOffset: 0.6,  attackAnim: 'attack_spell',   transparent: 0.55 },
+  ogre:   { kind: 'skel_warrior', tint: 0xb98860, scale: 0.85, yOffset: 0,    attackAnim: 'attack_melee_heavy' },
+};
 
 // Base enemy class with 5 distinct subtypes.
 export class Enemy {
@@ -70,80 +84,47 @@ export class Enemy {
 
   _buildMesh() {
     const grp = new THREE.Group();
-    let body;
-    switch (this.kind) {
-      case 'slime': {
-        body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 12), new THREE.MeshLambertMaterial({ color: 0x6cd25b, transparent: true, opacity: 0.85 }));
-        body.position.y = 0.5;
-        body.castShadow = true;
-        grp.add(body);
-        const eye1 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-        const eye2 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-        eye1.position.set(-0.18, 0.65, 0.45); eye2.position.set(0.18, 0.65, 0.45);
-        grp.add(eye1); grp.add(eye2);
-        this.body = body;
-        break;
-      }
-      case 'archer': {
-        body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 0.7, 6, 10), new THREE.MeshLambertMaterial({ color: 0x8a4fdc }));
-        body.position.y = 0.85;
-        body.castShadow = true;
-        grp.add(body);
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 12), new THREE.MeshLambertMaterial({ color: 0xc9a3ff }));
-        head.position.y = 1.5; head.castShadow = true;
-        grp.add(head);
-        const bow = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.05, 8, 16, Math.PI), new THREE.MeshLambertMaterial({ color: 0x6b3f1c }));
-        bow.position.set(0.45, 1.0, 0.0); bow.rotation.z = Math.PI / 2;
-        grp.add(bow);
-        this.body = body;
-        break;
-      }
-      case 'bomber': {
-        body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 14, 14), new THREE.MeshLambertMaterial({ color: 0x222226 }));
-        body.position.y = 0.55; body.castShadow = true;
-        grp.add(body);
-        // fuse
-        const fuse = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.3, 8), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
-        fuse.position.y = 1.1; fuse.rotation.z = 0.3;
-        grp.add(fuse);
-        const eye1 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff5555 }));
-        const eye2 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff5555 }));
-        eye1.position.set(-0.18, 0.7, 0.45); eye2.position.set(0.18, 0.7, 0.45);
-        grp.add(eye1); grp.add(eye2);
-        this.body = body;
-        break;
-      }
-      case 'wisp': {
-        body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: 0x9dfcff, transparent: true, opacity: 0.85 }));
-        body.position.y = 1.2;
-        grp.add(body);
-        const halo = new THREE.Mesh(
-          new THREE.SphereGeometry(0.85, 12, 12),
-          new THREE.MeshBasicMaterial({ color: 0x9dfcff, transparent: true, opacity: 0.18, depthWrite: false }),
-        );
-        halo.position.y = 1.2;
-        grp.add(halo);
-        this.body = body;
-        break;
-      }
-      case 'ogre': {
-        body = new THREE.Mesh(new THREE.CapsuleGeometry(0.85, 1.4, 8, 12), new THREE.MeshLambertMaterial({ color: 0x7a5a3b }));
-        body.position.y = 1.45;
-        body.castShadow = true;
-        grp.add(body);
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.6, 14, 14), new THREE.MeshLambertMaterial({ color: 0x8c6a47 }));
-        head.position.y = 2.65; head.castShadow = true;
-        grp.add(head);
-        const club = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.18, 1.5, 8), new THREE.MeshLambertMaterial({ color: 0x4d3318 }));
-        club.position.set(0.9, 1.6, 0.0); club.rotation.z = -0.4;
-        grp.add(club);
-        this.club = club;
-        this.body = body;
-        break;
-      }
+    const visual = ENEMY_VISUALS[this.kind] || ENEMY_VISUALS.slime;
+    const character = spawnCharacter(visual.kind, { tint: visual.tint, scale: visual.scale });
+    character.root.position.y = visual.yOffset || 0;
+    if (visual.transparent !== undefined) {
+      character.root.traverse((obj) => {
+        if (obj.isMesh && obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of mats) {
+            if (m.isMaterial) {
+              m.transparent = true;
+              m.opacity = visual.transparent;
+            }
+          }
+        }
+      });
     }
+    grp.add(character.root);
+
+    // Cache materials for hit-flash / blink later
+    const materials = [];
+    character.root.traverse((obj) => {
+      if (obj.isMesh && obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) if (m.isMaterial) materials.push(m);
+      }
+    });
+
+    this._character = character;
+    this._materials = materials;
+    this._animState = 'idle';
+    this._attackAnimKey = visual.attackAnim;
+    this.body = null; // legacy field; effects code references `body.material` for hit flash but we now use _materials.
     grp.position.set(this.pos.x, 0, this.pos.z);
     return grp;
+  }
+
+  _playAttackAnim() {
+    const action = this._character?.actions?.[this._attackAnimKey];
+    if (!action) return;
+    action.reset();
+    action.fadeIn(0.05).play();
   }
 
   _aimTarget(players) {
@@ -291,8 +272,8 @@ export class Enemy {
       this.world.resolveCollisions(this.pos, this.radius);
       this.mesh.position.set(this.pos.x, 0, this.pos.z);
       const yawIdle = Math.atan2(this.facing.x, this.facing.z);
-      this.mesh.rotation.y = yawIdle;
-      this._updateVisualEffects();
+      this.mesh.rotation.y = yawIdle + MODEL_YAW_OFFSET;
+      this._updateVisualEffects(dt);
       return;
     }
 
@@ -304,12 +285,12 @@ export class Enemy {
 
       switch (this.kind) {
         case 'slime': {
-          // walks toward player and bumps for damage; bounce/hop visual
+          // walks toward player and bumps for damage
           move.x = nx; move.z = nz;
-          if (this.body) this.body.position.y = 0.5 + Math.abs(Math.sin(performance.now() * 0.012)) * 0.18;
           if (dist < this.radius + target.radius + 0.05 && this.attackTimer <= 0) {
             target.takeDamage(this.touchDamage, this.pos.x, this.pos.z);
             this.attackTimer = this.attackCooldown;
+            this._playAttackAnim();
           }
           break;
         }
@@ -334,6 +315,7 @@ export class Enemy {
               color: 0xc9a3ff,
             });
             this.sound.arrow();
+            this._playAttackAnim();
           }
           break;
         }
@@ -345,11 +327,18 @@ export class Enemy {
           }
           if (this.fuseStarted) {
             this.fuseTimer -= dt;
-            // pulse
-            if (this.body) {
-              const p = 1 + Math.sin(performance.now() * 0.04) * 0.15;
-              this.body.scale.setScalar(p);
-              this.body.material.color.setHex(Math.floor(performance.now()/120)%2===0 ? 0x222226 : 0xff8a30);
+            // pulse — scale character root and tint emissive to telegraph fuse.
+            const root = this._character?.root;
+            if (root) {
+              const baseScale = ENEMY_VISUALS[this.kind].scale;
+              const p = baseScale * (1 + Math.sin(performance.now() * 0.04) * 0.12);
+              root.scale.setScalar(p);
+              const flash = Math.floor(performance.now() / 120) % 2 === 0;
+              for (const m of this._materials || []) {
+                if (!m.emissive) continue;
+                m.emissive.setHex(flash ? 0xff8a30 : 0x000000);
+                m.emissiveIntensity = flash ? 0.6 : 0;
+              }
             }
             if (this.fuseTimer <= 0) {
               this._explode(players);
@@ -376,23 +365,19 @@ export class Enemy {
             this.pos.z += this._dashDir.z * sp * dt;
             this.world.resolveCollisions(this.pos, this.radius);
             this.mesh.position.set(this.pos.x, 0, this.pos.z);
-            if (this.body) this.body.material.opacity = 0.6;
+            this._updateVisualEffects(dt);
             return;
-          } else if (this.windup > 0) {
-            // glowing wind-up, no movement
-            if (this.body) this.body.material.opacity = 0.6 + 0.4 * Math.sin(performance.now() * 0.04);
-          } else if (this.attackTimer <= 0 && dist < 9) {
+          } else if (this.attackTimer <= 0 && dist < 9 && this.windup <= 0) {
             this.windup = this.dashWindup;
             this._dashDir = { x: nx, z: nz };
-          } else {
+          } else if (this.windup <= 0) {
             move.x = nx * 0.3; move.z = nz * 0.3;
-            if (this.body) this.body.material.opacity = 0.85;
           }
           if (windupFired) {
             this.dashing = 0.35;
             this.sound.dash();
+            this._playAttackAnim();
           }
-          if (this.body) this.body.position.y = 1.2 + Math.sin(performance.now() * 0.005) * 0.15;
           break;
         }
         case 'ogre': {
@@ -414,11 +399,7 @@ export class Enemy {
             this.effects.ring(this.pos.x, 0.1, this.pos.z, 0xff8a30, this.attackRange, 0.32);
             this.effects.shakeCamera(0.35);
             this.sound.bomb();
-          }
-          // club animation
-          if (this.club) {
-            const swing = this.windup > 0 ? (1 - this.windup / 0.55) * 1.4 : 0;
-            this.club.rotation.z = -0.4 - swing * 0.7;
+            this._playAttackAnim();
           }
           break;
         }
@@ -444,28 +425,44 @@ export class Enemy {
     this.world.resolveCollisions(this.pos, this.radius);
     this.mesh.position.set(this.pos.x, 0, this.pos.z);
     const yaw = Math.atan2(this.facing.x, this.facing.z);
-    this.mesh.rotation.y = yaw;
+    this.mesh.rotation.y = yaw + MODEL_YAW_OFFSET;
 
-    this._updateVisualEffects();
+    this._updateVisualEffects(dt);
   }
 
-  _updateVisualEffects() {
-    // hit flash
-    if (this.body) {
+  _updateVisualEffects(dt) {
+    // Hit flash via cached materials' emissive channel.
+    for (const m of this._materials || []) {
       if (this.flashTimer > 0) {
-        this.body.material.emissive = this.body.material.emissive || new THREE.Color(0xffffff);
-        this.body.material.emissive.setHex(0xffffff);
-        this.body.material.emissiveIntensity = (this.flashTimer / 0.12);
-      } else if (this.body.material.emissive) {
-        this.body.material.emissiveIntensity = 0;
+        if (!m.emissive) m.emissive = new THREE.Color(0xffffff);
+        m.emissive.setHex(0xffffff);
+        m.emissiveIntensity = this.flashTimer / 0.12;
+      } else if (m.emissive) {
+        m.emissiveIntensity = 0;
       }
     }
-    // gentle hop / float for some kinds even when idle
-    if (this.kind === 'slime' && this.body) {
-      this.body.position.y = 0.5 + Math.abs(Math.sin(performance.now() * 0.006)) * 0.12;
+    // Bobbing motion for floaty enemies — applied to the character root so
+    // the model itself rises, not the parent group (parent y is fixed at 0).
+    const root = this._character?.root;
+    if (root) {
+      const base = ENEMY_VISUALS[this.kind]?.yOffset || 0;
+      if (this.kind === 'wisp') {
+        root.position.y = base + Math.sin(performance.now() * 0.004) * 0.18;
+      } else if (this.kind === 'slime') {
+        root.position.y = base + Math.abs(Math.sin(performance.now() * 0.006)) * 0.08;
+      } else {
+        root.position.y = base;
+      }
     }
-    if (this.kind === 'wisp' && this.body) {
-      this.body.position.y = 1.2 + Math.sin(performance.now() * 0.004) * 0.12;
+    // Drive locomotion animation: walk/run when actively moving (chase),
+    // idle otherwise.
+    const speed2 = this.knockback.x * this.knockback.x + this.knockback.z * this.knockback.z;
+    const moving = (this.state === 'chase' && this.windup <= 0 && this.attackTimer < this.attackCooldown * 0.6) || speed2 > 0.5;
+    const desired = moving ? 'run' : 'idle';
+    if (desired !== this._animState) {
+      crossFadeTo(this._character?.actions, desired, 0.18);
+      this._animState = desired;
     }
+    this._character?.mixer?.update(dt);
   }
 }

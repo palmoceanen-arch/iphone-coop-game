@@ -1,10 +1,17 @@
 import * as THREE from 'three';
 import { clamp } from './utils.js';
+import { spawnCharacter, crossFadeTo } from './models.js';
 
 const COLORS = [
   { body: 0x6ad0ff, trim: 0x2a5d80, eye: 0xffffff },
   { body: 0xff8a8a, trim: 0x803f3f, eye: 0xffffff },
 ];
+
+// KayKit characters face +Z by default in the GLB; our atan2(facing.x,facing.z)
+// convention already maps facing direction to mesh.rotation.y when forward is
+// +Z, so no additional offset is required.
+const MODEL_YAW_OFFSET = 0;
+const MODEL_SCALE = 0.6;
 
 export class Player {
   constructor(index, world, effects, sound) {
@@ -54,50 +61,29 @@ export class Player {
   _buildMesh() {
     const palette = COLORS[this.index] || COLORS[0];
     const grp = new THREE.Group();
-    // body
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.5, 0.8, 6, 12),
-      new THREE.MeshLambertMaterial({ color: palette.body })
-    );
-    body.position.y = 0.9; body.castShadow = true;
-    grp.add(body);
-    // head
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.42, 16, 16),
-      new THREE.MeshLambertMaterial({ color: palette.body })
-    );
-    head.position.y = 1.85;
-    head.castShadow = true;
-    grp.add(head);
-    // hat brim
-    const hat = new THREE.Mesh(
-      new THREE.ConeGeometry(0.55, 0.6, 8),
-      new THREE.MeshLambertMaterial({ color: palette.trim })
-    );
-    hat.position.y = 2.35;
-    hat.castShadow = true;
-    grp.add(hat);
-    // eyes
-    const eyeMat = new THREE.MeshBasicMaterial({ color: palette.eye });
-    const e1 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), eyeMat);
-    const e2 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), eyeMat);
-    e1.position.set(-0.15, 1.92, 0.36); e2.position.set(0.15, 1.92, 0.36);
-    grp.add(e1); grp.add(e2);
-    // sword (visible during swing)
-    this.swordPivot = new THREE.Group();
-    this.swordPivot.position.set(0, 1.05, 0);
-    grp.add(this.swordPivot);
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.12, 1.2),
-      new THREE.MeshLambertMaterial({ color: 0xeeeeee })
-    );
-    blade.position.z = 0.7;
-    blade.castShadow = true;
-    this.swordPivot.add(blade);
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.12), new THREE.MeshLambertMaterial({ color: 0xb8a050 }));
-    guard.position.z = 0.1;
-    this.swordPivot.add(guard);
-    this.swordPivot.visible = false;
+
+    // Animated CC0 character model from KayKit (Knight) — clone of the shared
+    // skeleton + materials so each player can tint differently without leaking.
+    const character = spawnCharacter('knight', { tint: palette.body, scale: MODEL_SCALE });
+    this._character = character;
+    grp.add(character.root);
+
+    // Cache material refs so we can do hit-flash / i-frame blink without
+    // re-traversing the hierarchy every frame.
+    const materials = [];
+    character.root.traverse((obj) => {
+      if (obj.isMesh && obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (m.isMaterial) materials.push(m);
+        }
+      }
+    });
+    this._materials = materials;
+
+    // Initial animation state
+    this._animState = 'idle';
+    this._attackActionKey = 'attack_melee';
     return grp;
   }
 
@@ -134,17 +120,26 @@ export class Player {
     this.invuln = 999;
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xff8080, 24, 6, 0.7);
     this.sound.death();
+    const death = this._character?.actions?.death;
+    if (death) { death.reset(); death.fadeIn(0.1).play(); }
   }
 
   revive() {
     this.alive = true;
     this.hp = this.maxHP;
     this.invuln = 1.0;
+    if (this._character?.actions) {
+      // stop death pose, return to idle
+      this._character.actions.death?.stop();
+      crossFadeTo(this._character.actions, 'idle', 0.0);
+      this._animState = 'idle';
+    }
   }
 
   update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback) {
     if (!this.alive) {
-      this.mesh.visible = false;
+      // Keep mesh visible to show death pose; just freeze physics & animation.
+      this._character?.mixer?.update(dt);
       return;
     }
     this.mesh.visible = true;
@@ -180,8 +175,13 @@ export class Player {
       this.attackAnim = 0;
       this.swingActive = true;
       this.swingProcessed = false;
-      this.swordPivot.visible = true;
       this.sound.swing();
+      const action = this._character?.actions?.[this._attackActionKey];
+      if (action) {
+        action.reset();
+        action.timeScale = Math.max(1.2, 0.2 / Math.max(action.getClip().duration, 0.05));
+        action.fadeIn(0.05).play();
+      }
     }
 
     // Apply movement intent (kinematic)
@@ -224,19 +224,16 @@ export class Player {
     // HP regen (out of combat)
     if (this.hp < this.maxHP) this.hp = Math.min(this.maxHP, this.hp + this.stats.hpRegen * dt);
 
-    // Sword swing animation + hit detection
+    // Swing hit detection — animation playback is driven by AnimationMixer,
+    // but the gameplay damage window is still timer-based for predictability.
     if (this.swingActive) {
-      this.attackAnim += dt / 0.2; // 0.2s swing
+      this.attackAnim += dt / 0.25;
       if (this.attackAnim >= 1) {
         this.swingActive = false;
         this.attackAnim = 0;
-        this.swordPivot.visible = false;
-      } else {
-        // hit window 0.05..0.25
-        if (!this.swingProcessed && this.attackAnim > 0.15) {
-          this.swingProcessed = true;
-          this._processSwing(enemies, attackOnEnemyCallback);
-        }
+      } else if (!this.swingProcessed && this.attackAnim > 0.25) {
+        this.swingProcessed = true;
+        this._processSwing(enemies, attackOnEnemyCallback);
       }
     }
 
@@ -251,19 +248,27 @@ export class Player {
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
     this.yaw += dy * (1 - Math.exp(-18 * dt));
-    this.mesh.rotation.y = this.yaw;
+    this.mesh.rotation.y = this.yaw + MODEL_YAW_OFFSET;
 
-    // Sword anim: rotate around y from -arc/2 to +arc/2
-    if (this.swingActive) {
-      const a = this.stats.attackArc;
-      const t = this.attackAnim;
-      this.swordPivot.rotation.y = -a / 2 + a * t;
-      this.swordPivot.rotation.x = -0.4 - 0.4 * Math.sin(t * Math.PI);
+    // Drive locomotion animation (idle <-> run)
+    const moving = Math.hypot(m.x, m.z) > 0.05;
+    const desiredAnim = moving ? 'run' : 'idle';
+    if (desiredAnim !== this._animState && !this.swingActive) {
+      crossFadeTo(this._character.actions, desiredAnim, 0.18);
+      this._animState = desiredAnim;
     }
+    // Speed up run animation slightly when dashing for visual punch.
+    if (this._character?.actions?.run) {
+      this._character.actions.run.timeScale = dashing ? 1.8 : 1.0;
+    }
+    this._character?.mixer?.update(dt);
 
-    // I-frame blink
+    // I-frame blink — pre-cached materials.
     const blinkOn = this.invuln > 0 && Math.floor(this.invuln * 18) % 2 === 0;
-    this.mesh.traverse(obj => { if (obj.isMesh && obj.material && 'opacity' in obj.material) { obj.material.transparent = blinkOn; obj.material.opacity = blinkOn ? 0.45 : 1; } });
+    for (const m of this._materials) {
+      m.transparent = blinkOn;
+      m.opacity = blinkOn ? 0.45 : 1;
+    }
   }
 
   _processSwing(enemies, callback) {

@@ -1,13 +1,28 @@
 import { Game } from './game.js';
 import { Lobby } from './lobby.js';
+import { preloadModels } from './models.js';
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('error', (e) => {
     console.error('[fatal]', e.error || e.message);
   });
+
+  const loadingEl = document.getElementById('loading');
+  const fillEl = document.getElementById('loading-fill');
+  const statEl = document.getElementById('loading-stat');
+
   let game;
   let lobby;
   try {
+    await preloadModels((done, total, key) => {
+      if (fillEl) fillEl.style.width = `${Math.round(100 * done / total)}%`;
+      if (statEl) statEl.textContent = `${done} / ${total} · ${key}`;
+    });
+    if (loadingEl) {
+      loadingEl.classList.add('hidden');
+      setTimeout(() => loadingEl.remove(), 250);
+    }
+
     game = new Game();
     window.__game = game;
 
@@ -41,6 +56,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   } catch (err) {
     console.error(err);
+    if (loadingEl) loadingEl.remove();
     const intro = document.getElementById('intro');
     if (intro) {
       intro.innerHTML = `<div class="panel"><h1>Failed to start</h1><pre style="white-space:pre-wrap;text-align:left;">${String(err && err.stack || err)}</pre></div>`;
