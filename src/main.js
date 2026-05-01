@@ -7,6 +7,21 @@ window.addEventListener('DOMContentLoaded', async () => {
     console.error('[fatal]', e.error || e.message);
   });
 
+  // The host page renders a 3D world and is intended for the desktop/laptop
+  // running the game. On iPhone/Android, redirect to the controller page so
+  // players don't accidentally hit the WebGL canvas (which struggles on
+  // mobile Safari memory).
+  const ua = (navigator.userAgent || '').toLowerCase();
+  const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
+  const params = new URLSearchParams(window.location.search);
+  if (isMobile && !params.has('host')) {
+    const url = new URL('controller.html', window.location.href);
+    // forward seed code if present so /controller.html?code=... still works
+    for (const [k, v] of params.entries()) url.searchParams.set(k, v);
+    window.location.replace(url.toString());
+    return;
+  }
+
   const loadingEl = document.getElementById('loading');
   const fillEl = document.getElementById('loading-fill');
   const statEl = document.getElementById('loading-stat');

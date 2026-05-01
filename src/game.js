@@ -15,6 +15,49 @@ const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
 const LEASH_DRAIN = 14;
 
+// Heuristic to detect mobile / integrated GPUs that may struggle with
+// shadow mapping or aggressive WebGL options.
+function isLikelyLowEndGPU() {
+  const ua = (navigator.userAgent || '').toLowerCase();
+  if (/iphone|ipad|ipod|android|mobile/.test(ua)) return true;
+  return false;
+}
+
+// Build a WebGLRenderer with progressively-degraded options. iOS Safari /
+// older mobile browsers occasionally fail to allocate a context with
+// antialias=true, so we fall back to no-AA, then to an explicit WebGL1
+// context if needed.
+function createRenderer(canvas) {
+  const attempts = [
+    { antialias: true,  powerPreference: 'high-performance' },
+    { antialias: false, powerPreference: 'default' },
+    { antialias: false, powerPreference: 'low-power' },
+  ];
+  let lastErr = null;
+  for (const opts of attempts) {
+    try {
+      const r = new THREE.WebGLRenderer({ canvas, ...opts, preserveDrawingBuffer: false });
+      // Listen for context loss so we can show a graceful message instead of
+      // a hard crash if the GPU drops the context later (common on iOS when
+      // backgrounding the tab).
+      canvas.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        console.warn('[renderer] WebGL context lost');
+      });
+      return r;
+    } catch (err) {
+      lastErr = err;
+      console.warn('[renderer] WebGL attempt failed:', opts, err?.message || err);
+    }
+  }
+  // Final fallback: surface a friendly error in the DOM.
+  const msg = document.createElement('div');
+  msg.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#222;font:16px system-ui;padding:20px;text-align:center;';
+  msg.innerHTML = `Не удалось инициализировать WebGL.<br>На iPhone попробуй зайти на <code>/controller.html</code> вместо хост-страницы.<br><br>${(lastErr?.message || lastErr || '')}`;
+  document.body.appendChild(msg);
+  throw lastErr || new Error('WebGL init failed');
+}
+
 function getSeedFromUrl() {
   const params = new URLSearchParams(window.location.search);
   let seed = params.get('seed');
@@ -31,11 +74,15 @@ function getSeedFromUrl() {
 export class Game {
   constructor(opts = {}) {
     this.canvas = document.getElementById('canvas');
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+    this.renderer = createRenderer(this.canvas);
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Shadows are disabled on mobile/integrated GPUs to avoid context loss.
+    const enableShadows = !isLikelyLowEndGPU();
+    this.renderer.shadowMap.enabled = enableShadows;
+    if (enableShadows) {
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
 
     this.scene = new THREE.Scene();
     const seedInfo = opts.seed ? { display: String(opts.seed), value: hashString(String(opts.seed)) } : getSeedFromUrl();
