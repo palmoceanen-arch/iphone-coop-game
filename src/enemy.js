@@ -40,6 +40,8 @@ export class Enemy {
     this.stateTimer = 0;
     this.wanderTarget = { x, z };
     this.wanderTimer = 0;
+    this.chunkKey = opts.chunkKey ?? this.world.chunkKeyOf(x, z);
+    this.asleep = false;
     this.config(level);
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
@@ -186,6 +188,25 @@ export class Enemy {
 
   update(dt, players, ctx) {
     if (!this.alive) return;
+    // Chunk-level culling: if this enemy's chunk is outside the simulation
+    // radius, freeze it entirely — no AI, no animation, no collisions. The
+    // mesh is hidden as well (the parent chunk group is hidden by World, but
+    // belt-and-braces). When players walk back into range, the enemy resumes
+    // exactly where it left off.
+    const cx = Math.floor(this.pos.x / 32);
+    const cz = Math.floor(this.pos.z / 32);
+    const sleeping = !this.world.isChunkSimulating(cx, cz);
+    if (sleeping) {
+      if (!this.asleep) {
+        this.asleep = true;
+        this.mesh.visible = false;
+      }
+      return;
+    }
+    if (this.asleep) {
+      this.asleep = false;
+      this.mesh.visible = true;
+    }
     this.invuln = Math.max(0, this.invuln - dt);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
     this.attackTimer = Math.max(0, this.attackTimer - dt);

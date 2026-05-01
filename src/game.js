@@ -253,14 +253,17 @@ export class Game {
   }
 
   // Walk every loaded player position and ask the world to materialise any
-  // missing chunks around them. Cheap: it only allocates new chunks on the
-  // edges of the active region.
+  // missing chunks around them; then update the active chunk set so far-off
+  // chunks are hidden + their entities frozen. Cheap.
   _streamChunks() {
     if (!this.players) return;
+    const positions = [];
     for (const p of this.players) {
       if (!p) continue;
       this.world.ensureChunksAround(p.pos.x, p.pos.z);
+      positions.push({ x: p.pos.x, z: p.pos.z });
     }
+    this.world.refreshActiveChunks(positions);
     this._drainPendingEnemySpawns();
   }
 

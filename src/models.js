@@ -14,6 +14,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { TOON_GRADIENT, toToonMaterial } from './shading.js';
+// silence unused import warning when only the side-effect of building the
+// shared gradient texture is needed.
+void TOON_GRADIENT;
 
 const MANIFEST = {
   knight: { url: 'models/Knight.glb' },
@@ -89,8 +93,9 @@ export function preloadModels(onProgress) {
   const propPromises = propEntries.map(([key, { url }]) =>
     new Promise((resolve, reject) => {
       loader.load(url, (gltf) => {
-        // Convert each PBR material into a Lambert and remap Kenney's stylised
-        // teal/pink palette to a more conventional green/brown forest palette.
+        // Convert each PBR material into a toon material (cel-shaded), and
+        // remap Kenney's stylised teal/pink palette to a conventional
+        // green/brown forest palette.
         gltf.scene.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
@@ -99,13 +104,15 @@ export function preloadModels(onProgress) {
             const replaced = mats.map((m) => {
               if (!m) return m;
               const color = remapNatureColor(m.name || '', m.color);
-              return new THREE.MeshLambertMaterial({
+              const fakeSrc = {
                 color,
                 map: m.map || null,
                 transparent: !!m.transparent,
                 opacity: m.opacity ?? 1,
                 side: THREE.FrontSide,
-              });
+                name: m.name,
+              };
+              return toToonMaterial(fakeSrc);
             });
             obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
           }
@@ -187,18 +194,16 @@ export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = 
   const root = cloneSkeleton(entry.scene);
   root.scale.setScalar(scale);
 
-  // Walk the cloned hierarchy: enable shadows, clone materials per mesh so we
-  // can tint without leaking into sibling instances.
+  // Walk the cloned hierarchy: enable shadows, replace each material with a
+  // toon variant (per-instance, so per-instance tints / flashes don't leak).
   root.traverse((obj) => {
     if (obj.isMesh) {
       obj.castShadow = true;
       obj.receiveShadow = false;
-      // SkeletonUtils.clone shares materials by default — clone so tints/flashes
-      // don't leak across instances.
       if (Array.isArray(obj.material)) {
-        obj.material = obj.material.map(m => m.clone());
+        obj.material = obj.material.map(m => toToonMaterial(m));
       } else if (obj.material) {
-        obj.material = obj.material.clone();
+        obj.material = toToonMaterial(obj.material);
       }
       if (tint !== null) {
         _tmpColor.setHex(tint);

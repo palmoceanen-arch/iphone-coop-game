@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { vdist, rand } from './utils.js';
+import { TOON_GRADIENT } from './shading.js';
 
 const FOOD_TYPES = [
   { name: 'apple', color: 0xff4747, heal: 25, scale: 0.32 },
@@ -23,7 +24,7 @@ export class Pickup {
   _buildMesh() {
     if (this.kind === 'gold') {
       const grp = new THREE.Group();
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.07, 16), new THREE.MeshLambertMaterial({ color: 0xffd166, emissive: 0x4d3f00, emissiveIntensity: 0.2 }));
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.07, 16), new THREE.MeshToonMaterial({ color: 0xffd166, gradientMap: TOON_GRADIENT }));
       m.castShadow = true;
       grp.add(m);
       grp.position.set(this.pos.x, 0.7, this.pos.z);
@@ -31,7 +32,7 @@ export class Pickup {
     } else {
       const food = this.foodType || (this.foodType = FOOD_TYPES[Math.floor(Math.random() * FOOD_TYPES.length)]);
       const grp = new THREE.Group();
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(food.scale, 0), new THREE.MeshLambertMaterial({ color: food.color }));
+      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(food.scale, 0), new THREE.MeshToonMaterial({ color: food.color, gradientMap: TOON_GRADIENT }));
       m.castShadow = true;
       grp.add(m);
       grp.position.set(this.pos.x, 0.55, this.pos.z);

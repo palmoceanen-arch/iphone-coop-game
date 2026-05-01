@@ -1,23 +1,27 @@
 import * as THREE from 'three';
 import { makeRng } from './utils.js';
 import { spawnProp } from './models.js';
+import { TOON_GRADIENT } from './shading.js';
 
 // Chunk-based deterministic world.
 //
 // Generation pipeline (per chunk, fully seeded):
-//   1. Value noise sampled at chunk grid points → height/biome map
+//   1. Value noise sampled at chunk grid points → biome / density map
 //   2. Water ponds placed in low-noise dips
 //   3. Trees on land cells (Poisson-ish, density modulated by noise)
 //   4. Rocks (large + medium gray rocks on rocky cells; small rocks scattered)
 //   5. Bushes / clutter
-//   6. Enemy camp picks (deterministic per chunk; a fraction of chunks are camps)
+//   6. Enemy camp picks (deterministic per chunk; fraction of chunks are camps)
 //
-// There's no fixed map boundary — chunks are streamed in around the players.
+// There is no fixed map boundary — chunks are streamed in around the players.
+// Far chunks are kept in memory but their group is hidden and their entities
+// are frozen until the players come back near.
 
 export const CHUNK_SIZE = 32;
-export const ACTIVE_RADIUS = 3; // load 7×7 chunks around the centroid
+export const ACTIVE_RADIUS = 3;     // chunks generated/visible around each player (7×7)
+export const SIM_RADIUS    = 2;     // chunks within which enemies actively simulate (5×5)
 
-// 32-bit integer hash mixing world seed with (cx, cz). Same input → same seed.
+// 32-bit integer hash mixing world seed with (cx, cz).
 function chunkSeed(worldSeed, cx, cz) {
   let h = (worldSeed | 0) >>> 0;
   h ^= Math.imul((cx | 0) + 0x9e3779b1, 0x85ebca6b);
@@ -28,7 +32,7 @@ function chunkSeed(worldSeed, cx, cz) {
   return h >>> 0;
 }
 
-// Lightweight 2D value noise — deterministic, derived from world seed.
+// 2D value noise — deterministic, derived from world seed.
 function makeNoise(worldSeed) {
   function hash(ix, iz) {
     let h = worldSeed | 0;
@@ -50,7 +54,6 @@ function makeNoise(worldSeed) {
     const ux = smooth(fx), uz = smooth(fz);
     return (a * (1 - ux) + b * ux) * (1 - uz) + (c * (1 - ux) + d * ux) * uz;
   }
-  // 3-octave fractal sum, output ~[0,1]
   return function fbm(x, z) {
     let n = 0, amp = 0.55, freq = 0.04;
     for (let o = 0; o < 3; o++) {
@@ -82,15 +85,17 @@ export class World {
     this.scene = scene;
     this.seed = seed >>> 0;
     this.noise = makeNoise(this.seed);
-    this.chunks = new Map();      // key="cx,cz" → { group, colliders, enemySpawns }
-    this.colliders = [];          // aggregated from all loaded chunks
-    this.enemySpawns = [];        // queue read by Game on first frame after a chunk loads
+    this.chunks = new Map();          // key="cx,cz" → { group, colliders, enemySpawns }
+    this.activeKeys = new Set();      // chunk keys currently visible / receiving collision queries
+    this.simKeys = new Set();         // chunk keys whose enemies actively simulate
+    this.colliders = [];              // aggregated from active chunks only
+    this.enemySpawns = [];            // queue read by Game on first frame after a chunk loads
+    this._lastGroundCx = null;
+    this._lastGroundCz = null;
     this._buildSky();
     this._buildLights();
     this._buildGround();
     this._buildCampfire();
-    // Origin chunk and immediate neighbors guaranteed at start so the players
-    // have a clearing and some content visible without waiting.
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
     this.dayLength = 240;
@@ -109,57 +114,45 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff4d8, 1.1);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
-    const d = 80;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    // Shadow camera covers the active 7×7 chunk area (~224m). The light + its
+    // shadow camera follow the centroid of the players each frame so shadows
+    // are always sharp around the action.
+    const d = (ACTIVE_RADIUS + 0.5) * CHUNK_SIZE;
     this.sun.shadow.camera.left = -d;
     this.sun.shadow.camera.right = d;
     this.sun.shadow.camera.top = d;
     this.sun.shadow.camera.bottom = -d;
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 200;
-    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.camera.far = 250;
+    this.sun.shadow.bias = -0.0008;
+    this.sun.shadow.normalBias = 0.04;
+    this.sun.target = new THREE.Object3D();
     this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
     this.moonHelper = new THREE.HemisphereLight(0x7aa6ff, 0x202830, 0.0);
     this.scene.add(this.moonHelper);
   }
 
-  // One large flat ground plane sitting under all chunks. Vertex colours are
-  // computed from the same noise so the terrain reads as varied without
-  // needing per-chunk geometry. Plenty large enough to never run out.
+  // Ground = a single large flat plane (toon-shaded grass) that follows the
+  // centroid of the players. Snapped to a multiple of CHUNK_SIZE so its
+  // texture does not visibly slide. With a flat colour and no displacement
+  // there are no self-shadowing artifacts.
   _buildGround() {
-    const size = 800;
-    const seg = 160;
-    const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+    const size = (ACTIVE_RADIUS * 2 + 4) * CHUNK_SIZE; // ~320m
+    const geo = new THREE.PlaneGeometry(size, size, 1, 1);
     geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const grass = new THREE.Color(0x6db050);
-    const grassDark = new THREE.Color(0x4a8a3a);
-    const grassBright = new THREE.Color(0x88c562);
-    const dirt = new THREE.Color(0x8c7a52);
-    const tmp = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      const n = this.noise(x, z);
-      // micro-bump from noise so the ground doesn't look mathematical-flat
-      pos.setY(i, (n - 0.5) * 0.5);
-      let c;
-      if (n > 0.72) c = tmp.copy(dirt).lerp(grassBright, 0.25);
-      else if (n > 0.5) c = grassBright;
-      else if (n > 0.3) c = grass;
-      else c = grassDark;
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
-    }
-    geo.computeVertexNormals();
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const mat = new THREE.MeshToonMaterial({
+      color: 0x6db050,
+      gradientMap: TOON_GRADIENT,
+    });
     this.ground = new THREE.Mesh(geo, mat);
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
   }
 
   _buildCampfire() {
-    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x6e6862 });
+    const stoneMat = new THREE.MeshToonMaterial({ color: 0x6e6862, gradientMap: TOON_GRADIENT });
     const ring = new THREE.Group();
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -168,7 +161,7 @@ export class World {
       s.castShadow = true;
       ring.add(s);
     }
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 1.2, 8), new THREE.MeshLambertMaterial({ color: 0x4d2f17 }));
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 1.2, 8), new THREE.MeshToonMaterial({ color: 0x4d2f17, gradientMap: TOON_GRADIENT }));
     log.position.y = 0.3; log.rotation.z = Math.PI / 2;
     ring.add(log);
     const log2 = log.clone(); log2.rotation.z = Math.PI / 2; log2.rotation.y = Math.PI / 3;
@@ -184,14 +177,12 @@ export class World {
     this.campfire = ring;
   }
 
-  // Make sure every chunk within ACTIVE_RADIUS of (worldX, worldZ) is
-  // generated. Returns the list of newly-spawned enemy descriptors so
-  // Game can instantiate them. Does not unload distant chunks (cheap and
-  // keeps the world consistent).
+  // Ensure every chunk within ACTIVE_RADIUS of (worldX, worldZ) has been
+  // generated. New chunks are added to scene immediately; their enemy spawn
+  // descriptors are queued for Game to instantiate.
   ensureChunksAround(worldX, worldZ) {
     const cx0 = Math.floor(worldX / CHUNK_SIZE);
     const cz0 = Math.floor(worldZ / CHUNK_SIZE);
-    const newEnemies = [];
     for (let dz = -ACTIVE_RADIUS; dz <= ACTIVE_RADIUS; dz++) {
       for (let dx = -ACTIVE_RADIUS; dx <= ACTIVE_RADIUS; dx++) {
         const cx = cx0 + dx, cz = cz0 + dz;
@@ -200,14 +191,79 @@ export class World {
         const chunk = this._generateChunk(cx, cz);
         this.chunks.set(key, chunk);
         this.scene.add(chunk.group);
-        for (const c of chunk.colliders) this.colliders.push(c);
-        for (const e of chunk.enemySpawns) newEnemies.push(e);
+        for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
       }
     }
-    if (newEnemies.length > 0) {
-      this.enemySpawns.push(...newEnemies);
+  }
+
+  // Recompute which chunks are active (visible) and which actively simulate
+  // their enemies, based on the centroid of all alive players. Cheap: just
+  // walks the existing chunks Map and toggles group.visible.
+  refreshActiveChunks(playerPositions) {
+    if (!playerPositions || playerPositions.length === 0) return;
+    // Union of active rectangles around each player.
+    const wantActive = new Set();
+    const wantSim = new Set();
+    let cxSum = 0, czSum = 0, n = 0;
+    for (const p of playerPositions) {
+      const pcx = Math.floor(p.x / CHUNK_SIZE);
+      const pcz = Math.floor(p.z / CHUNK_SIZE);
+      cxSum += p.x; czSum += p.z; n++;
+      for (let dz = -ACTIVE_RADIUS; dz <= ACTIVE_RADIUS; dz++) {
+        for (let dx = -ACTIVE_RADIUS; dx <= ACTIVE_RADIUS; dx++) {
+          wantActive.add(`${pcx + dx},${pcz + dz}`);
+        }
+      }
+      for (let dz = -SIM_RADIUS; dz <= SIM_RADIUS; dz++) {
+        for (let dx = -SIM_RADIUS; dx <= SIM_RADIUS; dx++) {
+          wantSim.add(`${pcx + dx},${pcz + dz}`);
+        }
+      }
     }
-    return newEnemies;
+    this.activeKeys = wantActive;
+    this.simKeys = wantSim;
+    // Toggle visibility of every loaded chunk (cheap: bool flip).
+    for (const [key, chunk] of this.chunks) {
+      const vis = wantActive.has(key);
+      if (chunk.group.visible !== vis) chunk.group.visible = vis;
+    }
+    // Rebuild aggregated colliders only from active chunks. This keeps the
+    // per-frame collision loop bounded regardless of how many chunks exist.
+    this.colliders.length = 0;
+    for (const key of wantActive) {
+      const c = this.chunks.get(key);
+      if (!c) continue;
+      for (const col of c.colliders) this.colliders.push(col);
+    }
+    // Move ground + sun shadow camera with the centroid (snapped to chunk
+    // grid so vertex texture seams don't slide).
+    if (n > 0) {
+      const cxAvg = cxSum / n;
+      const czAvg = czSum / n;
+      const sx = Math.round(cxAvg / CHUNK_SIZE) * CHUNK_SIZE;
+      const sz = Math.round(czAvg / CHUNK_SIZE) * CHUNK_SIZE;
+      if (sx !== this._lastGroundCx || sz !== this._lastGroundCz) {
+        this.ground.position.set(sx, 0, sz);
+        this._lastGroundCx = sx;
+        this._lastGroundCz = sz;
+      }
+      // Sun shadow camera follows the centroid so we always have crisp
+      // shadows around the action.
+      const sunDir = new THREE.Vector3(0.6, 1, 0.4).normalize();
+      this.sun.target.position.set(cxAvg, 0, czAvg);
+      this.sun.position.set(
+        cxAvg + sunDir.x * 80,
+        sunDir.y * 80,
+        czAvg + sunDir.z * 80
+      );
+      this.sun.target.updateMatrixWorld();
+    }
+  }
+
+  isChunkActive(cx, cz) { return this.activeKeys.has(`${cx},${cz}`); }
+  isChunkSimulating(cx, cz) { return this.simKeys.has(`${cx},${cz}`); }
+  chunkKeyOf(x, z) {
+    return `${Math.floor(x / CHUNK_SIZE)},${Math.floor(z / CHUNK_SIZE)}`;
   }
 
   _generateChunk(cx, cz) {
@@ -219,15 +275,13 @@ export class World {
     const colliders = [];
     const enemySpawns = [];
 
-    // Origin chunk has a guaranteed clearing around the campfire.
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
     const localCenter = (x, z) => Math.hypot(x, z);
 
-    // 1. Average-noise sample for biome flavor (helps decide density).
     const sampleN = (x, z) => this.noise(x, z);
 
-    // 2. Water — ~25% of non-origin chunks get a pond in a noise-low spot.
+    // 2. Water — ~25% of non-origin chunks, placed in the noise-low spot.
     if (!isOrigin && r.chance(0.25)) {
       let bestX = 0, bestZ = 0, bestN = 1;
       for (let i = 0; i < 16; i++) {
@@ -239,22 +293,28 @@ export class World {
       const rad = r.range(3, 6);
       const pondGeo = new THREE.CircleGeometry(rad, 24);
       pondGeo.rotateX(-Math.PI / 2);
-      const pondMat = new THREE.MeshPhongMaterial({ color: 0x3aa6ff, shininess: 80, transparent: true, opacity: 0.85 });
+      const pondMat = new THREE.MeshToonMaterial({
+        color: 0x3a86ff,
+        gradientMap: TOON_GRADIENT,
+        transparent: true,
+        opacity: 0.92,
+      });
       const pond = new THREE.Mesh(pondGeo, pondMat);
-      pond.position.set(bestX, 0.06, bestZ);
+      // Sit slightly above ground so the water plane never z-fights with the
+      // ground when both are flat at y=0.
+      pond.position.set(bestX, 0.04, bestZ);
       group.add(pond);
       colliders.push({ x: bestX, z: bestZ, r: rad * 0.85 });
     }
 
-    // 3. Trees — density modulated by noise. Up to ~14 attempts per chunk;
-    //    higher noise = more vegetation. Skip near other colliders.
+    // 3. Trees — density modulated by noise.
     const treeAttempts = 14;
     for (let i = 0; i < treeAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
       const z = minZ + r.range(2, CHUNK_SIZE - 2);
       if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
       const n = sampleN(x, z);
-      if (r.next() > n * 1.1) continue;          // density grows with noise
+      if (r.next() > n * 1.1) continue;
       if (!this._spotClear(x, z, 1.4, colliders)) continue;
       const id = TREE_KINDS[r.int(0, TREE_KINDS.length - 1)];
       const scale = r.range(2.4, 3.6);
@@ -265,15 +325,13 @@ export class World {
       colliders.push({ x, z, r: 1.0 });
     }
 
-    // 4. Rocks — rocky cells (high noise) get more large/medium rocks; the
-    //    rest get small ones for clutter.
+    // 4. Rocks — rocky cells (high noise) get more large/medium gray rocks.
     const rockAttempts = 8;
     for (let i = 0; i < rockAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
       const z = minZ + r.range(2, CHUNK_SIZE - 2);
       if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
       const n = sampleN(x, z);
-      // bias: noise>0.55 → rocky, otherwise softer ground with fewer rocks
       const isRocky = n > 0.55;
       if (!isRocky && !r.chance(0.35)) continue;
       if (!this._spotClear(x, z, 1.0, colliders)) continue;
@@ -287,7 +345,7 @@ export class World {
       if (big) colliders.push({ x, z, r: 0.9 });
     }
 
-    // 5. Bushes / small clutter
+    // 5. Bushes / clutter
     const bushAttempts = 6;
     for (let i = 0; i < bushAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
@@ -303,9 +361,8 @@ export class World {
       group.add(mesh);
     }
 
-    // 6. Enemy camps — origin chunk has none, immediate neighbors low odds,
-    //    further chunks higher odds. Pick a free spot in the chunk; if found,
-    //    instantiate an enemy camp template.
+    // 6. Enemy camps — origin chunk excluded. Camp probability grows with
+    // distance from origin so the world stays interesting as players explore.
     if (!isOrigin) {
       const dist = Math.hypot(cx, cz);
       const pCamp = Math.min(0.65, 0.18 + dist * 0.08);
@@ -324,18 +381,21 @@ export class World {
             const oz = r.range(-2.5, 2.5);
             const ex = cxw + ox, ez = czw + oz;
             if (!this._spotClear(ex, ez, 0.8, colliders)) continue;
-            enemySpawns.push({ kind: k, x: ex, z: ez, level: lvl, homeX: cxw, homeZ: czw });
+            enemySpawns.push({
+              kind: k,
+              x: ex, z: ez,
+              level: lvl,
+              homeX: cxw, homeZ: czw,
+              chunkKey: `${cx},${cz}`,
+            });
           }
         }
       }
     }
 
-    return { group, colliders, enemySpawns };
+    return { group, colliders, enemySpawns, cx, cz };
   }
 
-  // Cheap clearance check using only colliders pushed so far (chunk-local +
-  // already-aggregated). Avoids quadratic behaviour by only scanning nearby
-  // entries.
   _spotClear(x, z, radius, localColliders) {
     for (const c of localColliders) {
       const dx = x - c.x, dz = z - c.z;
@@ -356,8 +416,6 @@ export class World {
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
     const a = (this.dayTime - 0.25) * Math.PI * 2;
     const sunY = Math.cos(a);
-    const sunX = Math.sin(a);
-    this.sun.position.set(sunX * 50, Math.max(-10, sunY * 50 + 5), 25);
     this.sun.intensity = Math.max(0, sunY) * 1.15;
 
     const t = (Math.sin(this.dayTime * Math.PI * 2 - Math.PI / 2) + 1) / 2;
@@ -378,8 +436,7 @@ export class World {
     }
   }
 
-  // Resolve circle-vs-circle overlaps with prop colliders only — no
-  // map-edge wall, the world is open.
+  // No map-edge wall — only resolve overlap with active-chunk prop colliders.
   resolveCollisions(pos, radius) {
     for (const c of this.colliders) {
       const dx = pos.x - c.x, dz = pos.z - c.z;
