@@ -14,6 +14,9 @@ import { vdist, clamp, hashString } from './utils.js';
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
 const LEASH_DRAIN = 14;
+const REVIVE_RANGE = 2.5;        // metres
+const REVIVE_HOLD = 2.0;         // seconds of dashHeld required
+const REVIVE_HP = 0.5;           // fraction of maxHP after revive
 
 // Heuristic to detect mobile / integrated GPUs that may struggle with
 // shadow mapping or aggressive WebGL options.
@@ -267,6 +270,39 @@ export class Game {
     this._drainPendingEnemySpawns();
   }
 
+  // Lazy-build and update a small billboarded HP-style bar above a downed
+  // player to show revive hold progress.
+  _renderReviveBar(player) {
+    if (!player._reviveBar) {
+      const bg = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.4, 0.16),
+        new THREE.MeshBasicMaterial({ color: 0x101410, transparent: true, opacity: 0.7, depthTest: false })
+      );
+      const fg = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.36, 0.12),
+        new THREE.MeshBasicMaterial({ color: 0x7aff8a, transparent: true, opacity: 0.95, depthTest: false })
+      );
+      fg.position.z = 0.001;
+      const grp = new THREE.Group();
+      grp.add(bg);
+      grp.add(fg);
+      grp.renderOrder = 999;
+      grp.position.set(player.pos.x, 2.4, player.pos.z);
+      this.scene.add(grp);
+      player._reviveBar = grp;
+      player._reviveBarFg = fg;
+    }
+    const grp = player._reviveBar;
+    const fg = player._reviveBarFg;
+    const progress = player.reviveProgress / REVIVE_HOLD;
+    grp.visible = progress > 0.001;
+    if (!grp.visible) return;
+    grp.position.set(player.pos.x, 2.4, player.pos.z);
+    grp.quaternion.copy(this.followCam.cam.quaternion);
+    fg.scale.x = Math.max(0.001, progress);
+    fg.position.x = -0.68 * (1 - progress);
+  }
+
   _onPlayerHitsEnemy(player, enemy) {
     const dmg = player.stats.damage * (1 + Math.random() * 0.05);
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
@@ -283,17 +319,18 @@ export class Game {
     const dropFood = Math.random() < 0.18;
     const drops = spawnDrops(this.scene, enemy.pos.x, enemy.pos.z, enemy.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
-    // bonus xp granted to killer
-    if (killer && killer.alive) {
-      killer.xp += enemy.xp;
-      const need = killer.level * 30;
-      if (killer.xp >= need) {
-        killer.xp -= need;
-        killer.level += 1;
-        killer.maxHP += 8;
-        killer.hp += 8;
-        this.effects.toast(`P${killer.index+1} reached level ${killer.level}!`, killer.index === 0 ? '#6ad0ff' : '#ff8a8a');
-        this.effects.ring(killer.pos.x, 0.06, killer.pos.z, 0xfff7a0, 2.2, 0.5);
+    // Shared XP — both players gain regardless of who killed (even if dead;
+    // they level up so revival lands them at the proper stats).
+    for (const p of this.players) {
+      p.xp += enemy.xp;
+      const need = p.level * 30;
+      if (p.xp >= need) {
+        p.xp -= need;
+        p.level += 1;
+        p.maxHP += 8;
+        if (p.alive) p.hp += 8;
+        this.effects.toast(`P${p.index+1} reached level ${p.level}!`, p.index === 0 ? '#6ad0ff' : '#ff8a8a');
+        this.effects.ring(p.pos.x, 0.06, p.pos.z, 0xfff7a0, 2.2, 0.5);
       }
     }
   }
@@ -387,6 +424,36 @@ export class Game {
       // subtle warn sound at intervals
       if (Math.floor(this.elapsed * 2) % 2 === 0 && Math.random() < 0.05) {
         this.sound.tone({ freq: 240, type: 'sawtooth', dur: 0.2, gain: 0.15, slide: -50 });
+      }
+    }
+
+    // Revive: if a player is downed, the partner can hold their dash button
+    // while standing within REVIVE_RANGE metres for REVIVE_HOLD seconds to
+    // bring them back at REVIVE_HP of max. Visual feedback is rendered as
+    // a thin progress bar above the downed body.
+    for (let i = 0; i < this.players.length; i++) {
+      const dead = this.players[i];
+      if (dead.alive) continue;
+      const partner = this.players[1 - i];
+      const intent = partner.index === 0 ? i1 : i2;
+      const inRange = partner.alive && vdist(dead.pos, partner.pos) <= REVIVE_RANGE;
+      const holding = inRange && intent.dashHeld;
+      if (holding) {
+        dead.reviveProgress = Math.min(REVIVE_HOLD, dead.reviveProgress + dt);
+      } else {
+        dead.reviveProgress = Math.max(0, dead.reviveProgress - dt * 2);
+      }
+      this._renderReviveBar(dead);
+      if (dead.reviveProgress >= REVIVE_HOLD) {
+        dead.revive(REVIVE_HP);
+        // Place revived player next to partner so they don't immediately die again.
+        dead.pos.x = partner.pos.x + 0.6;
+        dead.pos.z = partner.pos.z + 0.6;
+        dead.smoothPos = { x: dead.pos.x, z: dead.pos.z };
+        dead.knockback = { x: 0, z: 0 };
+        this.effects.ring(dead.pos.x, 0.2, dead.pos.z, 0x7aff8a, 2.5, 0.6);
+        this.effects.toast(`P${dead.index + 1} revived!`, '#7aff8a');
+        this.sound.bell?.();
       }
     }
 

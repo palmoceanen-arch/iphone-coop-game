@@ -21,6 +21,16 @@ export const CHUNK_SIZE = 32;
 export const ACTIVE_RADIUS = 3;     // chunks generated/visible around each player (7×7)
 export const SIM_RADIUS    = 2;     // chunks within which enemies actively simulate (5×5)
 
+// Lake cell grid. Per chunk we sample WATER_GRID×WATER_GRID cells, each
+// CHUNK_SIZE/WATER_GRID metres wide. Cells whose noise falls below the
+// threshold become water; adjacent water cells visually merge into lakes.
+// Threshold tuned so the average chunk has ~12-15% water coverage (well
+// under the 20% cap; bumpy fbm noise tends to clump water cells together
+// rather than scatter them, which keeps lake outlines connected).
+export const WATER_GRID = 8;
+export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
+export const WATER_THRESHOLD = 0.30;
+
 // 32-bit integer hash mixing world seed with (cx, cz).
 function chunkSeed(worldSeed, cx, cz) {
   let h = (worldSeed | 0) >>> 0;
@@ -109,9 +119,12 @@ export class World {
   }
 
   _buildLights() {
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    // Keep ambient low so the toon ramp on the directional sun can produce
+    // crisp 3-band cel-shading. AmbientLight bypasses gradientMap; high values
+    // wash out the bands.
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.18);
     this.scene.add(this.ambient);
-    this.sun = new THREE.DirectionalLight(0xfff4d8, 1.1);
+    this.sun = new THREE.DirectionalLight(0xfff4d8, 1.4);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -247,15 +260,11 @@ export class World {
         this._lastGroundCx = sx;
         this._lastGroundCz = sz;
       }
-      // Sun shadow camera follows the centroid so we always have crisp
-      // shadows around the action.
-      const sunDir = new THREE.Vector3(0.6, 1, 0.4).normalize();
+      // Cache centroid; the sun's actual position (which depends on the
+      // time-of-day arc) is set every frame in update().
+      this._sunCentroidX = cxAvg;
+      this._sunCentroidZ = czAvg;
       this.sun.target.position.set(cxAvg, 0, czAvg);
-      this.sun.position.set(
-        cxAvg + sunDir.x * 80,
-        sunDir.y * 80,
-        czAvg + sunDir.z * 80
-      );
       this.sun.target.updateMatrixWorld();
     }
   }
@@ -281,38 +290,50 @@ export class World {
 
     const sampleN = (x, z) => this.noise(x, z);
 
-    // 2. Water — ~25% of non-origin chunks, placed in the noise-low spot.
-    if (!isOrigin && r.chance(0.25)) {
-      let bestX = 0, bestZ = 0, bestN = 1;
-      for (let i = 0; i < 16; i++) {
-        const px = minX + r.range(4, CHUNK_SIZE - 4);
-        const pz = minZ + r.range(4, CHUNK_SIZE - 4);
-        const n = sampleN(px, pz);
-        if (n < bestN) { bestN = n; bestX = px; bestZ = pz; }
+    // 2. Water — cell-based lake system. Sample WATER_GRID×WATER_GRID cells
+    // across the chunk; cells whose noise dips below WATER_THRESHOLD become
+    // water. Adjacent water cells naturally tile into a single visual lake
+    // (cells along chunk borders connect because the noise is continuous
+    // across chunks). The origin chunk is kept water-free so the campfire
+    // / starting area stays usable.
+    const waterMask = new Uint8Array(WATER_GRID * WATER_GRID);
+    if (!isOrigin) {
+      for (let cz2 = 0; cz2 < WATER_GRID; cz2++) {
+        for (let cx2 = 0; cx2 < WATER_GRID; cx2++) {
+          const wx = minX + (cx2 + 0.5) * WATER_CELL;
+          const wz = minZ + (cz2 + 0.5) * WATER_CELL;
+          // Use a low-frequency sample so lakes form smooth connected
+          // basins, not isolated 4m specks.
+          const n = sampleN(wx * 0.45, wz * 0.45);
+          if (n < WATER_THRESHOLD) waterMask[cz2 * WATER_GRID + cx2] = 1;
+        }
       }
-      const rad = r.range(3, 6);
-      const pondGeo = new THREE.CircleGeometry(rad, 24);
-      pondGeo.rotateX(-Math.PI / 2);
-      const pondMat = new THREE.MeshToonMaterial({
-        color: 0x3a86ff,
-        gradientMap: TOON_GRADIENT,
-        transparent: true,
-        opacity: 0.92,
-      });
-      const pond = new THREE.Mesh(pondGeo, pondMat);
-      // Sit slightly above ground so the water plane never z-fights with the
-      // ground when both are flat at y=0.
-      pond.position.set(bestX, 0.04, bestZ);
-      group.add(pond);
-      colliders.push({ x: bestX, z: bestZ, r: rad * 0.85 });
     }
+    const waterCells = [];
+    for (let cz2 = 0; cz2 < WATER_GRID; cz2++) {
+      for (let cx2 = 0; cx2 < WATER_GRID; cx2++) {
+        if (!waterMask[cz2 * WATER_GRID + cx2]) continue;
+        const wx = minX + (cx2 + 0.5) * WATER_CELL;
+        const wz = minZ + (cz2 + 0.5) * WATER_CELL;
+        waterCells.push({ x: wx, z: wz });
+      }
+    }
+    const waterMesh = this._buildWaterMesh(waterCells);
+    if (waterMesh) group.add(waterMesh);
+    const isOnWater = (x, z) => {
+      const cx2 = Math.floor((x - minX) / WATER_CELL);
+      const cz2 = Math.floor((z - minZ) / WATER_CELL);
+      if (cx2 < 0 || cx2 >= WATER_GRID || cz2 < 0 || cz2 >= WATER_GRID) return false;
+      return waterMask[cz2 * WATER_GRID + cx2] === 1;
+    };
 
-    // 3. Trees — density modulated by noise.
+    // 3. Trees — density modulated by noise; never on water cells.
     const treeAttempts = 14;
     for (let i = 0; i < treeAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
       const z = minZ + r.range(2, CHUNK_SIZE - 2);
       if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+      if (isOnWater(x, z)) continue;
       const n = sampleN(x, z);
       if (r.next() > n * 1.1) continue;
       if (!this._spotClear(x, z, 1.4, colliders)) continue;
@@ -325,12 +346,30 @@ export class World {
       colliders.push({ x, z, r: 1.0 });
     }
 
-    // 4. Rocks — rocky cells (high noise) get more large/medium gray rocks.
-    const rockAttempts = 8;
+    // 4a. Cliff clusters — on rocky outcrops (high noise), drop a tight
+    // group of oversized gray rocks that read as a cliff/boulder pile.
+    if (!isOrigin) {
+      const cliffAttempts = 3;
+      for (let i = 0; i < cliffAttempts; i++) {
+        const x = minX + r.range(4, CHUNK_SIZE - 4);
+        const z = minZ + r.range(4, CHUNK_SIZE - 4);
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+        if (isOnWater(x, z)) continue;
+        const n = sampleN(x, z);
+        if (n < 0.62) continue; // only on rocky terrain
+        if (!this._spotClear(x, z, 3.0, colliders)) continue;
+        this._placeCliffCluster(group, colliders, r, x, z, isOnWater);
+      }
+    }
+
+    // 4b. Scattered rocks — large/medium gray rocks on rocky cells, small
+    // rocks elsewhere as ground clutter.
+    const rockAttempts = 10;
     for (let i = 0; i < rockAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
       const z = minZ + r.range(2, CHUNK_SIZE - 2);
       if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+      if (isOnWater(x, z)) continue;
       const n = sampleN(x, z);
       const isRocky = n > 0.55;
       if (!isRocky && !r.chance(0.35)) continue;
@@ -345,12 +384,13 @@ export class World {
       if (big) colliders.push({ x, z, r: 0.9 });
     }
 
-    // 5. Bushes / clutter
+    // 5. Bushes / clutter (skip water).
     const bushAttempts = 6;
     for (let i = 0; i < bushAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
       const z = minZ + r.range(2, CHUNK_SIZE - 2);
       if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+      if (isOnWater(x, z)) continue;
       if (!r.chance(0.5)) continue;
       if (!this._spotClear(x, z, 0.8, colliders)) continue;
       const id = BUSH_KINDS[r.int(0, BUSH_KINDS.length - 1)];
@@ -371,6 +411,7 @@ export class World {
         for (let i = 0; i < 12; i++) {
           const x = minX + r.range(4, CHUNK_SIZE - 4);
           const z = minZ + r.range(4, CHUNK_SIZE - 4);
+          if (isOnWater(x, z)) continue;
           if (this._spotClear(x, z, 2.2, colliders)) { cxw = x; czw = z; ok = true; break; }
         }
         if (ok) {
@@ -380,6 +421,7 @@ export class World {
             const ox = r.range(-2.5, 2.5);
             const oz = r.range(-2.5, 2.5);
             const ex = cxw + ox, ez = czw + oz;
+            if (isOnWater(ex, ez)) continue;
             if (!this._spotClear(ex, ez, 0.8, colliders)) continue;
             enemySpawns.push({
               kind: k,
@@ -394,6 +436,79 @@ export class World {
     }
 
     return { group, colliders, enemySpawns, cx, cz };
+  }
+
+  // Build a single BufferGeometry mesh for all water cells in a chunk.
+  // Each cell is a 4×4m flat quad sitting just above ground level. Adjacent
+  // cells share their edges in space (verts are duplicated but coincide
+  // exactly), so the lake reads as one continuous body of water.
+  _buildWaterMesh(cells) {
+    if (cells.length === 0) return null;
+    const N = cells.length;
+    const positions = new Float32Array(N * 4 * 3);
+    const indices = new Uint32Array(N * 6);
+    const half = WATER_CELL / 2;
+    for (let i = 0; i < N; i++) {
+      const c = cells[i];
+      const x0 = c.x - half, z0 = c.z - half;
+      const x1 = c.x + half, z1 = c.z + half;
+      const v = i * 4;
+      const p = v * 3;
+      positions[p+0]=x0; positions[p+1]=0.04; positions[p+2]=z0;
+      positions[p+3]=x1; positions[p+4]=0.04; positions[p+5]=z0;
+      positions[p+6]=x1; positions[p+7]=0.04; positions[p+8]=z1;
+      positions[p+9]=x0; positions[p+10]=0.04; positions[p+11]=z1;
+      const idx = i * 6;
+      indices[idx+0]=v; indices[idx+1]=v+2; indices[idx+2]=v+1;
+      indices[idx+3]=v; indices[idx+4]=v+3; indices[idx+5]=v+2;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.computeVertexNormals();
+    if (!this._waterMaterial) {
+      this._waterMaterial = new THREE.MeshToonMaterial({
+        color: 0x3a86ff,
+        gradientMap: TOON_GRADIENT,
+        transparent: true,
+        opacity: 0.88,
+      });
+    }
+    const mesh = new THREE.Mesh(geo, this._waterMaterial);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  // Drop a tight cluster of oversized gray rocks at (x, z), reading as a
+  // cliff outcrop / boulder pile. 4-6 rocks in a small radius, sized 2.6-4×
+  // larger than the regular scattered rocks.
+  _placeCliffCluster(group, colliders, r, x, z, isOnWater) {
+    const count = r.int(4, 6);
+    const placed = [];
+    for (let i = 0; i < count; i++) {
+      const ang = r.range(0, Math.PI * 2);
+      const rad = r.range(0, 1.6);
+      const px = x + Math.cos(ang) * rad;
+      const pz = z + Math.sin(ang) * rad;
+      if (isOnWater && isOnWater(px, pz)) continue;
+      const tooClose = placed.some(p => (p.x - px) ** 2 + (p.z - pz) ** 2 < 0.7 * 0.7);
+      if (tooClose) continue;
+      const id = ROCK_LARGE_KINDS[r.int(0, ROCK_LARGE_KINDS.length - 1)];
+      const scale = r.range(2.6, 4.0);
+      const yaw = r.range(0, Math.PI * 2);
+      const mesh = spawnProp(id, { scale, rotationY: yaw });
+      // Slight Y variance so rocks don't all sit flush on the same plane.
+      mesh.position.set(px, r.range(-0.1, 0.4), pz);
+      // Random tilt for a more natural pile look.
+      mesh.rotation.z = r.range(-0.15, 0.15);
+      mesh.rotation.x = r.range(-0.1, 0.1);
+      group.add(mesh);
+      placed.push({ x: px, z: pz });
+    }
+    if (placed.length > 0) {
+      // One big collider for the whole cluster — cheaper than per-rock.
+      colliders.push({ x, z, r: 2.4 });
+    }
   }
 
   _spotClear(x, z, radius, localColliders) {
@@ -414,21 +529,38 @@ export class World {
 
   update(dt) {
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
+    // Map dayTime ∈ [0,1] (clock = dayTime*24) to sun elevation:
+    //   0.00 midnight → sunY = -1 (below horizon)
+    //   0.25 dawn 6h  → sunY =  0 (just rising)
+    //   0.50 noon 12h → sunY = +1 (peak)
+    //   0.75 dusk 18h → sunY =  0 (setting)
     const a = (this.dayTime - 0.25) * Math.PI * 2;
-    const sunY = Math.cos(a);
-    this.sun.intensity = Math.max(0, sunY) * 1.15;
+    const sunY = Math.sin(a);
+    const sunX = Math.cos(a);
+    // Stay bright through most of the day, fade only around dusk/dawn.
+    const dayBoost = Math.max(0, sunY);
+    this.sun.intensity = (0.35 + dayBoost * 1.25);
+    if (sunY <= 0) this.sun.intensity = Math.max(0, sunY + 1) * 0.05;
+    // Animate sun position along its east→up→west arc, anchored to the
+    // player centroid. Height is clamped so the shadow camera's near/far
+    // planes still cover the active chunks even when the sun is low.
+    const cx = this._sunCentroidX || 0;
+    const cz = this._sunCentroidZ || 0;
+    const sunHeight = Math.max(15, Math.abs(sunY) * 70 + 20);
+    this.sun.position.set(cx + sunX * 60, sunHeight, cz + 25);
 
-    const t = (Math.sin(this.dayTime * Math.PI * 2 - Math.PI / 2) + 1) / 2;
+    const t = dayBoost; // 0 at sunset/sunrise, 1 at noon
     const dayCol = new THREE.Color(0x6cb6ff);
     const nightCol = new THREE.Color(0x0a1126);
     const sunset = new THREE.Color(0xff9a55);
-    const tt = Math.max(0, Math.min(1, t));
+    const tt = t;
     const sunsetMix = Math.max(0, 1 - Math.abs((this.dayTime - 0.78) * 6)) + Math.max(0, 1 - Math.abs((this.dayTime - 0.22) * 6));
     const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, tt).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
     this.scene.fog.color.copy(skyCol);
-    this.ambient.intensity = 0.25 + tt * 0.4;
-    this.moonHelper.intensity = (1 - tt) * 0.45;
+    // Ambient stays low at all times so toon shading reads. Slight day/night dip.
+    this.ambient.intensity = 0.10 + tt * 0.12;
+    this.moonHelper.intensity = (1 - tt) * 0.25;
 
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);

@@ -87,6 +87,7 @@ export class Input {
       attack: attackPressed || remoteAttackEdge,
       attackHeld: this.anyDown(map.attack) || r.attackHeld,
       dash: dashPressed || remoteDashEdge,
+      dashHeld: this.anyDown(map.dash) || r.dashHeld,
       interact: this.consumePressed(map.interact),
     };
   }

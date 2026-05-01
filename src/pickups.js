@@ -66,10 +66,13 @@ export class Pickup {
       }
       if (nd < near.radius + 0.4) {
         if (this.kind === 'gold') {
-          near.gold += this.value;
+          // Shared gold pool — both players gain regardless of who picked up.
+          for (const p of players) p.gold += this.value;
           sound.pickupGold();
           effects.damageNumber(this.mesh.position.clone(), this.value, '#ffd166');
         } else {
+          // Food heals only the picker; healing the partner from a distance
+          // would be unintuitive.
           near.heal(this.value);
           sound.pickupFood();
           effects.damageNumber(this.mesh.position.clone(), this.value, '#7aff8a');

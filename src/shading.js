@@ -17,11 +17,11 @@ import * as THREE from 'three';
 
 function buildToonGradient() {
   // 16 pixels: 2 shadow + 5 midtone + 9 light  ≈ 12% / 31% / 56% — close to
-  // the requested 10/30/60 split.
+  // the requested 10/30/60 split. Higher contrast between bands so the cel
+  // effect is clearly visible even with some ambient fill.
   const data = new Uint8Array(16);
-  // shadow ≈ 0.30 luminance, midtone ≈ 0.65, light ≈ 1.00
-  const SHADOW = Math.round(0.30 * 255);
-  const MID    = Math.round(0.65 * 255);
+  const SHADOW = Math.round(0.22 * 255);
+  const MID    = Math.round(0.58 * 255);
   const LIGHT  = 255;
   for (let i = 0; i < 16; i++) {
     if (i < 2) data[i] = SHADOW;
@@ -32,6 +32,7 @@ function buildToonGradient() {
   tex.minFilter = THREE.NearestFilter;
   tex.magFilter = THREE.NearestFilter;
   tex.generateMipmaps = false;
+  tex.colorSpace = THREE.NoColorSpace;
   tex.needsUpdate = true;
   return tex;
 }

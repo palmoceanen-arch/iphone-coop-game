@@ -53,6 +53,8 @@ export class Player {
     this.dashTimer = 0;
     this.dashCooldown = 0;
     this.knockback = { x: 0, z: 0 };
+    // Revive progress (filled by partner holding dash near a downed body).
+    this.reviveProgress = 0;
 
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
@@ -124,16 +126,18 @@ export class Player {
     if (death) { death.reset(); death.fadeIn(0.1).play(); }
   }
 
-  revive() {
+  revive(hpFraction = 1.0) {
     this.alive = true;
-    this.hp = this.maxHP;
-    this.invuln = 1.0;
+    this.hp = Math.max(1, Math.round(this.maxHP * hpFraction));
+    this.invuln = 1.5;
+    this.reviveProgress = 0;
     if (this._character?.actions) {
       // stop death pose, return to idle
       this._character.actions.death?.stop();
       crossFadeTo(this._character.actions, 'idle', 0.0);
       this._animState = 'idle';
     }
+    if (this._reviveBar) this._reviveBar.visible = false;
   }
 
   update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback) {
