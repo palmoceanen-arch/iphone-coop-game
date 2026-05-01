@@ -277,12 +277,9 @@ export class Enemy {
         move.x = 0; move.z = 0;
       }
       // Move in idle/return slowly
-      this.pos.x += move.x * idleSpeed * dt;
-      this.pos.z += move.z * idleSpeed * dt;
-
-      // knockback contribution
-      this.pos.x += this.knockback.x * dt;
-      this.pos.z += this.knockback.z * dt;
+      const oldX = this.pos.x, oldZ = this.pos.z;
+      this.pos.x += move.x * idleSpeed * dt + this.knockback.x * dt;
+      this.pos.z += move.z * idleSpeed * dt + this.knockback.z * dt;
       const kfac = Math.exp(-7 * dt);
       this.knockback.x *= kfac;
       this.knockback.z *= kfac;
@@ -292,7 +289,7 @@ export class Enemy {
         this.facing.x = move.x; this.facing.z = move.z;
       }
       this._isMoving = movingNow;
-      this.world.resolveCollisions(this.pos, this.radius);
+      this.world.moveAndCollide(this.pos, oldX, oldZ, this.radius);
       this.mesh.position.set(this.pos.x, 0, this.pos.z);
       const yawIdle = Math.atan2(this.facing.x, this.facing.z);
       this.mesh.rotation.y = yawIdle + MODEL_YAW_OFFSET;
@@ -384,9 +381,10 @@ export class Enemy {
               this.attackTimer = this.dashCooldown;
             }
             // override speed by direct position
+            const dashOldX = this.pos.x, dashOldZ = this.pos.z;
             this.pos.x += this._dashDir.x * sp * dt;
             this.pos.z += this._dashDir.z * sp * dt;
-            this.world.resolveCollisions(this.pos, this.radius);
+            this.world.moveAndCollide(this.pos, dashOldX, dashOldZ, this.radius);
             this.mesh.position.set(this.pos.x, 0, this.pos.z);
             this._updateVisualEffects(dt);
             return;
@@ -430,6 +428,7 @@ export class Enemy {
     }
 
     // Apply movement (skip wisp dash which already moved)
+    const chaseOldX = this.pos.x, chaseOldZ = this.pos.z;
     if (this.kind !== 'wisp' || (this.dashing <= 0 && this.windup <= 0)) {
       this.pos.x += move.x * this.speed * dt;
       this.pos.z += move.z * this.speed * dt;
@@ -447,7 +446,7 @@ export class Enemy {
     }
     this._isMoving = movingChase || (this.kind === 'wisp' && this.dashing > 0);
 
-    this.world.resolveCollisions(this.pos, this.radius);
+    this.world.moveAndCollide(this.pos, chaseOldX, chaseOldZ, this.radius);
     this.mesh.position.set(this.pos.x, 0, this.pos.z);
     const yaw = Math.atan2(this.facing.x, this.facing.z);
     this.mesh.rotation.y = yaw + MODEL_YAW_OFFSET;

@@ -195,19 +195,15 @@ export class Player {
       const fl = Math.hypot(this.facing.x, this.facing.z);
       this.facing.x /= fl; this.facing.z /= fl;
     }
-    this.pos.x += m.x * speed * dt;
-    this.pos.z += m.z * speed * dt;
-
-    // Knockback contribution
-    this.pos.x += this.knockback.x * dt;
-    this.pos.z += this.knockback.z * dt;
+    const oldX = this.pos.x, oldZ = this.pos.z;
+    this.pos.x += m.x * speed * dt + this.knockback.x * dt;
+    this.pos.z += m.z * speed * dt + this.knockback.z * dt;
     // damp knockback
     const kfac = Math.exp(-6 * dt);
     this.knockback.x *= kfac;
     this.knockback.z *= kfac;
 
-    // Resolve world collisions (walls/trees/rocks)
-    this.world.resolveCollisions(this.pos, this.radius);
+    this.world.moveAndCollide(this.pos, oldX, oldZ, this.radius);
 
     // Soft player-vs-player overlap resolution
     if (otherPlayer && otherPlayer.alive) {

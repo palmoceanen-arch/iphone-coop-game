@@ -21,15 +21,16 @@ export const CHUNK_SIZE = 32;
 export const ACTIVE_RADIUS = 3;     // chunks generated/visible around each player (7×7)
 export const SIM_RADIUS    = 2;     // chunks within which enemies actively simulate (5×5)
 
-// Lake cell grid. Per chunk we sample WATER_GRID×WATER_GRID cells, each
-// CHUNK_SIZE/WATER_GRID metres wide. Cells whose noise falls below the
-// threshold become water; adjacent water cells visually merge into lakes.
-// Threshold tuned so the average chunk has ~12-15% water coverage (well
-// under the 20% cap; bumpy fbm noise tends to clump water cells together
-// rather than scatter them, which keeps lake outlines connected).
-export const WATER_GRID = 8;
+// Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
+// (WATER_GRID+1) grid of corners, then build a marching-squares mesh:
+// where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
+// crossing point, giving smooth curved shorelines instead of axis-aligned
+// blocks. WATER_NOISE_FREQ scales the noise input so lakes form large
+// connected basins rather than tiny specks.
+export const WATER_GRID = 16;
 export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
 export const WATER_THRESHOLD = 0.30;
+export const WATER_NOISE_FREQ = 0.45;
 
 // 32-bit integer hash mixing world seed with (cx, cz).
 function chunkSeed(worldSeed, cx, cz) {
@@ -290,41 +291,16 @@ export class World {
 
     const sampleN = (x, z) => this.noise(x, z);
 
-    // 2. Water — cell-based lake system. Sample WATER_GRID×WATER_GRID cells
-    // across the chunk; cells whose noise dips below WATER_THRESHOLD become
-    // water. Adjacent water cells naturally tile into a single visual lake
-    // (cells along chunk borders connect because the noise is continuous
-    // across chunks). The origin chunk is kept water-free so the campfire
-    // / starting area stays usable.
-    const waterMask = new Uint8Array(WATER_GRID * WATER_GRID);
-    if (!isOrigin) {
-      for (let cz2 = 0; cz2 < WATER_GRID; cz2++) {
-        for (let cx2 = 0; cx2 < WATER_GRID; cx2++) {
-          const wx = minX + (cx2 + 0.5) * WATER_CELL;
-          const wz = minZ + (cz2 + 0.5) * WATER_CELL;
-          // Use a low-frequency sample so lakes form smooth connected
-          // basins, not isolated 4m specks.
-          const n = sampleN(wx * 0.45, wz * 0.45);
-          if (n < WATER_THRESHOLD) waterMask[cz2 * WATER_GRID + cx2] = 1;
-        }
-      }
-    }
-    const waterCells = [];
-    for (let cz2 = 0; cz2 < WATER_GRID; cz2++) {
-      for (let cx2 = 0; cx2 < WATER_GRID; cx2++) {
-        if (!waterMask[cz2 * WATER_GRID + cx2]) continue;
-        const wx = minX + (cx2 + 0.5) * WATER_CELL;
-        const wz = minZ + (cz2 + 0.5) * WATER_CELL;
-        waterCells.push({ x: wx, z: wz });
-      }
-    }
-    const waterMesh = this._buildWaterMesh(waterCells);
+    // 2. Water — marching-squares lake mesh. Sample noise at corners of a
+    // (WATER_GRID+1)² grid covering this chunk; build a smooth curved
+    // shoreline by interpolating where the noise crosses WATER_THRESHOLD on
+    // each cell edge. The origin chunk stays water-free so the campfire /
+    // starting area is always usable on land.
+    const waterMesh = isOrigin ? null : this._buildSmoothWaterMesh(minX, minZ);
     if (waterMesh) group.add(waterMesh);
     const isOnWater = (x, z) => {
-      const cx2 = Math.floor((x - minX) / WATER_CELL);
-      const cz2 = Math.floor((z - minZ) / WATER_CELL);
-      if (cx2 < 0 || cx2 >= WATER_GRID || cz2 < 0 || cz2 >= WATER_GRID) return false;
-      return waterMask[cz2 * WATER_GRID + cx2] === 1;
+      if (isOrigin && Math.hypot(x, z) < 12) return false; // protect spawn
+      return this.isWaterAt(x, z);
     };
 
     // 3. Trees — density modulated by noise; never on water cells.
@@ -438,33 +414,127 @@ export class World {
     return { group, colliders, enemySpawns, cx, cz };
   }
 
-  // Build a single BufferGeometry mesh for all water cells in a chunk.
-  // Each cell is a 4×4m flat quad sitting just above ground level. Adjacent
-  // cells share their edges in space (verts are duplicated but coincide
-  // exactly), so the lake reads as one continuous body of water.
-  _buildWaterMesh(cells) {
-    if (cells.length === 0) return null;
-    const N = cells.length;
-    const positions = new Float32Array(N * 4 * 3);
-    const indices = new Uint32Array(N * 6);
-    const half = WATER_CELL / 2;
-    for (let i = 0; i < N; i++) {
-      const c = cells[i];
-      const x0 = c.x - half, z0 = c.z - half;
-      const x1 = c.x + half, z1 = c.z + half;
-      const v = i * 4;
-      const p = v * 3;
-      positions[p+0]=x0; positions[p+1]=0.04; positions[p+2]=z0;
-      positions[p+3]=x1; positions[p+4]=0.04; positions[p+5]=z0;
-      positions[p+6]=x1; positions[p+7]=0.04; positions[p+8]=z1;
-      positions[p+9]=x0; positions[p+10]=0.04; positions[p+11]=z1;
-      const idx = i * 6;
-      indices[idx+0]=v; indices[idx+1]=v+2; indices[idx+2]=v+1;
-      indices[idx+3]=v; indices[idx+4]=v+3; indices[idx+5]=v+2;
+  // True if the world position (x, z) is currently under water. Sampled
+  // directly from the same low-frequency noise used to build lake meshes,
+  // so the lookup is exact (no per-chunk cache needed) and continuous —
+  // fine for sliding the player along curved shores.
+  isWaterAt(x, z) {
+    return this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ) < WATER_THRESHOLD;
+  }
+
+  // Build a smooth-shoreline lake mesh for a single chunk via marching
+  // squares. For each cell of the WATER_GRID×WATER_GRID grid, classify the
+  // four corners (water / land), then emit triangles for the water portion
+  // of the cell — using linearly-interpolated edge crossings so curved
+  // boundaries follow the noise contour instead of snapping to cell edges.
+  _buildSmoothWaterMesh(minX, minZ) {
+    const G = WATER_GRID;
+    const STEP = WATER_CELL;
+    // Sample noise at every corner once.
+    const N = new Float32Array((G + 1) * (G + 1));
+    for (let j = 0; j <= G; j++) {
+      for (let i = 0; i <= G; i++) {
+        const wx = minX + i * STEP;
+        const wz = minZ + j * STEP;
+        N[j * (G + 1) + i] = this.noise(wx * WATER_NOISE_FREQ, wz * WATER_NOISE_FREQ);
+      }
     }
+
+    const positions = [];
+    const indices = [];
+    let nextIdx = 0;
+    const pushVert = (x, z) => {
+      positions.push(x, 0.04, z);
+      return nextIdx++;
+    };
+    const pushTri = (a, b, c) => {
+      // Wind CCW from above (+Y) so the water face renders front-up.
+      indices.push(a, b, c);
+    };
+
+    for (let j = 0; j < G; j++) {
+      for (let i = 0; i < G; i++) {
+        // Corner positions (CCW from above): BL, TL, TR, BR.
+        const x0 = minX + i * STEP, z0 = minZ + j * STEP;
+        const x1 = x0 + STEP,        z1 = z0 + STEP;
+        const nBL = N[j*(G+1) + i],         nTL = N[(j+1)*(G+1) + i];
+        const nTR = N[(j+1)*(G+1) + i + 1], nBR = N[j*(G+1) + i + 1];
+        const wBL = nBL < WATER_THRESHOLD ? 1 : 0;
+        const wTL = nTL < WATER_THRESHOLD ? 1 : 0;
+        const wTR = nTR < WATER_THRESHOLD ? 1 : 0;
+        const wBR = nBR < WATER_THRESHOLD ? 1 : 0;
+        const c = (wBL) | (wTL << 1) | (wTR << 2) | (wBR << 3);
+        if (c === 0) continue;          // entirely dry
+        if (c === 15) {                  // entirely under water — full quad
+          const a = pushVert(x0, z0);
+          const b = pushVert(x0, z1);
+          const cc = pushVert(x1, z1);
+          const d = pushVert(x1, z0);
+          pushTri(a, b, cc);
+          pushTri(a, cc, d);
+          continue;
+        }
+
+        // Walk the cell perimeter in CCW order (BL → TL → TR → BR → BL).
+        // Push wet corners and edge-crossing points as we go; the result
+        // is a convex polygon (3-5 verts) that we fan-triangulate.
+        const corners = [
+          { wet: wBL, x: x0, z: z0, n: nBL },
+          { wet: wTL, x: x0, z: z1, n: nTL },
+          { wet: wTR, x: x1, z: z1, n: nTR },
+          { wet: wBR, x: x1, z: z0, n: nBR },
+        ];
+        const poly = [];
+        for (let k = 0; k < 4; k++) {
+          const a = corners[k];
+          const b = corners[(k + 1) % 4];
+          if (a.wet) poly.push([a.x, a.z]);
+          if (a.wet !== b.wet) {
+            const t = (WATER_THRESHOLD - a.n) / (b.n - a.n);
+            const px = a.x + (b.x - a.x) * t;
+            const pz = a.z + (b.z - a.z) * t;
+            poly.push([px, pz]);
+          }
+        }
+        // Saddle cases (5, 10): two opposite corners are wet, two dry.
+        // The cell centre disambiguates whether water connects diagonally
+        // across the cell (single hexagonal patch — fan-triangulate fine)
+        // or splits into two disjoint corner-triangles (must emit
+        // separately to avoid bridging across the dry middle).
+        if ((c === 5 || c === 10) && poly.length === 6) {
+          const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
+          const nC = this.noise(cxw * WATER_NOISE_FREQ, czw * WATER_NOISE_FREQ);
+          const centerWet = nC < WATER_THRESHOLD;
+          if (!centerWet) {
+            const baseIdx = nextIdx;
+            for (const p of poly) pushVert(p[0], p[1]);
+            if (c === 5) {
+              // poly = [BL, leftCross, topCross, TR, rightCross, bottomCross]
+              pushTri(baseIdx + 0, baseIdx + 1, baseIdx + 5);
+              pushTri(baseIdx + 3, baseIdx + 4, baseIdx + 2);
+            } else {
+              // poly = [leftCross, TL, topCross, rightCross, BR, bottomCross]
+              pushTri(baseIdx + 1, baseIdx + 2, baseIdx + 0);
+              pushTri(baseIdx + 4, baseIdx + 5, baseIdx + 3);
+            }
+            continue;
+          }
+        }
+
+        if (poly.length < 3) continue;
+        const baseIdx = nextIdx;
+        for (const p of poly) pushVert(p[0], p[1]);
+        for (let k = 1; k < poly.length - 1; k++) {
+          pushTri(baseIdx, baseIdx + k, baseIdx + k + 1);
+        }
+      }
+    }
+
+    if (indices.length === 0) return null;
+
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
     if (!this._waterMaterial) {
       this._waterMaterial = new THREE.MeshToonMaterial({
@@ -566,6 +636,23 @@ export class World {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
       this.fireLight.intensity = 1.4 + Math.random() * 0.3;
     }
+  }
+
+  // Apply a movement step from (oldX, oldZ) to the current `pos`, resolve
+  // prop collisions, and slide along water shores axis-by-axis (so a
+  // diagonal move into a curved bay still lets the entity skim along the
+  // bank instead of stopping cold). Mutates `pos`.
+  moveAndCollide(pos, oldX, oldZ, radius) {
+    const targetX = pos.x, targetZ = pos.z;
+    this.resolveCollisions(pos, radius);
+    if (!this.isWaterAt(pos.x, pos.z)) return;
+    pos.x = targetX; pos.z = oldZ;
+    this.resolveCollisions(pos, radius);
+    if (!this.isWaterAt(pos.x, pos.z)) return;
+    pos.x = oldX; pos.z = targetZ;
+    this.resolveCollisions(pos, radius);
+    if (!this.isWaterAt(pos.x, pos.z)) return;
+    pos.x = oldX; pos.z = oldZ;
   }
 
   // No map-edge wall — only resolve overlap with active-chunk prop colliders.
