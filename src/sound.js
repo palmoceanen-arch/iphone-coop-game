@@ -1,9 +1,18 @@
 // Procedurally synthesized sound via WebAudio. Free, zero-asset, but punchy.
+//
+// Volume routing:
+//   oscillators / noise → sfx gain → master gain → ctx.destination
+// `setMasterVolume` / `setSfxVolume` / `setMuted` are wired up by the
+// Settings module in src/settings.js so the pause-menu sliders feed live
+// volumes into the WebAudio graph without rebuilding it.
 export class Sound {
   constructor() {
     this.ctx = null;
     this.master = null;
+    this.sfx = null;
     this.muted = false;
+    this.masterVolume = 0.5;
+    this.sfxVolume = 1.0;
   }
 
   ensure() {
@@ -11,13 +20,29 @@ export class Sound {
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
     this.master = this.ctx.createGain();
-    this.master.gain.value = 0.5;
+    this.sfx = this.ctx.createGain();
+    this.sfx.connect(this.master);
     this.master.connect(this.ctx.destination);
+    this._applyGains();
   }
 
   resume() { this.ensure(); if (this.ctx.state === 'suspended') this.ctx.resume(); }
 
-  setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0.0 : 0.5; }
+  _applyGains() {
+    if (!this.master || !this.sfx) return;
+    this.master.gain.value = this.muted ? 0.0 : this.masterVolume;
+    this.sfx.gain.value = this.sfxVolume;
+  }
+
+  setMuted(m) { this.muted = !!m; this._applyGains(); }
+  setMasterVolume(v) {
+    this.masterVolume = Math.max(0, Math.min(1, Number(v) || 0));
+    this._applyGains();
+  }
+  setSfxVolume(v) {
+    this.sfxVolume = Math.max(0, Math.min(1, Number(v) || 0));
+    this._applyGains();
+  }
 
   // Tone / blip
   tone({ freq = 440, type = 'sine', dur = 0.15, gain = 0.4, slide = 0, attack = 0.005, release = 0.08 }) {
@@ -31,7 +56,7 @@ export class Sound {
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(gain, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur + release);
-    o.connect(g).connect(this.master);
+    o.connect(g).connect(this.sfx);
     o.start(t);
     o.stop(t + dur + release + 0.02);
   }
@@ -52,7 +77,7 @@ export class Sound {
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(hpf).connect(lpf).connect(g).connect(this.master);
+    src.connect(hpf).connect(lpf).connect(g).connect(this.sfx);
     src.start(t);
     src.stop(t + dur + 0.02);
   }
