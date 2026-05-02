@@ -349,10 +349,10 @@ export class Game {
   update(dt, dt0) {
     // Always update FX timing using real dt0 (so shake decays even paused)
     this.effects.update(dt > 0 ? dt : dt0 * 0);
-    this.world.update(dt);
-    // Stream chunks around the players (lazy generation; cheap when nothing
-    // changed). Done every frame because crossing a chunk boundary is rare.
+    // Stream chunks around the players first so the world update reads a
+    // fresh centroid when it snaps the sun shadow camera to the texel grid.
     this._streamChunks();
+    this.world.update(dt);
     // Throttled state sync to phones (uses real dt0 so it works while paused)
     this._stateSyncT += dt0;
     if (this._stateSyncT > 0.25 && this.lobby) {
