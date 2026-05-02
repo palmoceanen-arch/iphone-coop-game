@@ -152,7 +152,10 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff4d8, 1.4);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    // 4096² over the ~224 m active area = ~0.055 m / texel. With the texel-snap
+    // logic below, this is the resolution where tree-shadow edges stop looking
+    // pixelated at typical camera distances.
+    this.sun.shadow.mapSize.set(4096, 4096);
     // Shadow camera covers the active 7×7 chunk area (~224m). The light + its
     // shadow camera follow the centroid of the players each frame so shadows
     // are always sharp around the action.
@@ -670,10 +673,10 @@ export class World {
     //      the offset's y-component, the per-frame drift of sunHeight
     //      (~0.024 m/frame) rotates the light view matrix sub-texel each
     //      frame and PCF samples crawl across shadow edges.
-    // PCFSoft shadows interpolate four nearest texels, so any sub-texel
-    // motion of the projection makes the soft edge slosh visibly; texel-
-    // aligning everything in world space replaces the slosh with discrete
-    // ~0.11 m jumps that read as stable.
+    // PCF shadows sample several texels, so any sub-texel motion of the
+    // projection makes edges slosh visibly; texel-aligning everything in
+    // world space replaces the slosh with discrete texel-sized jumps that
+    // read as stable.
     const sm = this.sun.shadow.mapSize.x;
     const halfSpan = this.sun.shadow.camera.right;
     const texelSize = (halfSpan * 2) / sm;
