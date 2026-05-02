@@ -654,11 +654,22 @@ export class World {
       const s = THREE.MathUtils.smoothstep(sunY, -0.5, 0);
       this.sun.intensity = THREE.MathUtils.lerp(SUN_FLOOR, SUN_HORIZON, s);
     }
-    // Snap shadow-camera anchors (target + light source) to shadow-texel
-    // boundaries in world space. With a 2048² shadow map covering ~224m,
-    // one texel is ~0.11m; without snapping, every frame's sub-texel drift
-    // (player walk + sun arc) makes shadow edges shimmer ("shadow swimming").
-    // Snapping makes them step in clean 1-texel jumps instead.
+    // Stabilise the sun's shadow-camera so shadow edges don't shimmer as
+    // players walk or as the sun arc advances. Two changes vs. a naïve
+    // setup are critical here:
+    //   1. Snap the centroid (target.x/z) to whole shadow-texel multiples
+    //      in world space.
+    //   2. Snap the sun's offset from the target (offset.x/y/z) to the same
+    //      texel grid. This keeps the light direction (= position − target)
+    //      pinned across many consecutive frames; only when the offset
+    //      crosses a texel boundary does direction step. Without snapping
+    //      the offset's y-component, the per-frame drift of sunHeight
+    //      (~0.024 m/frame) rotates the light view matrix sub-texel each
+    //      frame and PCF samples crawl across shadow edges.
+    // PCFSoft shadows interpolate four nearest texels, so any sub-texel
+    // motion of the projection makes the soft edge slosh visibly; texel-
+    // aligning everything in world space replaces the slosh with discrete
+    // ~0.11 m jumps that read as stable.
     const sm = this.sun.shadow.mapSize.x;
     const halfSpan = this.sun.shadow.camera.right;
     const texelSize = (halfSpan * 2) / sm;
@@ -668,7 +679,10 @@ export class World {
     this.sun.target.position.set(cx, 0, cz);
     this.sun.target.updateMatrixWorld();
     const sunHeight = Math.max(15, Math.abs(sunY) * 70 + 20);
-    this.sun.position.set(snap(cx + sunX * 60), sunHeight, snap(cz + 25));
+    const offsetX = snap(sunX * 60);
+    const offsetY = snap(sunHeight);
+    const offsetZ = snap(25);
+    this.sun.position.set(cx + offsetX, offsetY, cz + offsetZ);
 
     const dayCol = new THREE.Color(0x6cb6ff);
     const nightCol = new THREE.Color(0x070b15); // deeper navy for darker midnight
