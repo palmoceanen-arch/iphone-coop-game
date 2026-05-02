@@ -621,8 +621,17 @@ export class Game {
       },
     };
     for (const e of this.enemies) e.update(dt, this.players, ctx);
-    // Cleanup dead bombers etc that left scene
-    this.enemies = this.enemies.filter(e => e.alive || e.killedBy === 'self' ? e.alive : true).filter(e => e.alive);
+    // Credit kills from damage-over-time effects (poison) that happen inside
+    // enemy.update. The enemy sets _deathCredit to the source player before
+    // calling die().
+    for (const e of this.enemies) {
+      if (!e.alive && e._deathCredit) {
+        this._onEnemyDies(e._deathCredit, e);
+        e._deathCredit = null;
+      }
+    }
+    // Cleanup dead enemies
+    this.enemies = this.enemies.filter(e => e.alive);
 
     // Projectiles
     for (const pr of this.projectiles) pr.update(dt, this.players, this.world);

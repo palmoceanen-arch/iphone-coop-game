@@ -249,7 +249,8 @@ export class Enemy {
     }
     this.invuln = Math.max(0, this.invuln - dt);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
-    this.attackTimer = Math.max(0, this.attackTimer - dt);
+    const statusMult = this._slow > 0 ? 0.35 : 1;
+    this.attackTimer = Math.max(0, this.attackTimer - dt * statusMult);
     this.stateTimer += dt;
     this.wanderTimer = Math.max(0, this.wanderTimer - dt);
 
@@ -259,27 +260,24 @@ export class Enemy {
     if (this._poison && this._poison.dur > 0) {
       this._poison.dur -= dt;
       this.hp -= this._poison.dps * dt;
-      if (this.flashTimer <= 0) this.flashTimer = 0.06;
-      if (this.hp <= 0) { this.die(); return; }
+      if (this.hp <= 0) {
+        this._deathCredit = this._poison.src || null;
+        this.die();
+        return;
+      }
     } else if (this._poison) {
       this._poison = null;
     }
     if (this._frozen > 0) {
-      // Frozen: skip AI and movement entirely. Render a cyan tint.
-      for (const m of this._materials || []) {
-        if (m.emissive) {
-          m.emissive.setHex(0x9dfcff);
-          m.emissiveIntensity = 0.4;
-        }
-      }
       this._isMoving = false;
       this._updateVisualEffects(dt);
       return;
     }
     const speedMult = this._slow > 0 ? 0.35 : 1;
 
+    const slowDt = dt * speedMult;
     const prevWindup = this.windup;
-    if (this.windup > 0) this.windup = Math.max(0, this.windup - dt);
+    if (this.windup > 0) this.windup = Math.max(0, this.windup - slowDt);
     const windupFired = prevWindup > 0 && this.windup === 0;
 
     const { target, dist } = this._aimTarget(players);
@@ -412,7 +410,7 @@ export class Enemy {
             if (!this.fuseStarted) { this.fuseStarted = true; this.fuseTimer = this.fuse; this.sound.tone({ freq: 880, type: 'square', dur: 0.05, gain: 0.08 }); }
           }
           if (this.fuseStarted) {
-            this.fuseTimer -= dt;
+            this.fuseTimer -= slowDt;
             // pulse — scale character root and tint emissive to telegraph fuse.
             const root = this._character?.root;
             if (root) {
@@ -438,7 +436,7 @@ export class Enemy {
         case 'wisp': {
           if (this.dashing > 0) {
             this.dashing -= dt;
-            const sp = this.dashSpeed;
+            const sp = this.dashSpeed * speedMult;
             move.x = this._dashDir.x; move.z = this._dashDir.z;
             // Inflict damage on contact
             if (dist < this.radius + target.radius + 0.1) {
@@ -521,14 +519,25 @@ export class Enemy {
   }
 
   _updateVisualEffects(dt) {
-    // Hit flash via cached materials' emissive channel.
+    // Hit flash + status effect visuals via cached materials' emissive channel.
+    const isFrozen = this._frozen > 0;
+    const isSlowed = this._slow > 0;
+    const isPoisoned = this._poison && this._poison.dur > 0;
     for (const m of this._materials || []) {
       if (this.flashTimer > 0) {
         if (!m.emissive) m.emissive = new THREE.Color(0xffffff);
         m.emissive.setHex(0xffffff);
         m.emissiveIntensity = this.flashTimer / 0.12;
+      } else if (isFrozen && m.emissive) {
+        m.emissive.setHex(0x9dfcff);
+        m.emissiveIntensity = 0.4;
+      } else if (isPoisoned && m.emissive) {
+        m.emissive.setHex(0x6cd25b);
+        m.emissiveIntensity = 0.25 + Math.sin(performance.now() * 0.01) * 0.1;
+      } else if (isSlowed && m.emissive) {
+        m.emissive.setHex(0xc9a3ff);
+        m.emissiveIntensity = 0.3;
       } else if (m.emissive) {
-        // Preserve elite golden tint when not flashing.
         if (this.elite) {
           m.emissive.setHex(0xffaa30);
           m.emissiveIntensity = 0.3;

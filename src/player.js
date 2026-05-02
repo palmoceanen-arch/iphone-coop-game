@@ -185,19 +185,29 @@ export class Player {
     // Per-frame item hooks (regen, speed multiplier setup, etc).
     runItemHook(this, 'onTick', { dt, partner: otherPlayer });
 
-    // Buff timers ----------------------------------------------------
+    // Buff timers + visuals -------------------------------------------
+    this._buffVfxT = (this._buffVfxT || 0) + dt;
     if (this._shield) {
       this._shield.ttl -= dt;
       if (this._shield.ttl <= 0 || this._shield.hp <= 0) this._shield = null;
+      else if (this._buffVfxT % 0.8 < dt) {
+        this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x6aa6ff, 1.2 + Math.sin(this._buffVfxT * 3) * 0.2, 0.25);
+      }
     }
     if (this._berserk) {
       this._berserk.ttl -= dt;
       if (this._berserk.ttl <= 0) this._berserk = null;
+      else if (this._buffVfxT % 0.6 < dt) {
+        this.effects.burst(this.pos.x, 0.5, this.pos.z, 0xff5050, 2, 3, 0.18);
+      }
     }
     if (this._healAura) {
       this._healAura.ttl -= dt;
       this.heal(this._healAura.rate * dt);
       if (this._healAura.ttl <= 0) this._healAura = null;
+      else if (this._buffVfxT % 0.7 < dt) {
+        this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x7aff8a, 1.0, 0.2);
+      }
     }
 
     // Movement
