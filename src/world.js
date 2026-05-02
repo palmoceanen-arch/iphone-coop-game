@@ -3,6 +3,18 @@ import { makeRng } from './utils.js';
 import { spawnProp } from './models.js';
 import { TOON_GRADIENT } from './shading.js';
 
+// Smooth bell centred on `centre` (in dayTime units), 1 at the peak and 0
+// outside ±halfWidth, with a cosine taper. dayTime wraps mod 1 so the bell
+// works near the 0/1 boundary too. Used to drive the sunset/sunrise tint
+// without the kink the previous triangular max(0, 1 - |...|) had at its apex.
+function sunsetBell(dayTime, centre, halfWidth = 1 / 6) {
+  let d = dayTime - centre;
+  d -= Math.round(d);
+  if (Math.abs(d) >= halfWidth) return 0;
+  const c = Math.cos((d / halfWidth) * Math.PI * 0.5);
+  return c * c;
+}
+
 // Chunk-based deterministic world.
 //
 // Generation pipeline (per chunk, fully seeded):
@@ -607,15 +619,23 @@ export class World {
     const a = (this.dayTime - 0.25) * Math.PI * 2;
     const sunY = Math.sin(a);
     const sunX = Math.cos(a);
-    // All time-of-day lighting is driven by smooth lerps across the horizon
-    // so 06:00 sunrise and 18:00 sunset transition continuously instead of
-    // stepping in a single tick. Day curve goes 0.35..1.6 above the horizon;
-    // night curve goes 0..0.05 below; the smoothstep blends them through a
-    // narrow twilight band centered at sunY = 0.
-    const sunDayInt = 0.35 + Math.max(0, sunY) * 1.25;
-    const sunNightInt = Math.max(0, sunY + 1) * 0.05;
-    const sunHorizonMix = THREE.MathUtils.smoothstep(sunY, -0.18, 0.18);
-    this.sun.intensity = THREE.MathUtils.lerp(sunNightInt, sunDayInt, sunHorizonMix);
+    // All time-of-day lighting is driven by smooth lerps spread across most
+    // of the day cycle so transitions are gradual end-to-end (no abrupt step
+    // at 06:00 / 18:00). The sun intensity uses two smoothstep ramps that
+    // meet at the horizon (sunY = 0, intensity = 0.18, "golden hour"):
+    //   • sunY in [0, 0.5]   → fade from 0.18 to 1.6 (peak day)
+    //   • sunY in [-0.5, 0]  → fade from 0.02 (moonlight floor) to 0.18
+    // Both ramps have zero slope at the join, so the transition is C¹ smooth.
+    const SUN_PEAK = 1.6;
+    const SUN_HORIZON = 0.18;
+    const SUN_FLOOR = 0.02;
+    if (sunY >= 0) {
+      const t = THREE.MathUtils.smoothstep(sunY, 0, 0.5);
+      this.sun.intensity = THREE.MathUtils.lerp(SUN_HORIZON, SUN_PEAK, t);
+    } else {
+      const t = THREE.MathUtils.smoothstep(sunY, -0.5, 0);
+      this.sun.intensity = THREE.MathUtils.lerp(SUN_FLOOR, SUN_HORIZON, t);
+    }
     // Animate sun position along its east→up→west arc, anchored to the
     // player centroid. Height is clamped so the shadow camera's near/far
     // planes still cover the active chunks even when the sun is low.
@@ -627,11 +647,15 @@ export class World {
     const dayCol = new THREE.Color(0x6cb6ff);
     const nightCol = new THREE.Color(0x0a1126);
     const sunset = new THREE.Color(0xff9a55);
-    const sunsetMix = Math.max(0, 1 - Math.abs((this.dayTime - 0.78) * 6)) + Math.max(0, 1 - Math.abs((this.dayTime - 0.22) * 6));
-    // Smooth day weight derived from sun elevation: 0 deep night, 1 full day,
-    // gradually crossing through twilight. Used to lerp sky/ambient/moon so
-    // they fade gracefully around dawn and dusk.
-    const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.18, 0.45);
+    // Smooth (cosine-bell) sunset/sunrise tint window centred on dayTime
+    // 0.22 (≈05:17) and 0.78 (≈18:43). Using cos² instead of the previous
+    // triangular falloff also smooths the apex, so the orange glow swells
+    // and fades without a kink at peak.
+    const sunsetMix = sunsetBell(this.dayTime, 0.22) + sunsetBell(this.dayTime, 0.78);
+    // Day weight: 0 deep night, 1 full day, lerped across a wide twilight
+    // band so the sky / ambient / moon shift gradually across roughly the
+    // last 90 in-game minutes of daylight on either side of the horizon.
+    const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
     const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, dayWeight).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
     this.scene.fog.color.copy(skyCol);
