@@ -56,6 +56,7 @@ export class AbilityProjectile {
     this.onHitEnemy = opts.onHitEnemy || null;
     this._customAoe = opts._customAoe || null;
     this.piercing = opts.piercing || false;
+    this.source = opts.source || null;
     this._trailT = 0;
     this._trailColor = opts.trailColor || this.color;
 
@@ -106,6 +107,7 @@ export class AbilityProjectile {
       if (d < this.radius + e.radius + 0.2) {
         if (this.damage > 0) {
           e.takeDamage(this.damage, this.pos.x, this.pos.z, this.knockback);
+          if (!e.alive && this.source) e._deathCredit = this.source;
         }
         if (this.onHitEnemy) this.onHitEnemy(e);
         if (!this.piercing) {
@@ -133,6 +135,7 @@ export class AbilityProjectile {
         const d = Math.hypot(dx, dz);
         if (d <= this.aoeRadius + e.radius) {
           e.takeDamage(this.aoeDamage, this.pos.x, this.pos.z, this.aoeKnockback);
+          if (!e.alive && this.source) e._deathCredit = this.source;
           if (this.onHitEnemy) this.onHitEnemy(e);
         }
       }
@@ -140,9 +143,10 @@ export class AbilityProjectile {
 
     if (this._customAoe) this._customAoe(this.pos);
 
-    effects.flashSphere(this.pos.x, 1.0, this.pos.z, this.color, this.aoeRadius || 1.5, 0.3);
-    effects.ring(this.pos.x, 0.05, this.pos.z, this.color, this.aoeRadius || 1.5, 0.4);
-    effects.burst(this.pos.x, 1.0, this.pos.z, this.color, 10, 5, 0.35);
+    const vfxR = Math.min(this.aoeRadius || 1.5, 2.5);
+    effects.flashSphere(this.pos.x, 1.0, this.pos.z, this.color, vfxR * 0.6, 0.25);
+    effects.ring(this.pos.x, 0.05, this.pos.z, this.color, vfxR, 0.35);
+    effects.burst(this.pos.x, 1.0, this.pos.z, this.color, 8, 4, 0.3);
     effects.shakeCamera(0.2);
     sound.bomb?.();
 
@@ -164,21 +168,22 @@ export class AbilityProjectile {
 export const ABILITIES = [
   {
     id: 'fireball', name: 'Фаербол', icon: '🔥', color: 0xff8a30, cd: 6,
-    desc: 'Огненный снаряд, летящий вперёд. Взрывается при попадании, 90 AoE-урона в 4м.',
+    desc: 'Огненный снаряд, летящий вперёд. Взрывается при попадании, 45 AoE-урона в 2.5м.',
     cast(player, ctx) {
       ctx.spawnAbilityProjectile({
         x: player.pos.x + player.facing.x * 0.8,
         z: player.pos.z + player.facing.z * 0.8,
         dirX: player.facing.x, dirZ: player.facing.z,
-        speed: 18, life: 0.6, radius: 0.4,
+        speed: 16, life: 0.65, radius: 0.35,
         color: 0xff8a30, trailColor: 0xff5500,
-        damage: 0, aoeRadius: 4, aoeDamage: 90, aoeKnockback: 8,
+        damage: 0, aoeRadius: 2.5, aoeDamage: 45, aoeKnockback: 6,
+        source: player,
       });
     },
   },
   {
     id: 'icebolt', name: 'Ледяная стрела', icon: '❄', color: 0x9dfcff, cd: 5,
-    desc: 'Ледяной снаряд в ближайшего врага. 60 урона и заморозка на 2.5с в радиусе 3м.',
+    desc: 'Ледяной снаряд в ближайшего врага. 30 урона и заморозка на 2с в радиусе 2.5м.',
     cast(player, ctx) {
       let dx = player.facing.x, dz = player.facing.z;
       const list = ctx.enemyList.filter(e => e.alive && vdist2(player, e) < 144);
@@ -194,18 +199,18 @@ export const ABILITIES = [
         x: player.pos.x + dx * 0.6,
         z: player.pos.z + dz * 0.6,
         dirX: dx, dirZ: dz,
-        speed: 22, life: 0.55, radius: 0.28,
+        speed: 20, life: 0.55, radius: 0.25,
         color: 0x9dfcff, trailColor: 0x60d0ff,
-        damage: 60, knockback: 5,
-        aoeRadius: 3, aoeDamage: 0, aoeKnockback: 0,
-        onHitEnemy(e) { e._frozen = Math.max(e._frozen || 0, 2.5); },
-        // Override _explode to freeze AoE enemies even with 0 damage
+        damage: 30, knockback: 4,
+        aoeRadius: 2.5, aoeDamage: 0, aoeKnockback: 0,
+        source: player,
+        onHitEnemy(e) { e._frozen = Math.max(e._frozen || 0, 2.0); },
         _customAoe(pos) {
           for (const e of enemies) {
             if (!e.alive) continue;
             const ex = e.pos.x - pos.x, ez = e.pos.z - pos.z;
-            if (Math.hypot(ex, ez) <= 3 + e.radius) {
-              e._frozen = Math.max(e._frozen || 0, 2.5);
+            if (Math.hypot(ex, ez) <= 2.5 + e.radius) {
+              e._frozen = Math.max(e._frozen || 0, 2.0);
             }
           }
         },
@@ -215,13 +220,13 @@ export const ABILITIES = [
   },
   {
     id: 'chainLightning', name: 'Цепная молния', icon: '⚡', color: 0xfff7a0, cd: 7,
-    desc: 'Прыгает по 4 целям, 50 урона за прыжок (-15% за каждый).',
+    desc: 'Прыгает по 4 целям, 30 урона за прыжок (-15% за каждый).',
     cast(player, ctx) {
       let from = { x: player.pos.x, z: player.pos.z };
-      let dmg = 50;
+      let dmg = 30;
       const used = new Set();
       for (let i = 0; i < 4; i++) {
-        let best = null, bestD = 8;
+        let best = null, bestD = 7;
         for (const e of ctx.enemyList) {
           if (!e.alive || used.has(e)) continue;
           const edx = e.pos.x - from.x, edz = e.pos.z - from.z;
@@ -231,8 +236,8 @@ export const ABILITIES = [
         if (!best) break;
         used.add(best);
         best.takeDamage(dmg, from.x, from.z, 4);
+        if (!best.alive) best._deathCredit = player;
 
-        // Visual beam between from → target
         const steps = Math.max(3, Math.ceil(bestD * 2));
         for (let s = 0; s < steps; s++) {
           const t = s / steps;
@@ -240,8 +245,8 @@ export const ABILITIES = [
           const bz = from.z + (best.pos.z - from.z) * t + (Math.random() - 0.5) * 0.4;
           ctx.effects.burst(bx, 1.0 + Math.random() * 0.5, bz, 0xfff7a0, 1, 2, 0.2);
         }
-        ctx.effects.flashSphere(best.pos.x, 1.0, best.pos.z, 0xfff7a0, 0.8, 0.2);
-        ctx.effects.ring(best.pos.x, 0.05, best.pos.z, 0xfff7a0, 1.4, 0.25);
+        ctx.effects.flashSphere(best.pos.x, 1.0, best.pos.z, 0xfff7a0, 0.6, 0.2);
+        ctx.effects.ring(best.pos.x, 0.05, best.pos.z, 0xfff7a0, 1.2, 0.25);
         from = { x: best.pos.x, z: best.pos.z };
         dmg *= 0.85;
       }
@@ -250,9 +255,9 @@ export const ABILITIES = [
   },
   {
     id: 'shield', name: 'Орб-щит', icon: '🛡', color: 0x6aa6ff, cd: 12,
-    desc: 'Поглощает следующие 120 урона в течение 5с.',
+    desc: 'Поглощает следующие 80 урона в течение 5с.',
     cast(player, ctx) {
-      player._shield = { hp: 120, ttl: 5 };
+      player._shield = { hp: 80, ttl: 5 };
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0x6aa6ff, 1.4, 0.4);
       ctx.effects.flashSphere(player.pos.x, 1.0, player.pos.z, 0x6aa6ff, 1.2, 0.25);
       ctx.sound.tone?.({ freq: 520, type: 'sine', dur: 0.4, gain: 0.3 });
@@ -260,11 +265,11 @@ export const ABILITIES = [
   },
   {
     id: 'regenAura', name: 'Аура регенерации', icon: '💚', color: 0x7aff8a, cd: 16,
-    desc: 'Лечит обоих игроков по 25 HP/с в течение 5с.',
+    desc: 'Лечит обоих игроков по 15 HP/с в течение 5с.',
     cast(player, ctx) {
       const apply = (p) => {
         if (!p || !p.alive) return;
-        p._healAura = { rate: 25, ttl: 5 };
+        p._healAura = { rate: 15, ttl: 5 };
       };
       apply(player);
       apply(ctx.partner);
@@ -275,35 +280,36 @@ export const ABILITIES = [
   },
   {
     id: 'slowtime', name: 'Замедление времени', icon: '⏱', color: 0xc9a3ff, cd: 14,
-    desc: 'Замедляет всех врагов в 7м до ×0.35 на 3с.',
+    desc: 'Замедляет всех врагов в 6м до ×0.35 на 3с.',
     cast(player, ctx) {
-      const list = enemiesInRadius(player, ctx.enemyList, 7);
+      const list = enemiesInRadius(player, ctx.enemyList, 6);
       for (const { e } of list) e._slow = Math.max(e._slow || 0, 3.0);
-      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xc9a3ff, 7, 0.6);
-      ctx.effects.flashSphere(player.pos.x, 0.5, player.pos.z, 0xc9a3ff, 7, 0.3);
-      ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xc9a3ff, 8, 3, 0.3);
+      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xc9a3ff, 6, 0.5);
+      ctx.effects.flashSphere(player.pos.x, 0.5, player.pos.z, 0xc9a3ff, 3, 0.25);
+      ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xc9a3ff, 6, 3, 0.25);
       ctx.sound.tone?.({ freq: 280, type: 'sine', dur: 0.6, gain: 0.3, slide: -150 });
     },
   },
   {
     id: 'windpush', name: 'Ветер удар', icon: '🌪', color: 0xa0e8ff, cd: 8,
-    desc: 'Кольцевой взрыв оттолкновения в 5м, 35 урона.',
+    desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
-      const list = enemiesInRadius(player, ctx.enemyList, 5);
+      const list = enemiesInRadius(player, ctx.enemyList, 4);
       for (const { e } of list) {
-        e.takeDamage(35, player.pos.x, player.pos.z, 18);
+        e.takeDamage(20, player.pos.x, player.pos.z, 14);
+        if (!e.alive) e._deathCredit = player;
       }
-      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xa0e8ff, 5, 0.4);
-      ctx.effects.flashSphere(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 5, 0.25);
-      ctx.effects.burst(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 14, 6, 0.35);
+      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xa0e8ff, 4, 0.35);
+      ctx.effects.flashSphere(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 2.5, 0.2);
+      ctx.effects.burst(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 10, 5, 0.3);
       ctx.sound.tone?.({ freq: 200, type: 'sawtooth', dur: 0.35, gain: 0.3, slide: 150 });
     },
   },
   {
     id: 'berserk', name: 'Берсерк', icon: '😡', color: 0xff5050, cd: 14,
-    desc: 'Урон ×1.6 и атака ×1.5 быстрее на 5с.',
+    desc: 'Урон ×1.4 и атака ×1.3 быстрее на 5с.',
     cast(player, ctx) {
-      player._berserk = { ttl: 5, dmg: 1.6, atk: 1.5 };
+      player._berserk = { ttl: 5, dmg: 1.4, atk: 1.3 };
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xff5050, 1.6, 0.4);
       ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xff5050, 10, 4, 0.3);
       ctx.sound.tone?.({ freq: 140, type: 'sawtooth', dur: 0.4, gain: 0.4 });

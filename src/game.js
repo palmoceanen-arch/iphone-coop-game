@@ -648,6 +648,15 @@ export class Game {
     for (const ap of this.abilityProjectiles) ap.update(dt, this.enemies, this.effects, this.sound, this.world);
     this.abilityProjectiles = this.abilityProjectiles.filter(ap => ap.alive);
 
+    // Credit kills from ability projectiles and instant-damage abilities
+    for (const e of this.enemies) {
+      if (!e.alive && e._deathCredit) {
+        this._onEnemyDies(e._deathCredit, e);
+        e._deathCredit = null;
+      }
+    }
+    this.enemies = this.enemies.filter(e => e.alive);
+
     // Pickups
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
     this.pickups = this.pickups.filter(pk => pk.alive);
