@@ -1,3 +1,4 @@
+import jsQR from 'jsqr';
 import { io } from 'socket.io-client';
 
 const PLAYER_COLORS = ['#6ad0ff', '#ff8a8a'];
@@ -9,6 +10,12 @@ const statusEl = document.getElementById('status');
 const errEl = document.getElementById('err');
 const codeInput = document.getElementById('code');
 const joinBtn = document.getElementById('join');
+const scanQrBtn = document.getElementById('scanQr');
+const scanPanel = document.getElementById('scanPanel');
+const scanVideo = document.getElementById('scanVideo');
+const scanStatus = document.getElementById('scanStatus');
+const scanFileBtn = document.getElementById('scanFileBtn');
+const scanFileInput = document.getElementById('scanFile');
 const roomCodeEl = document.getElementById('roomcode');
 const playerSpan = controllerEl.querySelector('.badge .p');
 const hintEl = document.getElementById('hint');
@@ -22,9 +29,13 @@ const btnAbility = document.getElementById('btnAbility');
 const btnInteract = document.getElementById('btnInteract');
 const interactLabelEl = document.getElementById('interactLabel');
 const itemBarEl = document.getElementById('itemBar');
+const inventoryDrawer = document.getElementById('inventoryDrawer');
+const inventoryBody = document.getElementById('inventoryBody');
+const inventoryClose = document.getElementById('inventoryClose');
 const shopOverlay = document.getElementById('shopOverlay');
 const shopList = document.getElementById('shopList');
-const shopInventory = document.getElementById('shopInventory');
+const shopInventory = document.createElement('div');
+shopInventory.id = 'shopInventory';
 const shopClose = document.getElementById('shopClose');
 
 // Pre-cache cooldown circle circumference (radius=44 → C ≈ 276.46)
@@ -40,28 +51,169 @@ let state = {
 };
 let assignedSlot = -1;
 let started = false;
+let currentPlayerState = null;
+let itemBarLimit = 12;
+let inventoryOpen = false;
+let scanStream = null;
+let barcodeDetector = null;
+let scanning = false;
+let scanFrameHandle = 0;
+const inventoryExpanded = new Set();
+const shopExpanded = new Set();
+
+const formatter = new Intl.NumberFormat('ru-RU');
+
+function safeText(value) {
+  return value == null ? '' : String(value);
+}
 
 // Pre-fill code from URL ?code=XXXX
 const initialCode = new URLSearchParams(location.search).get('code');
 if (initialCode) {
-  codeInput.value = initialCode.toUpperCase().slice(0, 4);
+  codeInput.value = initialCode.replace(/\D/g, '').slice(0, 4);
 }
 codeInput.addEventListener('input', () => {
-  codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 4);
 });
 codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryJoin(); });
 joinBtn.addEventListener('click', tryJoin);
 
 function tryJoin() {
-  const code = (codeInput.value || '').trim().toUpperCase();
+  const code = (codeInput.value || '').replace(/\D/g, '').slice(0, 4);
   if (code.length !== 4) {
-    errEl.textContent = 'Код состоит из 4 символов';
+    errEl.textContent = 'Код состоит из 4 цифр';
     return;
   }
   errEl.textContent = '';
   joinBtn.disabled = true;
   socket.emit('controller:join', { code });
 }
+
+function codeFromText(text) {
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    const queryCode = url.searchParams.get('code');
+    if (queryCode) return queryCode.replace(/\D/g, '').slice(0, 4);
+  } catch {
+    // Plain QR text is also supported.
+  }
+  const match = text.match(/\b\d{4}\b/);
+  return match ? match[0] : '';
+}
+
+function applyScannedCode(value) {
+  codeInput.value = value;
+  scanStatus.textContent = `Код ${value} найден`;
+  stopQrScanner();
+  tryJoin();
+}
+
+function stopQrScanner() {
+  scanning = false;
+  if (scanStream) {
+    for (const track of scanStream.getTracks()) track.stop();
+    scanStream = null;
+  }
+  if (scanVideo) scanVideo.srcObject = null;
+  if (scanFrameHandle) {
+    cancelAnimationFrame(scanFrameHandle);
+    scanFrameHandle = 0;
+  }
+  scanPanel?.classList.remove('open');
+  scanPanel?.setAttribute('aria-hidden', 'true');
+}
+
+function detectQrFromCanvas(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return '';
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const result = jsQR(image.data, image.width, image.height);
+  return codeFromText(result?.data || '');
+}
+
+function detectQrFromVideo() {
+  if (!scanVideo.videoWidth || !scanVideo.videoHeight) return '';
+  const canvas = document.createElement('canvas');
+  canvas.width = scanVideo.videoWidth;
+  canvas.height = scanVideo.videoHeight;
+  canvas.getContext('2d')?.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
+  return detectQrFromCanvas(canvas);
+}
+
+async function scanLoop() {
+  if (!scanning || !scanVideo) return;
+  try {
+    let value = '';
+    if (barcodeDetector) {
+      const codes = await barcodeDetector.detect(scanVideo);
+      value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean) || '';
+    }
+    value = value || detectQrFromVideo();
+    if (value) {
+      applyScannedCode(value);
+      return;
+    }
+  } catch (err) {
+    if (!String(err?.name || err).includes('Security')) {
+      const value = detectQrFromVideo();
+      if (value) {
+        applyScannedCode(value);
+        return;
+      }
+    }
+  }
+  if (scanning) scanFrameHandle = requestAnimationFrame(scanLoop);
+}
+
+async function startQrScanner() {
+  scanPanel.classList.add('open');
+  scanPanel.setAttribute('aria-hidden', 'false');
+  scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
+  if (!navigator.mediaDevices?.getUserMedia) {
+    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
+    return;
+  }
+  try {
+    if ('BarcodeDetector' in window) {
+      barcodeDetector = barcodeDetector || new window.BarcodeDetector({ formats: ['qr_code'] });
+    }
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    scanVideo.srcObject = scanStream;
+    await scanVideo.play();
+    scanning = true;
+    scanFrameHandle = requestAnimationFrame(scanLoop);
+  } catch {
+    stopQrScanner();
+    scanPanel.classList.add('open');
+    scanPanel.setAttribute('aria-hidden', 'false');
+    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
+  }
+}
+
+scanQrBtn?.addEventListener('click', () => {
+  if (scanning) stopQrScanner();
+  else startQrScanner();
+});
+scanFileBtn?.addEventListener('click', () => scanFileInput?.click());
+scanFileInput?.addEventListener('change', async () => {
+  const file = scanFileInput.files?.[0];
+  if (!file) return;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+    const value = detectQrFromCanvas(canvas);
+    if (value) applyScannedCode(value);
+    else scanStatus.textContent = 'QR на фото не найден. Попробуй ещё раз или введи код.';
+  } catch {
+    scanStatus.textContent = 'Не удалось прочитать фото QR. Введи код вручную.';
+  } finally {
+    scanFileInput.value = '';
+  }
+});
 
 socket.on('connect_error', () => {
   errEl.textContent = 'Не удалось подключиться к серверу';
@@ -74,6 +226,7 @@ socket.on('controller:rejected', ({ reason }) => {
 });
 
 socket.on('controller:assigned', ({ slot, code }) => {
+  stopQrScanner();
   assignedSlot = slot;
   lobby.style.display = 'none';
   controllerEl.style.display = 'block';
@@ -209,9 +362,30 @@ btnInteract.addEventListener('pointerup', interactRelease);
 btnInteract.addEventListener('pointercancel', interactRelease);
 btnInteract.addEventListener('pointerleave', interactRelease);
 
-shopClose.addEventListener('click', (e) => {
+function closeShop(e) {
   e.preventDefault();
+  e.stopPropagation();
   if (assignedSlot >= 0) socket.emit('input:event', { type: 'closeShop' });
+}
+shopClose.addEventListener('click', closeShop);
+shopClose.addEventListener('pointerdown', closeShop);
+
+function setInventoryOpen(open) {
+  inventoryOpen = !!open;
+  inventoryDrawer.classList.toggle('open', inventoryOpen);
+  inventoryDrawer.setAttribute('aria-hidden', inventoryOpen ? 'false' : 'true');
+  controllerEl.classList.toggle('inventory-open', inventoryOpen);
+  btnShop.classList.toggle('inventory-alert', inventoryOpen);
+  if (inventoryOpen) renderInventory(inventoryBody, currentPlayerState);
+}
+
+itemBarEl.addEventListener('click', () => {
+  if (!currentPlayerState || currentPlayerState.shopOpen) return;
+  setInventoryOpen(true);
+});
+inventoryClose.addEventListener('click', (e) => {
+  e.preventDefault();
+  setInventoryOpen(false);
 });
 
 // ----------------------------------------------------------------------
@@ -220,16 +394,31 @@ shopClose.addEventListener('click', (e) => {
 let _itemBarSig = '';
 function renderItemBar(items) {
   items = items || [];
-  const sig = items.map(it => `${it.id}:${it.count}`).join('|');
+  const visible = items.slice(0, itemBarLimit);
+  const hiddenCount = Math.max(0, items.length - visible.length);
+  const sig = `${itemBarLimit}|${items.map(it => `${it.id}:${it.count}`).join('|')}`;
   if (sig === _itemBarSig) return;
   _itemBarSig = sig;
   itemBarEl.innerHTML = '';
-  for (const it of items) {
+  for (const it of visible) {
     const el = document.createElement('span');
     el.className = 'item-icon';
     if (it.rarity) el.dataset.rar = it.rarity;
-    el.title = it.name || it.id;
-    el.innerHTML = `<span class="ico">${it.icon || '?'}</span><span class="count">×${it.count}</span>`;
+    el.title = `${safeText(it.name || it.id)} ×${formatter.format(it.count || 0)}`;
+    const ico = document.createElement('span');
+    ico.className = 'ico';
+    ico.textContent = it.icon || '?';
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `×${formatter.format(it.count || 0)}`;
+    el.append(ico, count);
+    itemBarEl.appendChild(el);
+  }
+  if (hiddenCount > 0) {
+    const el = document.createElement('span');
+    el.className = 'item-icon more';
+    el.textContent = `+${hiddenCount}`;
+    el.title = 'Открыть полный инвентарь';
     itemBarEl.appendChild(el);
   }
 }
@@ -310,52 +499,125 @@ function renderInteract(prompt) {
   }
 }
 
-function renderShopInventory(s) {
-  shopInventory.innerHTML = '';
-  const toggle = (ev) => ev.currentTarget.classList.toggle('open');
+function appendInventoryRows(container, s) {
+  const expanded = container === shopInventory ? shopExpanded : inventoryExpanded;
+  const toggle = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const row = ev.currentTarget;
+    if (row.dataset.toggledAt === String(ev.timeStamp)) return;
+    row.dataset.toggledAt = String(ev.timeStamp);
+    row.classList.toggle('open');
+    const key = row.dataset.invKey;
+    if (!key) return;
+    if (row.classList.contains('open')) expanded.add(key);
+    else expanded.delete(key);
+  };
 
-  // Ability
   const ah = document.createElement('div');
   ah.className = 'inv-header';
   ah.textContent = 'Способность';
-  shopInventory.appendChild(ah);
+  container.appendChild(ah);
   if (s.ability) {
     const d = document.createElement('div');
     d.className = 'inv-row';
-    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><div class="inv-desc">${s.ability.desc || ''}</div>`;
+    d.dataset.invKey = `ability:${s.ability.id || s.ability.name}`;
+    if (expanded.has(d.dataset.invKey)) d.classList.add('open');
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
+    const desc = document.createElement('div');
+    desc.className = 'inv-desc';
+    desc.textContent = s.ability.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.';
+    d.append(name, desc);
     d.addEventListener('click', toggle);
-    shopInventory.appendChild(d);
+    container.appendChild(d);
   } else {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет способности</span>';
-    shopInventory.appendChild(e);
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.style.opacity = '0.4';
+    name.style.fontStyle = 'italic';
+    name.textContent = 'Нет способности';
+    e.appendChild(name);
+    container.appendChild(e);
   }
 
-  // Items
   const ih = document.createElement('div');
   ih.className = 'inv-header';
   ih.textContent = 'Предметы';
-  shopInventory.appendChild(ih);
+  container.appendChild(ih);
   const items = (s.items || []).filter(it => it.count > 0);
   if (items.length === 0) {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет предметов</span>';
-    shopInventory.appendChild(e);
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.style.opacity = '0.4';
+    name.style.fontStyle = 'italic';
+    name.textContent = 'Нет предметов';
+    e.appendChild(name);
+    container.appendChild(e);
   } else {
+    const itemContainer = container === shopInventory ? document.createElement('div') : container;
+    if (container === shopInventory) itemContainer.className = 'shop-items-grid';
     for (const it of items) {
       const d = document.createElement('div');
       d.className = 'inv-row';
-      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ' ×' + it.count : ''}</span><div class="inv-desc">${it.desc || ''}</div>`;
+      d.dataset.invKey = `item:${it.id}`;
+      if (expanded.has(d.dataset.invKey)) d.classList.add('open');
+      if (it.rarity) d.dataset.rar = it.rarity;
+      const name = document.createElement('span');
+      name.className = 'inv-name';
+      const label = document.createElement('span');
+      label.textContent = `${it.icon || ''} ${it.name || it.id}`;
+      const count = document.createElement('span');
+      count.className = 'inv-count';
+      count.textContent = `×${formatter.format(it.count || 0)}`;
+      name.append(label, count);
+      const desc = document.createElement('div');
+      desc.className = 'inv-desc';
+      desc.textContent = it.desc || '';
+      d.append(name, desc);
       d.addEventListener('click', toggle);
-      shopInventory.appendChild(d);
+      itemContainer.appendChild(d);
     }
+    if (container === shopInventory) container.appendChild(itemContainer);
   }
 }
 
+function renderInventory(container, s) {
+  container.innerHTML = '';
+  if (!s) return;
+  appendInventoryRows(container, s);
+}
+
+function renderShopInventory(s) {
+  renderInventory(shopInventory, s);
+}
+
+function computeItemBarLimit() {
+  const height = window.innerHeight || 0;
+  const width = window.innerWidth || 0;
+  if (height <= 430 && width > height) return width < 740 ? 8 : 10;
+  return 12;
+}
+
+function refreshItemBarLimit() {
+  const next = computeItemBarLimit();
+  if (next === itemBarLimit) return;
+  itemBarLimit = next;
+  _itemBarSig = '';
+  if (currentPlayerState) renderItemBar(currentPlayerState.items);
+}
+window.addEventListener('resize', refreshItemBarLimit);
+window.addEventListener('orientationchange', refreshItemBarLimit);
+refreshItemBarLimit();
+
 socket.on('state:player', (s) => {
   if (!s || typeof s.slot !== 'number') return;
+  currentPlayerState = s;
   document.getElementById('stHp').textContent = s.hp;
   document.getElementById('stMaxHp').textContent = s.maxHp;
   document.getElementById('stGold').textContent = s.gold;
@@ -364,9 +626,11 @@ socket.on('state:player', (s) => {
   document.getElementById('shopMaxHp').textContent = s.maxHp;
   document.getElementById('shopGold').textContent = s.gold;
   shopOverlay.classList.toggle('open', !!s.shopOpen);
+  if (s.shopOpen && inventoryOpen) setInventoryOpen(false);
   renderItemBar(s.items);
   renderAbility(s.ability);
   renderInteract(s.interact);
+  if (inventoryOpen) renderInventory(inventoryBody, s);
   // Render upgrades list
   shopList.innerHTML = '';
   for (const u of (s.upgrades || [])) {
@@ -383,7 +647,11 @@ socket.on('state:player', (s) => {
     shopList.appendChild(row);
   }
   // Render inventory below upgrades
-  if (s.shopOpen) renderShopInventory(s);
+  if (s.shopOpen) {
+    shopInventory.innerHTML = '';
+    shopList.appendChild(shopInventory);
+    renderShopInventory(s);
+  }
 });
 
 shopList.addEventListener('click', (e) => {
@@ -411,6 +679,7 @@ function isInteractive(el) {
   if (!el) return false;
   const tag = el.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
+  if (el.closest && el.closest('.inventory-drawer')) return true;
   // Allow scrolling inside the shop overlay
   if (el.closest && el.closest('.shop-overlay')) return true;
   return false;

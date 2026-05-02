@@ -27,11 +27,9 @@ async function main() {
   const rooms = new Map();
 
   function genCode() {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // unambiguous
     let code = '';
     do {
-      code = '';
-      for (let i = 0; i < 4; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+      code = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
     } while (rooms.has(code));
     return code;
   }
@@ -49,19 +47,19 @@ async function main() {
     });
 
     socket.on('controller:join', ({ code }) => {
-      const upper = String(code || '').toUpperCase();
-      const room = rooms.get(upper);
+      const roomCode = String(code || '').replace(/\D/g, '').slice(0, 4);
+      const room = rooms.get(roomCode);
       if (!room) { socket.emit('controller:rejected', { reason: 'no-room' }); return; }
       let slot = -1;
       if (!room.controllers[0]) slot = 0;
       else if (!room.controllers[1]) slot = 1;
       else { socket.emit('controller:rejected', { reason: 'full' }); return; }
       room.controllers[slot] = socket.id;
-      socket.join(upper);
+      socket.join(roomCode);
       socket.data.role = 'controller';
-      socket.data.code = upper;
+      socket.data.code = roomCode;
       socket.data.slot = slot;
-      socket.emit('controller:assigned', { slot, code: upper });
+      socket.emit('controller:assigned', { slot, code: roomCode });
       io.to(room.hostId).emit('controller:joined', { slot });
     });
 
@@ -132,6 +130,12 @@ async function main() {
   // -------------------------------------------------------------------------
   // Static / Vite middleware
   // -------------------------------------------------------------------------
+  app.get('/controller', (req, res) => {
+    const queryIndex = req.originalUrl.indexOf('?');
+    const query = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : '';
+    res.redirect(307, `/controller.html${query}`);
+  });
+
   if (isProd) {
     app.use(express.static(path.join(__dirname, 'dist')));
     app.get(/^\/(?!socket\.io).*/, (_req, res) => {

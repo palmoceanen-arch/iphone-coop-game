@@ -1,4 +1,6 @@
+import { ABILITY_BY_ID } from './abilities.js';
 import { Game } from './game.js';
+import { ITEMS } from './items.js';
 import { Lobby } from './lobby.js';
 import { preloadModels } from './models.js';
 
@@ -15,8 +17,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
   const params = new URLSearchParams(window.location.search);
   if (isMobile && !params.has('host')) {
-    const url = new URL('controller.html', window.location.href);
-    // forward seed code if present so /controller.html?code=... still works
+    const url = new URL('controller', window.location.href);
+    // forward seed code if present so /controller?code=... still works
     for (const [k, v] of params.entries()) url.searchParams.set(k, v);
     window.location.replace(url.toString());
     return;
@@ -40,6 +42,16 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     game = new Game();
     window.__game = game;
+    if (params.get('testInventory') === '1') {
+      for (const player of game.players) {
+        for (let i = 0; i < ITEMS.length; i++) {
+          const item = ITEMS[i];
+          player.items[item.id] = (i % 3) + 1;
+        }
+      }
+      game.players[0].setAbility(Object.keys(ABILITY_BY_ID)[0]);
+      game.players[1].setAbility(Object.keys(ABILITY_BY_ID)[1] || Object.keys(ABILITY_BY_ID)[0]);
+    }
 
     lobby = new Lobby();
     lobby.connect();
