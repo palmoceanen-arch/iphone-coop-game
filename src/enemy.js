@@ -42,9 +42,26 @@ export class Enemy {
     this.wanderTimer = 0;
     this.chunkKey = opts.chunkKey ?? this.world.chunkKeyOf(x, z);
     this.asleep = false;
+    this.elite = !!opts.elite;
+    this._frozen = 0;
+    this._slow = 0;
+    this._poison = null;
     this.config(level);
+    if (this.elite) this._applyEliteScaling();
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
+  }
+
+  _applyEliteScaling() {
+    this.maxHP = Math.round(this.maxHP * 1.7);
+    this.hp = this.maxHP;
+    if (this.touchDamage) this.touchDamage = Math.round(this.touchDamage * 1.4);
+    if (this.projectileDmg) this.projectileDmg = Math.round(this.projectileDmg * 1.4);
+    if (this.swingDmg) this.swingDmg = Math.round(this.swingDmg * 1.4);
+    if (this.dashDmg) this.dashDmg = Math.round(this.dashDmg * 1.4);
+    if (this.boomDamage) this.boomDamage = Math.round(this.boomDamage * 1.4);
+    if (Array.isArray(this.gold)) this.gold = [this.gold[0] * 2, this.gold[1] * 2];
+    if (typeof this.xp === 'number') this.xp = Math.round(this.xp * 1.6);
   }
 
   config(level) {
@@ -118,6 +135,29 @@ export class Enemy {
     this._animState = 'idle';
     this._attackAnimKey = visual.attackAnim;
     this.body = null; // legacy field; effects code references `body.material` for hit flash but we now use _materials.
+
+    // Elite enemies get a golden ring under their feet + emissive tint that
+    // makes them readable from a distance. The ring is added to the parent
+    // group so it stays at world-y=0 even when the character bobs.
+    if (this.elite) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.75, 1.05, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.75, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.04;
+      grp.add(ring);
+      this._eliteRing = ring;
+      for (const m of materials) {
+        if (m.emissive) {
+          m.emissive.setHex(0xffaa30);
+          m.emissiveIntensity = 0.3;
+        }
+      }
+      // Slight upscale via root.
+      character.root.scale.multiplyScalar(1.15);
+    }
+
     grp.position.set(this.pos.x, 0, this.pos.z);
     return grp;
   }
@@ -212,6 +252,32 @@ export class Enemy {
     this.attackTimer = Math.max(0, this.attackTimer - dt);
     this.stateTimer += dt;
     this.wanderTimer = Math.max(0, this.wanderTimer - dt);
+
+    // Status effects ------------------------------------------------
+    this._frozen = Math.max(0, (this._frozen || 0) - dt);
+    this._slow = Math.max(0, (this._slow || 0) - dt);
+    if (this._poison && this._poison.dur > 0) {
+      this._poison.dur -= dt;
+      this.hp -= this._poison.dps * dt;
+      if (this.flashTimer <= 0) this.flashTimer = 0.06;
+      if (this.hp <= 0) { this.die(); return; }
+    } else if (this._poison) {
+      this._poison = null;
+    }
+    if (this._frozen > 0) {
+      // Frozen: skip AI and movement entirely. Render a cyan tint.
+      for (const m of this._materials || []) {
+        if (m.emissive) {
+          m.emissive.setHex(0x9dfcff);
+          m.emissiveIntensity = 0.4;
+        }
+      }
+      this._isMoving = false;
+      this._updateVisualEffects(dt);
+      return;
+    }
+    const speedMult = this._slow > 0 ? 0.35 : 1;
+
     const prevWindup = this.windup;
     if (this.windup > 0) this.windup = Math.max(0, this.windup - dt);
     const windupFired = prevWindup > 0 && this.windup === 0;
@@ -244,7 +310,7 @@ export class Enemy {
 
     // ------ MOVEMENT INTENT ------
     let move = { x: 0, z: 0 };
-    const idleSpeed = this.speed * 0.35;
+    const idleSpeed = this.speed * 0.35 * speedMult;
 
     if (this.state === 'idle' || this.state === 'return') {
       // Wander around home: pick a new wander target when reached or timer elapsed.
@@ -430,8 +496,8 @@ export class Enemy {
     // Apply movement (skip wisp dash which already moved)
     const chaseOldX = this.pos.x, chaseOldZ = this.pos.z;
     if (this.kind !== 'wisp' || (this.dashing <= 0 && this.windup <= 0)) {
-      this.pos.x += move.x * this.speed * dt;
-      this.pos.z += move.z * this.speed * dt;
+      this.pos.x += move.x * this.speed * speedMult * dt;
+      this.pos.z += move.z * this.speed * speedMult * dt;
     }
     // knockback
     this.pos.x += this.knockback.x * dt;
@@ -462,9 +528,16 @@ export class Enemy {
         m.emissive.setHex(0xffffff);
         m.emissiveIntensity = this.flashTimer / 0.12;
       } else if (m.emissive) {
-        m.emissiveIntensity = 0;
+        // Preserve elite golden tint when not flashing.
+        if (this.elite) {
+          m.emissive.setHex(0xffaa30);
+          m.emissiveIntensity = 0.3;
+        } else {
+          m.emissiveIntensity = 0;
+        }
       }
     }
+    if (this._eliteRing) this._eliteRing.rotation.z += dt * 0.6;
     // Bobbing motion for floaty enemies — applied to the character root so
     // the model itself rises, not the parent group (parent y is fixed at 0).
     const root = this._character?.root;

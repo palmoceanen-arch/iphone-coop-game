@@ -125,6 +125,7 @@ export class World {
     this.simKeys = new Set();         // chunk keys whose enemies actively simulate
     this.colliders = [];              // aggregated from active chunks only
     this.enemySpawns = [];            // queue read by Game on first frame after a chunk loads
+    this.chestSpawns = [];            // same idea but for procedural chests
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     this._buildSky();
@@ -239,6 +240,9 @@ export class World {
         this.chunks.set(key, chunk);
         this.scene.add(chunk.group);
         for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
+        if (chunk.chestSpawns) {
+          for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
+        }
       }
     }
   }
@@ -315,6 +319,7 @@ export class World {
     group.name = `chunk_${cx}_${cz}`;
     const colliders = [];
     const enemySpawns = [];
+    const chestSpawns = [];
 
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
@@ -436,13 +441,28 @@ export class World {
               level: lvl,
               homeX: cxw, homeZ: czw,
               chunkKey: `${cx},${cz}`,
+              elite: r.chance(0.15),
             });
           }
         }
       }
     }
 
-    return { group, colliders, enemySpawns, cx, cz };
+    // 7. Procedural chests — ~10% of non-origin chunks contain a chest in a
+    // safe spot. The chest is materialised by Game (so we can attach pickup
+    // logic), this just queues a request.
+    if (!isOrigin && r.chance(0.1)) {
+      for (let i = 0; i < 12; i++) {
+        const x = minX + r.range(4, CHUNK_SIZE - 4);
+        const z = minZ + r.range(4, CHUNK_SIZE - 4);
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 1.0, colliders)) continue;
+        chestSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+        break;
+      }
+    }
+
+    return { group, colliders, enemySpawns, chestSpawns, cx, cz };
   }
 
   // True if the world position (x, z) is currently under water. Sampled

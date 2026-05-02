@@ -12,6 +12,10 @@ import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString } from './utils.js';
 import { getSettings } from './settings.js';
 import { PauseMenu } from './pause.js';
+import { runItemHook, ITEM_BY_ID, pickRandomItemId } from './items.js';
+import { ABILITY_BY_ID } from './abilities.js';
+import { Rune } from './runes.js';
+import { Chest } from './chest.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -112,8 +116,11 @@ export class Game {
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
+    this.runes = [];   // item / ability rune drops in the world
+    this.chests = []; // procedurally placed treasure chests
 
     this._spawnInitialEnemies();
+    this._drainChestSpawns();
 
     this.totalKills = 0;
     this.elapsed = 0;
@@ -165,6 +172,8 @@ export class Game {
         e.preventDefault();
         this._togglePauseMenu();
       }
+      if (e.code === 'KeyG') this._tryCastAbility(0);
+      if (e.code === 'KeyH') this._tryCastAbility(1);
     });
     if (this.pauseMenu) {
       this.pauseMenu.onToggle = (open) => {
@@ -181,6 +190,22 @@ export class Game {
     if (this._waitingForStart) return;
     this.pauseMenu.toggle();
     this.menuPaused = this.pauseMenu.isOpen;
+  }
+
+  _tryCastAbility(slot) {
+    if (this._waitingForStart || this.paused || this.menuPaused || this.shopOpen || this.dead) return;
+    const player = this.players[slot];
+    if (!player) return;
+    const partner = this.players[1 - slot];
+    const ctx = {
+      enemyList: this.enemies,
+      partner,
+      effects: this.effects,
+      sound: this.sound,
+    };
+    if (player.tryCastAbility(ctx)) {
+      this.effects.shakeCamera(0.1);
+    }
   }
 
   // ---- Phone gamepad shop ------------------------------------------------
@@ -272,11 +297,21 @@ export class Game {
     for (const e of this.enemies) { if (e.alive) this.scene.remove(e.mesh); }
     for (const p of this.projectiles) { p._destroy?.(); }
     for (const p of this.pickups) { p._destroy?.(); }
-    this.enemies = []; this.projectiles = []; this.pickups = [];
+    for (const r of this.runes) { r._destroy?.(); }
+    for (const c of this.chests) { c._destroy?.(); }
+    this.enemies = []; this.projectiles = []; this.pickups = []; this.runes = []; this.chests = [];
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
       p.vel = { x: 0, z: 0 }; p.knockback = { x: 0, z: 0 };
+      // Wipe item / ability progress on restart — fresh roguelike run.
+      p.items = {};
+      p.ability = null;
+      p.abilityCd = 0;
+      p._shield = null;
+      p._berserk = null;
+      p._healAura = null;
+      p._itemSpeedMult = 1;
       p.revive();
     }
     this.dead = false;
@@ -294,8 +329,19 @@ export class Game {
   _drainPendingEnemySpawns() {
     while (this.world.enemySpawns.length > 0) {
       const s = this.world.enemySpawns.shift();
-      const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, { homeX: s.homeX, homeZ: s.homeZ });
+      const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, {
+        homeX: s.homeX, homeZ: s.homeZ, elite: !!s.elite,
+      });
       this.enemies.push(e);
+    }
+  }
+
+  _drainChestSpawns() {
+    if (!this.world.chestSpawns) return;
+    while (this.world.chestSpawns.length > 0) {
+      const s = this.world.chestSpawns.shift();
+      const c = new Chest(this.scene, s.x, s.z);
+      this.chests.push(c);
     }
   }
 
@@ -312,6 +358,7 @@ export class Game {
     }
     this.world.refreshActiveChunks(positions);
     this._drainPendingEnemySpawns();
+    this._drainChestSpawns();
   }
 
   // Lazy-build and update a small billboarded HP-style bar above a downed
@@ -348,11 +395,27 @@ export class Game {
   }
 
   _onPlayerHitsEnemy(player, enemy) {
-    const dmg = player.stats.damage * (1 + Math.random() * 0.05);
+    const partner = this.players[1 - player.index];
+    // ctx is shared between onAttack and onHit so items can tag e.g. crit.
+    const ctx = {
+      enemy,
+      partner,
+      enemyList: this.enemies,
+      dmgMult: 1,
+      crit: false,
+      dmg: 0,
+      echo: false,
+    };
+    runItemHook(player, 'onAttack', ctx);
+    let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult;
+    if (player._berserk) dmg *= player._berserk.dmg;
+    ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
-      // visual hit
-      this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, 0xffffff, 0.5, 0.12);
+      runItemHook(player, 'onHit', ctx);
+      const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
+      this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, flashColor, ctx.crit ? 0.7 : 0.5, 0.12);
       if (!enemy.alive) {
+        runItemHook(player, 'onKill', ctx);
         this._onEnemyDies(player, enemy);
       }
     }
@@ -363,6 +426,17 @@ export class Game {
     const dropFood = Math.random() < 0.18;
     const drops = spawnDrops(this.scene, enemy.pos.x, enemy.pos.z, enemy.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
+    // Elites guarantee an item rune drop. Random rarity weighted by the
+    // global pool (legendary will still be rare).
+    if (enemy.elite) {
+      const id = pickRandomItemId();
+      if (id) {
+        const r = new Rune(this.scene, enemy.pos.x, enemy.pos.z, 'item', id);
+        this.runes.push(r);
+        this.effects.ring(enemy.pos.x, 0.05, enemy.pos.z, 0xffd166, 1.6, 0.4);
+        this.effects.toast?.('Элитный сбрасывает реликвию!', '#ffd166');
+      }
+    }
     // Shared XP — both players gain regardless of who killed (even if dead;
     // they level up so revival lands them at the proper stats).
     for (const p of this.players) {
@@ -480,6 +554,12 @@ export class Game {
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
     this.pickups = this.pickups.filter(pk => pk.alive);
 
+    // Chests + runes
+    for (const c of this.chests) c.update(dt, this.players, this.sound, this.effects, (rune) => this.runes.push(rune));
+    this.chests = this.chests.filter(c => c.alive);
+    for (const r of this.runes) r.update(dt, this.players, this.sound, this.effects);
+    this.runes = this.runes.filter(r => r.alive);
+
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
     const beyond = Math.max(0, dBetween - LEASH_WARN);
@@ -550,6 +630,10 @@ export class Game {
     set('lvl2', p2.level);
     set('dmg1', Math.round(p1.stats.damage));
     set('dmg2', Math.round(p2.stats.damage));
+    this._renderItemBar(p1, 'items1');
+    this._renderItemBar(p2, 'items2');
+    this._renderAbilitySlot(p1, 'ability1', 'G');
+    this._renderAbilitySlot(p2, 'ability2', 'H');
     const d = vdist(p1.pos, p2.pos);
     set('dist', `${d.toFixed(1)}m apart`);
     // clock
@@ -566,6 +650,71 @@ export class Game {
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);
     const greyEl = document.getElementById('grey');
     if (greyEl) greyEl.style.backdropFilter = `grayscale(${this.leashRatio * 100}%) brightness(${1 - this.leashRatio * 0.3})`;
+  }
+
+  _renderItemBar(player, elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const ids = Object.keys(player.items).filter(k => (player.items[k] || 0) > 0);
+    if (ids.length === 0) {
+      if (el.childElementCount > 0) el.innerHTML = '';
+      return;
+    }
+    // Diff-friendly rebuild: only rewrite when the set/counts changed.
+    const sig = ids.map(id => `${id}:${player.items[id]}`).sort().join(',');
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = '';
+    for (const id of ids) {
+      const def = ITEM_BY_ID[id];
+      if (!def) continue;
+      const node = document.createElement('span');
+      node.className = 'item-icon';
+      node.dataset.rar = def.rarity;
+      node.title = `${def.name} ×${player.items[id]} — ${def.desc}`;
+      node.innerHTML = `<span>${def.icon || '?'}</span><span class="stk">×${player.items[id]}</span>`;
+      el.appendChild(node);
+    }
+  }
+
+  _renderAbilitySlot(player, elId, key) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const id = player.ability;
+    if (!id) {
+      if (!el.classList.contains('empty')) {
+        el.classList.add('empty');
+        el.classList.remove('ready');
+        el.querySelector('.icon').textContent = '·';
+        el.querySelector('.ab-name').textContent = 'пусто';
+        el.querySelector('.cd-text').textContent = '';
+        const circle = el.querySelector('circle');
+        if (circle) circle.setAttribute('stroke-dashoffset', '100.53');
+      }
+      return;
+    }
+    const def = ABILITY_BY_ID[id];
+    if (!def) return;
+    el.classList.remove('empty');
+    if (el.dataset.id !== id) {
+      el.dataset.id = id;
+      el.querySelector('.icon').textContent = def.icon;
+      el.querySelector('.ab-name').textContent = def.name;
+      el.querySelector('.icon-wrap').style.boxShadow = `inset 0 0 0 2px #${def.color.toString(16).padStart(6, '0')}`;
+    }
+    const cdMax = def.cd;
+    const cd = player.abilityCd;
+    const ready = cd <= 0;
+    const circle = el.querySelector('circle');
+    if (circle) {
+      const C = 2 * Math.PI * 16; // ~100.53
+      const frac = ready ? 0 : (cd / cdMax);
+      circle.setAttribute('stroke-dashoffset', String(C * (1 - frac)));
+    }
+    const t = el.querySelector('.cd-text');
+    if (t) t.textContent = ready ? '' : cd.toFixed(1);
+    el.classList.toggle('ready', ready);
+    el.querySelector('.keyhint').textContent = key;
   }
 
   render() {
