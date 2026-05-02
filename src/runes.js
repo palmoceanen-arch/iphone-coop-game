@@ -25,6 +25,7 @@ export class Rune {
     this.payloadId = payloadId; // item id or ability id
     this.alive = true;
     this.life = 60;            // seconds before despawn (long, since rare)
+    this._pickupCooldown = 0.5; // prevents instant pickup on same frame as chest open
     this.bobT = Math.random() * Math.PI * 2;
     this.color = this._pickColor();
     this.mesh = this._buildMesh();
@@ -64,6 +65,7 @@ export class Rune {
   update(dt, players, sound, effects, onPickup) {
     if (!this.alive) return;
     this.life -= dt;
+    if (this._pickupCooldown > 0) this._pickupCooldown -= dt;
     this.bobT += dt * 3;
     if (this._crystal) {
       this._crystal.rotation.y += dt * 1.5;
@@ -115,7 +117,7 @@ export class Rune {
         // Pickup-trigger only on the player who pressed interact.
         // Game wires this by passing `intentInteract` per player.
         const intent = near._lastIntent;
-        if (intent && intent.interact && nd < ABILITY_PICKUP_RADIUS) {
+        if (intent && intent.interact && nd < ABILITY_PICKUP_RADIUS && this._pickupCooldown <= 0) {
           near.setAbility?.(this.payloadId);
           if (def) effects.toast?.(`Способность: ${def.icon} ${def.name}`, '#' + this.color.toString(16).padStart(6, '0'));
           sound.bell?.();
