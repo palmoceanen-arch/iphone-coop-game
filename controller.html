@@ -356,9 +356,11 @@
       .upg-row.locked .price-btn { background: #2a3142; color: #6e7a96; }
       #shopInventory { padding: 0 calc(env(safe-area-inset-right, 0px) + 12px) calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 12px); }
       .inv-header { font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px; }
-      .inv-row { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; margin: 4px 0; font-size: 12px; line-height: 1.4; }
+      .inv-row { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; margin: 4px 0; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; touch-action: manipulation; }
+      .inv-row:active { background: rgba(255,255,255,0.08); }
       .inv-row .inv-name { font-weight: 600; }
-      .inv-row .inv-desc { opacity: 0.55; font-size: 11px; }
+      .inv-row .inv-desc { display: none; opacity: 0.55; font-size: 11px; margin-top: 3px; }
+      .inv-row.open .inv-desc { display: block; }
       :root { --p1: #6ad0ff; --p2: #ff8a8a; }
       #controller.p1 .badge .p { color: var(--p1); }
       #controller.p2 .badge .p { color: var(--p2); }

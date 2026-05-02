@@ -80,12 +80,11 @@
       .upg.locked { opacity: 0.4; }
       .inv-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); }
       .inv-section h4 { margin: 0 0 6px; font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.5px; }
-      .inv-item { padding: 5px 8px; margin: 4px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; }
-      .inv-item .inv-name { font-weight: 600; }
-      .inv-item .inv-desc { opacity: 0.6; font-size: 11px; }
-      .inv-ability { padding: 6px 8px; margin: 4px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; }
-      .inv-ability .inv-name { font-weight: 600; }
-      .inv-ability .inv-desc { opacity: 0.6; font-size: 11px; }
+      .inv-item, .inv-ability { padding: 5px 8px; margin: 3px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; }
+      .inv-item:hover, .inv-ability:hover { background: #222a36; }
+      .inv-item .inv-name, .inv-ability .inv-name { font-weight: 600; }
+      .inv-item .inv-desc, .inv-ability .inv-desc { display: none; opacity: 0.6; font-size: 11px; margin-top: 3px; }
+      .inv-item.open .inv-desc, .inv-ability.open .inv-desc { display: block; }
       .inv-empty { opacity: 0.4; font-size: 11px; font-style: italic; padding: 4px 0; }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
       #help { position: absolute; left: 12px; bottom: 12px; font-size: 12px; opacity: 0.85; background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 12px; max-width: 360px; line-height: 1.55; }

@@ -312,6 +312,7 @@ function renderInteract(prompt) {
 
 function renderShopInventory(s) {
   shopInventory.innerHTML = '';
+  const toggle = (ev) => ev.currentTarget.classList.toggle('open');
 
   // Ability
   const ah = document.createElement('div');
@@ -321,12 +322,13 @@ function renderShopInventory(s) {
   if (s.ability) {
     const d = document.createElement('div');
     d.className = 'inv-row';
-    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><br><span class="inv-desc">${s.ability.desc || ''}</span>`;
+    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><div class="inv-desc">${s.ability.desc || ''}</div>`;
+    d.addEventListener('click', toggle);
     shopInventory.appendChild(d);
   } else {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-desc">Нет способности</span>';
+    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет способности</span>';
     shopInventory.appendChild(e);
   }
 
@@ -339,13 +341,14 @@ function renderShopInventory(s) {
   if (items.length === 0) {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-desc">Нет предметов</span>';
+    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет предметов</span>';
     shopInventory.appendChild(e);
   } else {
     for (const it of items) {
       const d = document.createElement('div');
       d.className = 'inv-row';
-      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ` ×${it.count}` : ''}</span><br><span class="inv-desc">${it.desc || ''}</span>`;
+      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ' ×' + it.count : ''}</span><div class="inv-desc">${it.desc || ''}</div>`;
+      d.addEventListener('click', toggle);
       shopInventory.appendChild(d);
     }
   }

@@ -66,13 +66,16 @@ export function renderShop(player1, player2, onBuy) {
     const ah = document.createElement('h4');
     ah.textContent = 'Способность';
     el.appendChild(ah);
+    const toggle = (ev) => ev.currentTarget.classList.toggle('open');
+
     if (player.ability) {
       const def = ABILITY_BY_ID[player.ability];
       if (def) {
         const d = document.createElement('div');
         d.className = 'inv-ability';
         const castKey = player.index === 0 ? 'G' : 'H';
-        d.innerHTML = `<span class="inv-name">${def.icon} ${def.name}</span> <kbd>${castKey}</kbd><br><span class="inv-desc">${def.desc}</span>`;
+        d.innerHTML = `<span class="inv-name">${def.icon} ${def.name} <kbd>${castKey}</kbd></span><div class="inv-desc">${def.desc}</div>`;
+        d.addEventListener('click', toggle);
         el.appendChild(d);
       }
     } else {
@@ -98,7 +101,8 @@ export function renderShop(player1, player2, onBuy) {
         if (!def) continue;
         const d = document.createElement('div');
         d.className = 'inv-item';
-        d.innerHTML = `<span class="inv-name">${def.icon || ''} ${def.name}${count > 1 ? ` ×${count}` : ''}</span><br><span class="inv-desc">${def.desc || ''}</span>`;
+        d.innerHTML = `<span class="inv-name">${def.icon || ''} ${def.name}${count > 1 ? ' ×' + count : ''}</span><div class="inv-desc">${def.desc || ''}</div>`;
+        d.addEventListener('click', toggle);
         el.appendChild(d);
       }
     }
