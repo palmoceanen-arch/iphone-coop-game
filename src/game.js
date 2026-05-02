@@ -113,6 +113,9 @@ export class Game {
       new Player(0, this.world, this.effects, this.sound),
       new Player(1, this.world, this.effects, this.sound),
     ];
+    // Starter abilities so phone & desktop have something to cast immediately.
+    this.players[0].setAbility('fireball');
+    this.players[1].setAbility('icebolt');
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
@@ -121,6 +124,7 @@ export class Game {
 
     this._spawnInitialEnemies();
     this._drainChestSpawns();
+    this._spawnStarterChest();
 
     this.totalKills = 0;
     this.elapsed = 0;
@@ -373,9 +377,14 @@ export class Game {
       p._itemSpeedMult = 1;
       p.revive();
     }
+    // Restore starter abilities so players still have something to cast.
+    this.players[0].setAbility('fireball');
+    this.players[1].setAbility('icebolt');
     this.dead = false;
     this.totalKills = 0;
+    this._starterChestSpawned = false;
     this._spawnInitialEnemies();
+    this._spawnStarterChest();
     document.getElementById('death').classList.remove('open');
   }
 
@@ -402,6 +411,16 @@ export class Game {
       const c = new Chest(this.scene, s.x, s.z);
       this.chests.push(c);
     }
+  }
+
+  // Always spawn one chest near origin on first load so players see the
+  // pickup loop within a few seconds — discovering the first chest can
+  // otherwise take a few minutes of exploration.
+  _spawnStarterChest() {
+    if (this._starterChestSpawned) return;
+    this._starterChestSpawned = true;
+    const c = new Chest(this.scene, 4, 4);
+    this.chests.push(c);
   }
 
   // Walk every loaded player position and ask the world to materialise any
