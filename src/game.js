@@ -13,7 +13,7 @@ import { vdist, clamp, hashString } from './utils.js';
 import { getSettings } from './settings.js';
 import { PauseMenu } from './pause.js';
 import { runItemHook, ITEM_BY_ID, pickRandomItemId } from './items.js';
-import { ABILITY_BY_ID } from './abilities.js';
+import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 
@@ -118,6 +118,7 @@ export class Game {
     this.players[1].setAbility('icebolt');
     this.enemies = [];
     this.projectiles = [];
+    this.abilityProjectiles = [];
     this.pickups = [];
     this.runes = [];   // item / ability rune drops in the world
     this.chests = []; // procedurally placed treasure chests
@@ -206,6 +207,11 @@ export class Game {
       partner,
       effects: this.effects,
       sound: this.sound,
+      scene: this.scene,
+      spawnAbilityProjectile: (opts) => {
+        const ap = new AbilityProjectile(this.scene, opts);
+        this.abilityProjectiles.push(ap);
+      },
     };
     if (player.tryCastAbility(ctx)) {
       this.effects.shakeCamera(0.1);
@@ -359,10 +365,11 @@ export class Game {
     // remove enemies, projectiles, pickups
     for (const e of this.enemies) { if (e.alive) this.scene.remove(e.mesh); }
     for (const p of this.projectiles) { p._destroy?.(); }
+    for (const ap of this.abilityProjectiles) { ap._cleanup?.(); }
     for (const p of this.pickups) { p._destroy?.(); }
     for (const r of this.runes) { r._destroy?.(); }
     for (const c of this.chests) { c._destroy?.(); }
-    this.enemies = []; this.projectiles = []; this.pickups = []; this.runes = []; this.chests = [];
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = [];
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
@@ -636,6 +643,10 @@ export class Game {
     // Projectiles
     for (const pr of this.projectiles) pr.update(dt, this.players, this.world);
     this.projectiles = this.projectiles.filter(pr => pr.alive);
+
+    // Ability projectiles (hit enemies, not players)
+    for (const ap of this.abilityProjectiles) ap.update(dt, this.enemies, this.effects, this.sound, this.world);
+    this.abilityProjectiles = this.abilityProjectiles.filter(ap => ap.alive);
 
     // Pickups
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
