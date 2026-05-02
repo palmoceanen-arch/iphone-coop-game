@@ -356,6 +356,9 @@
         align-content: start;
         -webkit-overflow-scrolling: touch;
       }
+      #shopList #shopInventory {
+        grid-column: 1 / -1;
+      }
       .shop-summary {
         flex: 0 0 auto;
         padding: 8px 12px 0;
@@ -418,7 +421,7 @@
         padding: 10px 12px 12px;
         touch-action: pan-y;
       }
-      #shopInventory { padding: 8px 12px 12px; }
+      #shopInventory { padding: 8px 0 12px; }
       .inv-header { font-size: 11px; opacity: 0.58; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px; }
       .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
       .inv-row:active { background: rgba(255,255,255,0.08); }
@@ -502,7 +505,6 @@
           <span class="gold">⛁ <span id="shopGold">0</span></span>
         </div>
         <div id="shopList"></div>
-        <div id="shopInventory"></div>
       </div>
     </div>
 

@@ -27,7 +27,8 @@ const inventoryBody = document.getElementById('inventoryBody');
 const inventoryClose = document.getElementById('inventoryClose');
 const shopOverlay = document.getElementById('shopOverlay');
 const shopList = document.getElementById('shopList');
-const shopInventory = document.getElementById('shopInventory');
+const shopInventory = document.createElement('div');
+shopInventory.id = 'shopInventory';
 const shopClose = document.getElementById('shopClose');
 
 // Pre-cache cooldown circle circumference (radius=44 → C ≈ 276.46)
@@ -484,7 +485,11 @@ socket.on('state:player', (s) => {
     shopList.appendChild(row);
   }
   // Render inventory below upgrades
-  if (s.shopOpen) renderShopInventory(s);
+  if (s.shopOpen) {
+    shopInventory.innerHTML = '';
+    shopList.appendChild(shopInventory);
+    renderShopInventory(s);
+  }
 });
 
 shopList.addEventListener('click', (e) => {
