@@ -12,6 +12,10 @@ import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString } from './utils.js';
 import { getSettings } from './settings.js';
 import { PauseMenu } from './pause.js';
+import { runItemHook, ITEM_BY_ID, pickRandomItemId } from './items.js';
+import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
+import { Rune } from './runes.js';
+import { Chest } from './chest.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -109,11 +113,19 @@ export class Game {
       new Player(0, this.world, this.effects, this.sound),
       new Player(1, this.world, this.effects, this.sound),
     ];
+    // Starter abilities so phone & desktop have something to cast immediately.
+    this.players[0].setAbility('fireball');
+    this.players[1].setAbility('icebolt');
     this.enemies = [];
     this.projectiles = [];
+    this.abilityProjectiles = [];
     this.pickups = [];
+    this.runes = [];   // item / ability rune drops in the world
+    this.chests = []; // procedurally placed treasure chests
 
     this._spawnInitialEnemies();
+    this._drainChestSpawns();
+    this._spawnStarterChest();
 
     this.totalKills = 0;
     this.elapsed = 0;
@@ -165,6 +177,8 @@ export class Game {
         e.preventDefault();
         this._togglePauseMenu();
       }
+      if (e.code === 'KeyG') this._tryCastAbility(0);
+      if (e.code === 'KeyH') this._tryCastAbility(1);
     });
     if (this.pauseMenu) {
       this.pauseMenu.onToggle = (open) => {
@@ -181,6 +195,27 @@ export class Game {
     if (this._waitingForStart) return;
     this.pauseMenu.toggle();
     this.menuPaused = this.pauseMenu.isOpen;
+  }
+
+  _tryCastAbility(slot) {
+    if (this._waitingForStart || this.paused || this.menuPaused || this.shopOpen || this.dead) return;
+    const player = this.players[slot];
+    if (!player) return;
+    const partner = this.players[1 - slot];
+    const ctx = {
+      enemyList: this.enemies,
+      partner,
+      effects: this.effects,
+      sound: this.sound,
+      scene: this.scene,
+      spawnAbilityProjectile: (opts) => {
+        const ap = new AbilityProjectile(this.scene, opts);
+        this.abilityProjectiles.push(ap);
+      },
+    };
+    if (player.tryCastAbility(ctx)) {
+      this.effects.shakeCamera(0.1);
+    }
   }
 
   // ---- Phone gamepad shop ------------------------------------------------
@@ -209,15 +244,23 @@ export class Game {
       this._pushPlayerState(slot);
       return;
     }
-    // Otherwise treat as input edge (attack, dash)
+    if (event.type === 'cast') {
+      this._tryCastAbility(slot);
+      return;
+    }
+    // Otherwise treat as input edge (attack, dash, interact)
     this.input.remoteEvent(slot, event.type);
   }
 
   _refreshShopState() {
     // Game pauses if EITHER phone is in shop OR keyboard shop is open.
-    this.shopOpen = !!(this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1]);
-    document.getElementById('shop')?.classList.toggle('open', !!this._keyboardShop);
-    if (this._keyboardShop) {
+    const anyPhoneShop = this.phoneShopOpen[0] || this.phoneShopOpen[1];
+    this.shopOpen = !!(this._keyboardShop || anyPhoneShop);
+    // Show PC shop panel when phone OR keyboard opens shop — monitor
+    // has room for full descriptions/inventory that phone lacks.
+    const showPc = !!(this._keyboardShop || anyPhoneShop);
+    document.getElementById('shop')?.classList.toggle('open', showPc);
+    if (showPc) {
       renderShop(this.players[0], this.players[1], (slot, idx) => this._tryBuy(slot, idx));
     }
   }
@@ -246,6 +289,25 @@ export class Game {
       level: p.upgradeLevels[u.id] || 0,
       price: priceFor(p, u),
     }));
+    const items = Object.entries(p.items || {}).map(([id, count]) => {
+      const def = ITEM_BY_ID[id];
+      return def ? { id, name: def.name, icon: def.icon, rarity: def.rarity, count, desc: def.desc || '' } : null;
+    }).filter(Boolean);
+    let ability = null;
+    if (p.ability) {
+      const def = ABILITY_BY_ID[p.ability];
+      if (def) {
+        ability = {
+          id: p.ability,
+          name: def.name,
+          desc: def.desc || '',
+          icon: def.icon,
+          color: '#' + def.color.toString(16).padStart(6, '0'),
+          cd: Math.max(0, p.abilityCd || 0),
+          cdMax: def.cd,
+        };
+      }
+    }
     this.lobby.sendToSlot(slot, 'state:player', {
       slot,
       hp: Math.round(p.hp),
@@ -255,7 +317,44 @@ export class Game {
       damage: Math.round(p.stats.damage),
       shopOpen: this.phoneShopOpen[slot],
       upgrades,
+      items,
+      ability,
+      interact: this._nearbyInteractFor(slot),
     });
+  }
+
+  _nearbyInteractFor(slot) {
+    const p = this.players[slot];
+    if (!p || !p.alive) return null;
+    let best = null;
+    let bestD = Infinity;
+    // Item runes auto-pickup so they don't need a prompt — only ability runes + chests do.
+    for (const r of this.runes) {
+      if (!r.alive || r.kind !== 'ability') continue;
+      const dx = r.mesh.position.x - p.pos.x;
+      const dz = r.mesh.position.z - p.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.0 && d < bestD) {
+        bestD = d;
+        const def = ABILITY_BY_ID[r.payloadId];
+        best = {
+          kind: 'ability',
+          label: def ? `Взять «${def.name}»` : 'Взять способность',
+          color: def ? '#' + def.color.toString(16).padStart(6, '0') : '#9bd1ff',
+        };
+      }
+    }
+    for (const c of this.chests) {
+      if (!c.alive || c.opened) continue;
+      const dx = c.pos.x - p.pos.x;
+      const dz = c.pos.z - p.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1.6 && d < bestD) {
+        bestD = d;
+        best = { kind: 'chest', label: 'Открыть сундук', color: '#ffd166' };
+      }
+    }
+    return best;
   }
 
   _startGame() {
@@ -271,17 +370,33 @@ export class Game {
     // remove enemies, projectiles, pickups
     for (const e of this.enemies) { if (e.alive) this.scene.remove(e.mesh); }
     for (const p of this.projectiles) { p._destroy?.(); }
+    for (const ap of this.abilityProjectiles) { ap._cleanup?.(); }
     for (const p of this.pickups) { p._destroy?.(); }
-    this.enemies = []; this.projectiles = []; this.pickups = [];
+    for (const r of this.runes) { r._destroy?.(); }
+    for (const c of this.chests) { c._destroy?.(); }
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = [];
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
       p.vel = { x: 0, z: 0 }; p.knockback = { x: 0, z: 0 };
+      // Wipe item / ability progress on restart — fresh roguelike run.
+      p.items = {};
+      p.ability = null;
+      p.abilityCd = 0;
+      p._shield = null;
+      p._berserk = null;
+      p._healAura = null;
+      p._itemSpeedMult = 1;
       p.revive();
     }
+    // Restore starter abilities so players still have something to cast.
+    this.players[0].setAbility('fireball');
+    this.players[1].setAbility('icebolt');
     this.dead = false;
     this.totalKills = 0;
+    this._starterChestSpawned = false;
     this._spawnInitialEnemies();
+    this._spawnStarterChest();
     document.getElementById('death').classList.remove('open');
   }
 
@@ -294,9 +409,30 @@ export class Game {
   _drainPendingEnemySpawns() {
     while (this.world.enemySpawns.length > 0) {
       const s = this.world.enemySpawns.shift();
-      const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, { homeX: s.homeX, homeZ: s.homeZ });
+      const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, {
+        homeX: s.homeX, homeZ: s.homeZ, elite: !!s.elite,
+      });
       this.enemies.push(e);
     }
+  }
+
+  _drainChestSpawns() {
+    if (!this.world.chestSpawns) return;
+    while (this.world.chestSpawns.length > 0) {
+      const s = this.world.chestSpawns.shift();
+      const c = new Chest(this.scene, s.x, s.z);
+      this.chests.push(c);
+    }
+  }
+
+  // Always spawn one chest near origin on first load so players see the
+  // pickup loop within a few seconds — discovering the first chest can
+  // otherwise take a few minutes of exploration.
+  _spawnStarterChest() {
+    if (this._starterChestSpawned) return;
+    this._starterChestSpawned = true;
+    const c = new Chest(this.scene, 4, 4);
+    this.chests.push(c);
   }
 
   // Walk every loaded player position and ask the world to materialise any
@@ -312,6 +448,7 @@ export class Game {
     }
     this.world.refreshActiveChunks(positions);
     this._drainPendingEnemySpawns();
+    this._drainChestSpawns();
   }
 
   // Lazy-build and update a small billboarded HP-style bar above a downed
@@ -348,11 +485,27 @@ export class Game {
   }
 
   _onPlayerHitsEnemy(player, enemy) {
-    const dmg = player.stats.damage * (1 + Math.random() * 0.05);
+    const partner = this.players[1 - player.index];
+    // ctx is shared between onAttack and onHit so items can tag e.g. crit.
+    const ctx = {
+      enemy,
+      partner,
+      enemyList: this.enemies,
+      dmgMult: 1,
+      crit: false,
+      dmg: 0,
+      echo: false,
+    };
+    runItemHook(player, 'onAttack', ctx);
+    let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult;
+    if (player._berserk) dmg *= player._berserk.dmg;
+    ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
-      // visual hit
-      this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, 0xffffff, 0.5, 0.12);
+      runItemHook(player, 'onHit', ctx);
+      const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
+      this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, flashColor, ctx.crit ? 0.7 : 0.5, 0.12);
       if (!enemy.alive) {
+        runItemHook(player, 'onKill', ctx);
         this._onEnemyDies(player, enemy);
       }
     }
@@ -363,6 +516,17 @@ export class Game {
     const dropFood = Math.random() < 0.18;
     const drops = spawnDrops(this.scene, enemy.pos.x, enemy.pos.z, enemy.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
+    // Elites guarantee an item rune drop. Random rarity weighted by the
+    // global pool (legendary will still be rare).
+    if (enemy.elite) {
+      const id = pickRandomItemId();
+      if (id) {
+        const r = new Rune(this.scene, enemy.pos.x, enemy.pos.z, 'item', id);
+        this.runes.push(r);
+        this.effects.ring(enemy.pos.x, 0.05, enemy.pos.z, 0xffd166, 1.6, 0.4);
+        this.effects.toast?.('Элитный сбрасывает реликвию!', '#ffd166');
+      }
+    }
     // Shared XP — both players gain regardless of who killed (even if dead;
     // they level up so revival lands them at the proper stats).
     for (const p of this.players) {
@@ -469,16 +633,44 @@ export class Game {
       },
     };
     for (const e of this.enemies) e.update(dt, this.players, ctx);
-    // Cleanup dead bombers etc that left scene
-    this.enemies = this.enemies.filter(e => e.alive || e.killedBy === 'self' ? e.alive : true).filter(e => e.alive);
+    // Credit kills from damage-over-time effects (poison) that happen inside
+    // enemy.update. The enemy sets _deathCredit to the source player before
+    // calling die().
+    for (const e of this.enemies) {
+      if (!e.alive && e._deathCredit) {
+        this._onEnemyDies(e._deathCredit, e);
+        e._deathCredit = null;
+      }
+    }
+    // Cleanup dead enemies
+    this.enemies = this.enemies.filter(e => e.alive);
 
     // Projectiles
     for (const pr of this.projectiles) pr.update(dt, this.players, this.world);
     this.projectiles = this.projectiles.filter(pr => pr.alive);
 
+    // Ability projectiles (hit enemies, not players)
+    for (const ap of this.abilityProjectiles) ap.update(dt, this.enemies, this.effects, this.sound, this.world);
+    this.abilityProjectiles = this.abilityProjectiles.filter(ap => ap.alive);
+
+    // Credit kills from ability projectiles and instant-damage abilities
+    for (const e of this.enemies) {
+      if (!e.alive && e._deathCredit) {
+        this._onEnemyDies(e._deathCredit, e);
+        e._deathCredit = null;
+      }
+    }
+    this.enemies = this.enemies.filter(e => e.alive);
+
     // Pickups
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
     this.pickups = this.pickups.filter(pk => pk.alive);
+
+    // Chests + runes
+    for (const c of this.chests) c.update(dt, this.players, this.sound, this.effects, (rune) => this.runes.push(rune));
+    this.chests = this.chests.filter(c => c.alive);
+    for (const r of this.runes) r.update(dt, this.players, this.sound, this.effects);
+    this.runes = this.runes.filter(r => r.alive);
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
@@ -550,6 +742,10 @@ export class Game {
     set('lvl2', p2.level);
     set('dmg1', Math.round(p1.stats.damage));
     set('dmg2', Math.round(p2.stats.damage));
+    this._renderItemBar(p1, 'items1');
+    this._renderItemBar(p2, 'items2');
+    this._renderAbilitySlot(p1, 'ability1', 'G');
+    this._renderAbilitySlot(p2, 'ability2', 'H');
     const d = vdist(p1.pos, p2.pos);
     set('dist', `${d.toFixed(1)}m apart`);
     // clock
@@ -566,6 +762,71 @@ export class Game {
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);
     const greyEl = document.getElementById('grey');
     if (greyEl) greyEl.style.backdropFilter = `grayscale(${this.leashRatio * 100}%) brightness(${1 - this.leashRatio * 0.3})`;
+  }
+
+  _renderItemBar(player, elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const ids = Object.keys(player.items).filter(k => (player.items[k] || 0) > 0);
+    if (ids.length === 0) {
+      if (el.childElementCount > 0) el.innerHTML = '';
+      return;
+    }
+    // Diff-friendly rebuild: only rewrite when the set/counts changed.
+    const sig = ids.map(id => `${id}:${player.items[id]}`).sort().join(',');
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = '';
+    for (const id of ids) {
+      const def = ITEM_BY_ID[id];
+      if (!def) continue;
+      const node = document.createElement('span');
+      node.className = 'item-icon';
+      node.dataset.rar = def.rarity;
+      node.title = `${def.name} ×${player.items[id]} — ${def.desc}`;
+      node.innerHTML = `<span>${def.icon || '?'}</span><span class="stk">×${player.items[id]}</span>`;
+      el.appendChild(node);
+    }
+  }
+
+  _renderAbilitySlot(player, elId, key) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const id = player.ability;
+    if (!id) {
+      if (!el.classList.contains('empty')) {
+        el.classList.add('empty');
+        el.classList.remove('ready');
+        el.querySelector('.icon').textContent = '·';
+        el.querySelector('.ab-name').textContent = 'пусто';
+        el.querySelector('.cd-text').textContent = '';
+        const circle = el.querySelector('circle');
+        if (circle) circle.setAttribute('stroke-dashoffset', '100.53');
+      }
+      return;
+    }
+    const def = ABILITY_BY_ID[id];
+    if (!def) return;
+    el.classList.remove('empty');
+    if (el.dataset.id !== id) {
+      el.dataset.id = id;
+      el.querySelector('.icon').textContent = def.icon;
+      el.querySelector('.ab-name').textContent = def.name;
+      el.querySelector('.icon-wrap').style.boxShadow = `inset 0 0 0 2px #${def.color.toString(16).padStart(6, '0')}`;
+    }
+    const cdMax = def.cd;
+    const cd = player.abilityCd;
+    const ready = cd <= 0;
+    const circle = el.querySelector('circle');
+    if (circle) {
+      const C = 2 * Math.PI * 16; // ~100.53
+      const frac = ready ? 0 : (cd / cdMax);
+      circle.setAttribute('stroke-dashoffset', String(C * (1 - frac)));
+    }
+    const t = el.querySelector('.cd-text');
+    if (t) t.textContent = ready ? '' : cd.toFixed(1);
+    el.classList.toggle('ready', ready);
+    el.querySelector('.keyhint').textContent = key;
   }
 
   render() {

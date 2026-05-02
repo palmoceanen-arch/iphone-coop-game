@@ -26,6 +26,23 @@
       .hpbar > .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg,#52e07a,#2bb14a); transition: width 120ms linear; }
       .meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; opacity: 0.9; }
       .hud.right .meta { justify-content: flex-end; }
+      .item-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; min-height: 24px; }
+      .hud.right .item-bar { justify-content: flex-end; }
+      .item-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 12px; line-height: 1; gap: 2px; cursor: default; position: relative; }
+      .item-icon .stk { font-weight: 700; font-size: 11px; opacity: 0.9; color: #fff; }
+      .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.35); }
+      .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.45); }
+      .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.6); }
+      .ability-slot { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 8px 4px 6px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; font-size: 12px; min-width: 80px; }
+      .hud.right .ability-slot { float: right; }
+      .ability-slot .icon-wrap { position: relative; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: #1a1f28; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.1); }
+      .ability-slot .icon { font-size: 16px; line-height: 1; }
+      .ability-slot .cd-overlay { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
+      .ability-slot .cd-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
+      .ability-slot .ab-name { font-weight: 600; font-size: 11px; opacity: 0.9; }
+      .ability-slot .keyhint { font-size: 10px; opacity: 0.6; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.08); margin-left: auto; }
+      .ability-slot.ready .icon-wrap { box-shadow: inset 0 0 0 2px rgba(122,255,138,0.6); }
+      .ability-slot.empty { opacity: 0.45; }
       .gold { color: #ffd166; font-weight: 700; }
       #topbar {
         position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -61,6 +78,14 @@
       .upg .lvl { font-size: 11px; opacity: 0.7; }
       .upg .price { color: #ffd166; font-weight: 700; }
       .upg.locked { opacity: 0.4; }
+      .inv-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+      .inv-section h4 { margin: 0 0 6px; font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.5px; }
+      .inv-item, .inv-ability { padding: 5px 8px; margin: 3px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; }
+      .inv-item:hover, .inv-ability:hover { background: #222a36; }
+      .inv-item .inv-name, .inv-ability .inv-name { font-weight: 600; }
+      .inv-item .inv-desc, .inv-ability .inv-desc { display: none; opacity: 0.6; font-size: 11px; margin-top: 3px; }
+      .inv-item.open .inv-desc, .inv-ability.open .inv-desc { display: block; }
+      .inv-empty { opacity: 0.4; font-size: 11px; font-style: italic; padding: 4px 0; }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
       #help { position: absolute; left: 12px; bottom: 12px; font-size: 12px; opacity: 0.85; background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 12px; max-width: 360px; line-height: 1.55; }
       #help .row { display: flex; gap: 8px; align-items: center; }
@@ -201,6 +226,12 @@
             <span>LV <span id="lvl1">1</span></span>
             <span>DMG <span id="dmg1">10</span></span>
           </div>
+          <div class="item-bar" id="items1"></div>
+          <div class="ability-slot empty" id="ability1">
+            <div class="icon-wrap"><span class="icon">·</span><svg class="cd-overlay" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="3" stroke-dasharray="100.53" stroke-dashoffset="100.53" transform="rotate(-90 18 18)"/></svg><span class="cd-text"></span></div>
+            <span class="ab-name">пусто</span>
+            <span class="keyhint">G</span>
+          </div>
         </div>
         <div class="hud right">
           <div class="name">P2 · Coral</div>
@@ -210,10 +241,16 @@
             <span>LV <span id="lvl2">1</span></span>
             <span class="gold">⛁ <span id="gold2">0</span></span>
           </div>
+          <div class="item-bar" id="items2"></div>
+          <div class="ability-slot empty" id="ability2">
+            <div class="icon-wrap"><span class="icon">·</span><svg class="cd-overlay" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="3" stroke-dasharray="100.53" stroke-dashoffset="100.53" transform="rotate(-90 18 18)"/></svg><span class="cd-text"></span></div>
+            <span class="ab-name">пусто</span>
+            <span class="keyhint">H</span>
+          </div>
         </div>
         <div id="help">
-          <div class="row"><span class="who p1">P1</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>F</kbd> attack · <kbd>R</kbd> dash</div>
-          <div class="row"><span class="who p2">P2</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> move · <kbd>L</kbd> attack · <kbd>K</kbd> dash</div>
+          <div class="row"><span class="who p1">P1</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>F</kbd> attack · <kbd>R</kbd> dash · <kbd>G</kbd> ability · <kbd>E</kbd> взять</div>
+          <div class="row"><span class="who p2">P2</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> move · <kbd>L</kbd> attack · <kbd>K</kbd> dash · <kbd>H</kbd> ability · <kbd>J</kbd> взять</div>
           <div class="row"><kbd>Tab</kbd> upgrade shop · <kbd>1</kbd>‥<kbd>4</kbd> P1 buy · <kbd>7</kbd>‥<kbd>0</kbd> P2 buy · <kbd>P</kbd> pause · <kbd>Esc</kbd> menu</div>
         </div>
         <div id="toast"></div>
@@ -225,10 +262,12 @@
               <div class="shop-col p1">
                 <h3><span class="who">Player 1 — Cyan</span><span class="gold">⛁ <span id="shop-gold1">0</span></span></h3>
                 <div id="shop-upgs-1"></div>
+                <div id="shop-inv-1" class="inv-section"></div>
               </div>
               <div class="shop-col p2">
                 <h3><span class="who">Player 2 — Coral</span><span class="gold">⛁ <span id="shop-gold2">0</span></span></h3>
                 <div id="shop-upgs-2"></div>
+                <div id="shop-inv-2" class="inv-section"></div>
               </div>
             </div>
           </div>

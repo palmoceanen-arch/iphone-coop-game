@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { clamp } from './utils.js';
 import { spawnCharacter, crossFadeTo } from './models.js';
+import { runItemHook } from './items.js';
+import { ABILITY_BY_ID } from './abilities.js';
 
 const COLORS = [
   { body: 0x6ad0ff, trim: 0x2a5d80, eye: 0xffffff },
@@ -56,6 +58,13 @@ export class Player {
     // Revive progress (filled by partner holding dash near a downed body).
     this.reviveProgress = 0;
 
+    // Items + ability state -------------------------------------------
+    this.items = {};        // { itemId: stackCount }
+    this.ability = null;    // ability id
+    this.abilityCd = 0;     // remaining cooldown in seconds
+    this._itemSpeedMult = 1;
+    this._lastIntent = null;
+
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
   }
@@ -94,9 +103,33 @@ export class Player {
     this.knockback.z += dirZ * force;
   }
 
-  takeDamage(amount, fromX, fromZ) {
+  takeDamage(amount, fromX, fromZ, attacker = null) {
     if (!this.alive || this.invuln > 0) return false;
-    this.hp = Math.max(0, this.hp - amount);
+
+    // Item hook: dodge / pre-mitigation. Hooks may set ctx.dodged or
+    // adjust ctx.amount.
+    const tdCtx = { amount, attacker, dodged: false };
+    runItemHook(this, 'onTakeDamage', tdCtx);
+    if (tdCtx.dodged) {
+      this.invuln = 0.3;
+      this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), 'miss', '#9dfcff');
+      return false;
+    }
+    let amt = tdCtx.amount;
+
+    // Active shield orb absorbs damage before HP is touched.
+    if (this._shield && this._shield.hp > 0) {
+      const absorbed = Math.min(this._shield.hp, amt);
+      this._shield.hp -= absorbed;
+      amt -= absorbed;
+      this.effects.flashSphere(this.pos.x, 1.0, this.pos.z, 0x6aa6ff, 1.0, 0.18);
+    }
+
+    if (amt <= 0) {
+      this.invuln = 0.3;
+      return true;
+    }
+    this.hp = Math.max(0, this.hp - amt);
     this.invuln = 0.6;
     const dx = this.pos.x - fromX, dz = this.pos.z - fromZ;
     const len = Math.hypot(dx, dz) || 1;
@@ -104,7 +137,7 @@ export class Player {
     this.effects.shakeCamera(0.18);
     this.effects.doHitStop(0.04);
     this.effects.burst(this.pos.x, 1.2, this.pos.z, 0xff5050, 8, 4, 0.35);
-    this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), amount, '#ff7a7a');
+    this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), amt, '#ff7a7a');
     this.sound.hurt();
     if (this.hp <= 0) this.die();
     return true;
@@ -141,6 +174,7 @@ export class Player {
   }
 
   update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback) {
+    this._lastIntent = intent;
     if (!this.alive) {
       // Keep mesh visible to show death pose; just freeze physics & animation.
       this._character?.mixer?.update(dt);
@@ -148,15 +182,44 @@ export class Player {
     }
     this.mesh.visible = true;
 
+    // Per-frame item hooks (regen, speed multiplier setup, etc).
+    runItemHook(this, 'onTick', { dt, partner: otherPlayer });
+
+    // Buff timers + visuals -------------------------------------------
+    this._buffVfxT = (this._buffVfxT || 0) + dt;
+    if (this._shield) {
+      this._shield.ttl -= dt;
+      if (this._shield.ttl <= 0 || this._shield.hp <= 0) this._shield = null;
+      else if (this._buffVfxT % 0.8 < dt) {
+        this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x6aa6ff, 1.2 + Math.sin(this._buffVfxT * 3) * 0.2, 0.25);
+      }
+    }
+    if (this._berserk) {
+      this._berserk.ttl -= dt;
+      if (this._berserk.ttl <= 0) this._berserk = null;
+      else if (this._buffVfxT % 0.6 < dt) {
+        this.effects.burst(this.pos.x, 0.5, this.pos.z, 0xff5050, 2, 3, 0.18);
+      }
+    }
+    if (this._healAura) {
+      this._healAura.ttl -= dt;
+      this.heal(this._healAura.rate * dt);
+      if (this._healAura.ttl <= 0) this._healAura = null;
+      else if (this._buffVfxT % 0.7 < dt) {
+        this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x7aff8a, 1.0, 0.2);
+      }
+    }
+
     // Movement
     const dashing = this.dashTimer > 0;
-    let speed = this.stats.speed;
+    let speed = this.stats.speed * (this._itemSpeedMult || 1);
     if (dashing) speed *= 2.6;
 
     // Cooldowns
     this.attackTimer = Math.max(0, this.attackTimer - dt);
     this.invuln = Math.max(0, this.invuln - dt);
     this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    this.abilityCd = Math.max(0, this.abilityCd - dt);
     if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
 
     // Dash trigger
@@ -171,11 +234,13 @@ export class Player {
       this.applyKnockback(dx / len, dz / len, 14);
       this.sound.dash();
       this.effects.burst(this.pos.x, 0.6, this.pos.z, 0xffffff, 8, 5, 0.25);
+      runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
     // Attack trigger
+    const attackCdMult = this._berserk ? (1 / this._berserk.atk) : 1;
     if (intent.attack && this.attackTimer <= 0) {
-      this.attackTimer = this.stats.attackCooldown;
+      this.attackTimer = this.stats.attackCooldown * attackCdMult;
       this.attackAnim = 0;
       this.swingActive = true;
       this.swingProcessed = false;
@@ -294,6 +359,36 @@ export class Player {
       this.effects.shakeCamera(0.15);
       this.effects.doHitStop(0.04);
     }
+  }
+
+  // Stack a passive item on this player.
+  addItem(id) {
+    this.items[id] = (this.items[id] || 0) + 1;
+  }
+
+  // Replace the active ability slot. Returns the previous ability id (or null).
+  setAbility(id) {
+    const prev = this.ability;
+    this.ability = id;
+    this.abilityCd = 0;
+    return prev;
+  }
+
+  // Try to cast the equipped ability. Returns true if it fired.
+  tryCastAbility(ctx) {
+    if (!this.ability) return false;
+    if (this.abilityCd > 0) return false;
+    if (!this.alive) return false;
+    const def = ABILITY_BY_ID[this.ability];
+    if (!def) return false;
+    try {
+      def.cast(this, ctx);
+    } catch (err) {
+      console.warn('[ability cast]', this.ability, err);
+      return false;
+    }
+    this.abilityCd = def.cd;
+    return true;
   }
 
   applyUpgrade(kind) {

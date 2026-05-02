@@ -69,27 +69,30 @@
 
       /* Controller surface */
       #controller .badge {
-        position: absolute; top: max(env(safe-area-inset-top, 0px), 12px); left: 50%;
-        transform: translateX(-50%);
-        padding: 6px 16px;
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        left: calc(env(safe-area-inset-left, 0px) + 16px);
+        padding: 5px 12px;
         border-radius: 999px;
         background: rgba(20, 28, 48, 0.85);
         border: 1px solid rgba(255,255,255,0.12);
         font-weight: 600;
-        font-size: 14px;
+        font-size: 12px;
         z-index: 5;
       }
       #controller .badge .p { color: var(--p1); }
       #controller .status {
-        position: absolute; top: max(env(safe-area-inset-top, 0px), 50px); left: 50%;
-        transform: translateX(-50%);
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        right: calc(env(safe-area-inset-right, 0px) + 16px);
         font-size: 12px; color: #8e9bb8;
+        z-index: 5;
       }
       .joystick {
         position: absolute;
-        bottom: max(env(safe-area-inset-bottom, 0px), 32px);
-        left: 24px;
-        width: 180px; height: 180px;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+        left: calc(env(safe-area-inset-left, 0px) + 18px);
+        width: 168px; height: 168px;
         border-radius: 50%;
         background: rgba(255,255,255,0.06);
         border: 2px solid rgba(255,255,255,0.12);
@@ -106,87 +109,258 @@
         box-shadow: 0 6px 14px rgba(0,0,0,0.45);
         pointer-events: none;
       }
-      .actions {
-        position: absolute;
-        bottom: max(env(safe-area-inset-bottom, 0px), 32px);
-        right: 24px;
-        display: flex; flex-direction: column; gap: 14px;
-      }
+      /* Diablo-Immortal-inspired diamond cluster:
+         attack at bottom-right, dash above attack, ability to the left of attack,
+         interact appears above ability when contextual. Each button is positioned
+         absolutely so layout never breaks at unusual aspect ratios. */
       .action {
-        width: 92px; height: 92px;
+        position: absolute;
         border-radius: 50%;
         border: 2px solid rgba(255,255,255,0.18);
         background: linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 100%);
         color: #fff;
-        font-size: 16px;
+        font-size: 30px;
         font-weight: 700;
         letter-spacing: 0.5px;
         display: flex; align-items: center; justify-content: center;
         touch-action: none;
         backdrop-filter: blur(6px);
         -webkit-backdrop-filter: blur(6px);
+        z-index: 3;
       }
-      .action.attack { background: linear-gradient(180deg, rgba(255,138,138,0.55) 0%, rgba(220,80,80,0.4) 100%); border-color: rgba(255,138,138,0.6); }
-      .action.dash { background: linear-gradient(180deg, rgba(106,208,255,0.55) 0%, rgba(60,148,200,0.4) 100%); border-color: rgba(106,208,255,0.6); }
-      .action.shop { background: linear-gradient(180deg, rgba(255,209,102,0.55) 0%, rgba(212,160,42,0.4) 100%); border-color: rgba(255,209,102,0.6); width: 60px; height: 60px; font-size: 22px; }
+      .action.attack {
+        right: calc(env(safe-area-inset-right, 0px) + 18px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+        width: 92px; height: 92px;
+        background: linear-gradient(180deg, rgba(255,138,138,0.55) 0%, rgba(220,80,80,0.4) 100%);
+        border-color: rgba(255,138,138,0.6);
+      }
+      .action.dash {
+        right: calc(env(safe-area-inset-right, 0px) + 26px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 124px);
+        width: 76px; height: 76px;
+        font-size: 26px;
+        background: linear-gradient(180deg, rgba(106,208,255,0.55) 0%, rgba(60,148,200,0.4) 100%);
+        border-color: rgba(106,208,255,0.6);
+      }
+      .action.ability {
+        right: calc(env(safe-area-inset-right, 0px) + 122px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 28px);
+        width: 84px; height: 84px;
+        font-size: 30px;
+        background: linear-gradient(180deg, rgba(173,138,255,0.55) 0%, rgba(126,86,212,0.4) 100%);
+        border-color: rgba(173,138,255,0.6);
+      }
+      .action.shop {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px; height: 56px;
+        font-size: 26px;
+        background: linear-gradient(180deg, rgba(255,209,102,0.6) 0%, rgba(212,160,42,0.45) 100%);
+        border-color: rgba(255,209,102,0.7);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      }
+      .action.shop .shop-label {
+        position: absolute; top: 100%;
+        left: 50%; transform: translateX(-50%) translateY(2px);
+        font-size: 10px; font-weight: 700;
+        color: #ffd166;
+        text-shadow: 0 1px 3px #000;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .action.ability.empty { opacity: 0.35; filter: grayscale(0.6); }
+      .action.ability.cooling { opacity: 0.7; }
+      .action.ability .ab-cd-text {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px; font-weight: 800;
+        text-shadow: 0 1px 3px #000;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg circle {
+        fill: none;
+        stroke: rgba(0,0,0,0.55);
+        stroke-width: 6;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+        transition: stroke-dashoffset 0.05s linear;
+      }
+      .action.interact {
+        position: absolute;
+        right: calc(env(safe-area-inset-right, 0px) + 130px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 124px);
+        width: 74px; height: 74px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,209,102,0.85);
+        background: linear-gradient(180deg, rgba(255,221,138,0.85) 0%, rgba(218,166,52,0.7) 100%);
+        color: #1a1206;
+        font-size: 28px;
+        font-weight: 800;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45);
+        animation: pulseInteract 1.2s ease-in-out infinite;
+        touch-action: none;
+        z-index: 4;
+      }
+      .action.interact.show { display: flex; }
+      .action.interact.pressed { transform: scale(0.9); filter: brightness(1.3); }
+      .action.interact .label {
+        position: absolute;
+        right: 100%;
+        top: 50%;
+        transform: translate(-10px, -50%);
+        white-space: nowrap;
+        background: rgba(20, 28, 48, 0.92);
+        color: #e0e6f3;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,209,102,0.5);
+        pointer-events: none;
+      }
+      @keyframes pulseInteract {
+        0%, 100% { box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45); }
+        50% { box-shadow: 0 0 28px rgba(255,209,102,0.85), 0 4px 16px rgba(0,0,0,0.45); }
+      }
+      .item-bar {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 76px);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        max-width: min(60vw, 360px);
+        justify-content: center;
+        pointer-events: none;
+      }
+      .item-bar .item-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px; height: 26px;
+        padding: 0 5px;
+        background: rgba(20, 28, 48, 0.9);
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 5px;
+        font-size: 14px;
+        gap: 2px;
+        color: #e0e6f3;
+      }
+      .item-bar .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.45); }
+      .item-bar .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.55); }
+      .item-bar .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.7); }
+      .item-bar .item-icon .count { font-size: 11px; color: #cbd5ee; opacity: 0.85; }
       .action.pressed { transform: scale(0.92); filter: brightness(1.4); }
       .hint {
         position: absolute; top: 50%; left: 50%;
-        transform: translate(-50%, -50%);
+        transform: translate(-50%, -20%);
         text-align: center; color: #6e7a96; font-size: 13px;
         max-width: 280px; pointer-events: none;
       }
       .stats {
-        position: absolute; top: max(env(safe-area-inset-top, 0px), 78px); left: 50%;
-        transform: translateX(-50%);
-        display: flex; gap: 14px; align-items: center;
-        font-size: 13px; color: #c0cce8;
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 42px);
+        left: calc(env(safe-area-inset-left, 0px) + 16px);
+        display: flex; gap: 12px; align-items: center;
+        font-size: 12px; color: #c0cce8;
+        background: rgba(20, 28, 48, 0.85);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 999px;
+        padding: 4px 12px;
+        z-index: 5;
       }
       .stats .gold { color: #ffd166; font-weight: 700; }
       .stats .hp { color: #ff8a8a; font-weight: 700; }
       .stats .dmg { color: #ffe28a; }
+      /* Shop overlay: full-screen, header sticks at top, list scrolls.
+         Two-column grid in landscape so all upgrades are visible. */
       .shop-overlay {
         position: absolute; inset: 0;
         background: rgba(8, 11, 18, 0.96);
         z-index: 50;
         display: none;
         flex-direction: column;
-        padding: max(env(safe-area-inset-top, 0px), 18px) 18px max(env(safe-area-inset-bottom, 0px), 18px);
-        overflow-y: auto;
+        padding: 0;
         touch-action: pan-y;
       }
       .shop-overlay.open { display: flex; }
-      .shop-overlay h2 { margin: 0 0 8px; font-size: 22px; }
       .shop-overlay .top {
-        display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;
+        flex: 0 0 auto;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: calc(env(safe-area-inset-top, 0px) + 12px)
+                 calc(env(safe-area-inset-right, 0px) + 16px)
+                 10px
+                 calc(env(safe-area-inset-left, 0px) + 16px);
+        gap: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        background: rgba(8, 11, 18, 0.96);
       }
-      .shop-overlay .gold { color: #ffd166; font-weight: 800; font-size: 18px; }
+      .shop-overlay h2 { margin: 0; font-size: 18px; }
+      .shop-overlay .gold { color: #ffd166; font-weight: 800; font-size: 16px; flex: 1 1 auto; text-align: center; }
       .shop-overlay .close-btn {
         background: rgba(255,255,255,0.08);
         color: #e0e6f3; padding: 8px 14px; border: 1px solid rgba(255,255,255,0.18);
         border-radius: 10px; font-size: 14px;
+        touch-action: manipulation;
+      }
+      #shopList {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 10px
+                 calc(env(safe-area-inset-right, 0px) + 12px)
+                 calc(env(safe-area-inset-bottom, 0px) + 12px)
+                 calc(env(safe-area-inset-left, 0px) + 12px);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        align-content: start;
+        -webkit-overflow-scrolling: touch;
+      }
+      @media (max-width: 480px) {
+        #shopList { grid-template-columns: 1fr; }
       }
       .upg-row {
         display: grid; grid-template-columns: 1fr auto;
         gap: 8px; align-items: center;
         background: rgba(255,255,255,0.04);
         border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 14px; padding: 12px 14px;
-        margin-bottom: 10px;
+        border-radius: 12px; padding: 8px 10px;
       }
       .upg-row.locked { opacity: 0.45; }
-      .upg-row .name { font-weight: 700; font-size: 15px; }
-      .upg-row .desc { color: #8a96b6; font-size: 12px; margin-top: 2px; }
-      .upg-row .lvl { color: #6ad0ff; font-weight: 600; font-size: 12px; }
+      .upg-row .name { font-weight: 700; font-size: 13px; }
+      .upg-row .desc { color: #8a96b6; font-size: 11px; margin-top: 2px; line-height: 1.25; }
+      .upg-row .lvl { color: #6ad0ff; font-weight: 600; font-size: 11px; }
       .upg-row .price-btn {
         background: linear-gradient(180deg, #d4a02a 0%, #a87a17 100%);
         color: #1a1206; font-weight: 800;
-        border: none; border-radius: 12px;
-        padding: 10px 14px; font-size: 14px;
-        min-width: 78px; text-align: center;
+        border: none; border-radius: 10px;
+        padding: 8px 10px; font-size: 13px;
+        min-width: 68px; text-align: center;
         touch-action: manipulation;
       }
       .upg-row.locked .price-btn { background: #2a3142; color: #6e7a96; }
+      #shopInventory { padding: 0 calc(env(safe-area-inset-right, 0px) + 12px) calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 12px); }
+      .inv-header { font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px; }
+      .inv-row { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; margin: 4px 0; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; touch-action: manipulation; }
+      .inv-row:active { background: rgba(255,255,255,0.08); }
+      .inv-row .inv-name { font-weight: 600; }
+      .inv-row .inv-desc { display: none; opacity: 0.55; font-size: 11px; margin-top: 3px; }
+      .inv-row.open .inv-desc { display: block; }
       :root { --p1: #6ad0ff; --p2: #ff8a8a; }
       #controller.p1 .badge .p { color: var(--p1); }
       #controller.p2 .badge .p { color: var(--p2); }
@@ -210,12 +384,23 @@
         <span class="dmg">⚔ <span id="stDmg">0</span></span>
       </div>
       <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
-      <div class="actions">
-        <div class="action attack" id="btnAttack">⚔</div>
-        <div class="action dash" id="btnDash">⇢</div>
-        <div class="action shop" id="btnShop">⛁</div>
+      <div class="item-bar" id="itemBar"></div>
+      <div class="action attack" id="btnAttack">⚔</div>
+      <div class="action dash" id="btnDash">⇢</div>
+      <div class="action ability empty" id="btnAbility">
+        <span class="ab-icon">·</span>
+        <svg class="ab-cd-svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="0"/></svg>
+        <span class="ab-cd-text"></span>
       </div>
-      <div class="hint" id="hint">Левый стик — движение · ⚔ удар · ⇢ рывок · ⛁ магазин</div>
+      <div class="action shop" id="btnShop">
+        ⛁
+        <span class="shop-label">МАГАЗИН</span>
+      </div>
+      <div class="action interact" id="btnInteract">
+        <span class="label" id="interactLabel">Взять</span>
+        ✋
+      </div>
+      <div class="hint" id="hint">Стик — движение · удар · рывок · способность · магазин</div>
 
       <div class="shop-overlay" id="shopOverlay">
         <div class="top">
@@ -228,6 +413,7 @@
           <span class="gold">⛁ <span id="shopGold">0</span></span>
         </div>
         <div id="shopList"></div>
+        <div id="shopInventory"></div>
       </div>
     </div>
 

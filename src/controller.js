@@ -18,9 +18,17 @@ const knob = document.getElementById('knob');
 const btnAttack = document.getElementById('btnAttack');
 const btnDash = document.getElementById('btnDash');
 const btnShop = document.getElementById('btnShop');
+const btnAbility = document.getElementById('btnAbility');
+const btnInteract = document.getElementById('btnInteract');
+const interactLabelEl = document.getElementById('interactLabel');
+const itemBarEl = document.getElementById('itemBar');
 const shopOverlay = document.getElementById('shopOverlay');
 const shopList = document.getElementById('shopList');
+const shopInventory = document.getElementById('shopInventory');
 const shopClose = document.getElementById('shopClose');
+
+// Pre-cache cooldown circle circumference (radius=44 → C ≈ 276.46)
+const ABILITY_CD_CIRC = 2 * Math.PI * 44;
 
 const socket = io({ transports: ['websocket', 'polling'] });
 
@@ -173,6 +181,34 @@ btnShop.addEventListener('pointerup', shopRelease);
 btnShop.addEventListener('pointercancel', shopRelease);
 btnShop.addEventListener('pointerleave', shopRelease);
 
+// Ability button: tap → emit 'cast' event (host enforces cooldown).
+btnAbility.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (btnAbility.classList.contains('empty') || btnAbility.classList.contains('cooling')) return;
+  btnAbility.classList.add('pressed');
+  btnAbility.setPointerCapture(e.pointerId);
+  if (navigator.vibrate) navigator.vibrate(20);
+  if (assignedSlot >= 0) socket.emit('input:event', { type: 'cast' });
+});
+const abilityRelease = () => btnAbility.classList.remove('pressed');
+btnAbility.addEventListener('pointerup', abilityRelease);
+btnAbility.addEventListener('pointercancel', abilityRelease);
+btnAbility.addEventListener('pointerleave', abilityRelease);
+
+// Interact button: only visible when host says something is nearby.
+btnInteract.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (!btnInteract.classList.contains('show')) return;
+  btnInteract.classList.add('pressed');
+  btnInteract.setPointerCapture(e.pointerId);
+  if (navigator.vibrate) navigator.vibrate(20);
+  if (assignedSlot >= 0) socket.emit('input:event', { type: 'interact' });
+});
+const interactRelease = () => btnInteract.classList.remove('pressed');
+btnInteract.addEventListener('pointerup', interactRelease);
+btnInteract.addEventListener('pointercancel', interactRelease);
+btnInteract.addEventListener('pointerleave', interactRelease);
+
 shopClose.addEventListener('click', (e) => {
   e.preventDefault();
   if (assignedSlot >= 0) socket.emit('input:event', { type: 'closeShop' });
@@ -181,6 +217,143 @@ shopClose.addEventListener('click', (e) => {
 // ----------------------------------------------------------------------
 // Player-state push from host: render HUD + shop list.
 // ----------------------------------------------------------------------
+let _itemBarSig = '';
+function renderItemBar(items) {
+  items = items || [];
+  const sig = items.map(it => `${it.id}:${it.count}`).join('|');
+  if (sig === _itemBarSig) return;
+  _itemBarSig = sig;
+  itemBarEl.innerHTML = '';
+  for (const it of items) {
+    const el = document.createElement('span');
+    el.className = 'item-icon';
+    if (it.rarity) el.dataset.rar = it.rarity;
+    el.title = it.name || it.id;
+    el.innerHTML = `<span class="ico">${it.icon || '?'}</span><span class="count">×${it.count}</span>`;
+    itemBarEl.appendChild(el);
+  }
+}
+
+let _abilitySig = '';
+const abilityIconEl = btnAbility.querySelector('.ab-icon');
+const abilityCdTextEl = btnAbility.querySelector('.ab-cd-text');
+const abilityCdCircle = btnAbility.querySelector('.ab-cd-svg circle');
+abilityCdCircle.setAttribute('stroke-dasharray', String(ABILITY_CD_CIRC));
+abilityCdCircle.setAttribute('stroke-dashoffset', String(ABILITY_CD_CIRC));
+
+// Server pushes state at ~4Hz; we tick the cooldown locally for a smooth UI.
+let _abilityState = null; // { id, color, icon, cd, cdMax, lastSyncT }
+
+function renderAbility(ab) {
+  const sig = ab ? `${ab.id}:${ab.color}` : '';
+  if (sig !== _abilitySig) {
+    _abilitySig = sig;
+    if (ab) {
+      abilityIconEl.textContent = ab.icon || '✦';
+      btnAbility.classList.remove('empty');
+      btnAbility.style.background = `linear-gradient(180deg, ${hexToRgba(ab.color, 0.55)} 0%, ${hexToRgba(ab.color, 0.35)} 100%)`;
+      btnAbility.style.borderColor = hexToRgba(ab.color, 0.8);
+    } else {
+      abilityIconEl.textContent = '·';
+      btnAbility.classList.add('empty');
+      btnAbility.style.background = '';
+      btnAbility.style.borderColor = '';
+    }
+  }
+  if (!ab) {
+    _abilityState = null;
+    abilityCdTextEl.textContent = '';
+    abilityCdCircle.setAttribute('stroke-dashoffset', String(ABILITY_CD_CIRC));
+    btnAbility.classList.remove('cooling');
+    return;
+  }
+  _abilityState = {
+    cd: Math.max(0, ab.cd || 0),
+    cdMax: Math.max(0.01, ab.cdMax || 1),
+    lastSyncT: performance.now() / 1000,
+  };
+}
+
+function tickAbilityCd() {
+  if (_abilityState) {
+    const now = performance.now() / 1000;
+    const elapsed = now - _abilityState.lastSyncT;
+    const cd = Math.max(0, _abilityState.cd - elapsed);
+    const ratio = Math.min(1, cd / _abilityState.cdMax);
+    abilityCdCircle.setAttribute('stroke-dashoffset', String(ABILITY_CD_CIRC * (1 - ratio)));
+    if (cd > 0.05) {
+      abilityCdTextEl.textContent = cd >= 1 ? Math.ceil(cd).toString() : cd.toFixed(1);
+      btnAbility.classList.add('cooling');
+    } else {
+      abilityCdTextEl.textContent = '';
+      btnAbility.classList.remove('cooling');
+    }
+  }
+  requestAnimationFrame(tickAbilityCd);
+}
+requestAnimationFrame(tickAbilityCd);
+
+function hexToRgba(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(255,255,255,${a})`;
+  const v = parseInt(m[1], 16);
+  return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${a})`;
+}
+
+function renderInteract(prompt) {
+  if (prompt && prompt.label) {
+    interactLabelEl.textContent = prompt.label;
+    btnInteract.classList.add('show');
+    btnInteract.style.borderColor = prompt.color || '#ffd166';
+  } else {
+    btnInteract.classList.remove('show');
+  }
+}
+
+function renderShopInventory(s) {
+  shopInventory.innerHTML = '';
+  const toggle = (ev) => ev.currentTarget.classList.toggle('open');
+
+  // Ability
+  const ah = document.createElement('div');
+  ah.className = 'inv-header';
+  ah.textContent = 'Способность';
+  shopInventory.appendChild(ah);
+  if (s.ability) {
+    const d = document.createElement('div');
+    d.className = 'inv-row';
+    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><div class="inv-desc">${s.ability.desc || ''}</div>`;
+    d.addEventListener('click', toggle);
+    shopInventory.appendChild(d);
+  } else {
+    const e = document.createElement('div');
+    e.className = 'inv-row';
+    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет способности</span>';
+    shopInventory.appendChild(e);
+  }
+
+  // Items
+  const ih = document.createElement('div');
+  ih.className = 'inv-header';
+  ih.textContent = 'Предметы';
+  shopInventory.appendChild(ih);
+  const items = (s.items || []).filter(it => it.count > 0);
+  if (items.length === 0) {
+    const e = document.createElement('div');
+    e.className = 'inv-row';
+    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет предметов</span>';
+    shopInventory.appendChild(e);
+  } else {
+    for (const it of items) {
+      const d = document.createElement('div');
+      d.className = 'inv-row';
+      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ' ×' + it.count : ''}</span><div class="inv-desc">${it.desc || ''}</div>`;
+      d.addEventListener('click', toggle);
+      shopInventory.appendChild(d);
+    }
+  }
+}
+
 socket.on('state:player', (s) => {
   if (!s || typeof s.slot !== 'number') return;
   document.getElementById('stHp').textContent = s.hp;
@@ -191,6 +364,9 @@ socket.on('state:player', (s) => {
   document.getElementById('shopMaxHp').textContent = s.maxHp;
   document.getElementById('shopGold').textContent = s.gold;
   shopOverlay.classList.toggle('open', !!s.shopOpen);
+  renderItemBar(s.items);
+  renderAbility(s.ability);
+  renderInteract(s.interact);
   // Render upgrades list
   shopList.innerHTML = '';
   for (const u of (s.upgrades || [])) {
@@ -206,6 +382,8 @@ socket.on('state:player', (s) => {
     `;
     shopList.appendChild(row);
   }
+  // Render inventory below upgrades
+  if (s.shopOpen) renderShopInventory(s);
 });
 
 shopList.addEventListener('click', (e) => {
