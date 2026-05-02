@@ -16,6 +16,15 @@ const scanVideo = document.getElementById('scanVideo');
 const scanStatus = document.getElementById('scanStatus');
 const scanFileBtn = document.getElementById('scanFileBtn');
 const scanFileInput = document.getElementById('scanFile');
+const scanCloseBtn = document.getElementById('scanClose');
+const detailModal = document.getElementById('detailModal');
+const detailCard = document.getElementById('detailCard');
+const detailIconEl = document.getElementById('detailIcon');
+const detailNameEl = document.getElementById('detailName');
+const detailMetaEl = document.getElementById('detailMeta');
+const detailCountEl = document.getElementById('detailCount');
+const detailDescEl = document.getElementById('detailDesc');
+const detailCloseBtn = document.getElementById('detailClose');
 const roomCodeEl = document.getElementById('roomcode');
 const playerSpan = controllerEl.querySelector('.badge .p');
 const hintEl = document.getElementById('hint');
@@ -57,9 +66,14 @@ let inventoryOpen = false;
 let scanStream = null;
 let barcodeDetector = null;
 let scanning = false;
+let scanStarting = false;
 let scanFrameHandle = 0;
-const inventoryExpanded = new Set();
-const shopExpanded = new Set();
+const RARITY_LABELS = {
+  common: 'Обычный',
+  uncommon: 'Необычный',
+  rare: 'Редкий',
+  legendary: 'Легендарный',
+};
 
 const formatter = new Intl.NumberFormat('ru-RU');
 
@@ -104,13 +118,14 @@ function codeFromText(text) {
 
 function applyScannedCode(value) {
   codeInput.value = value;
-  scanStatus.textContent = `Код ${value} найден`;
+  scanStatus.textContent = `Код ${value} найден, подключаемся…`;
   stopQrScanner();
   tryJoin();
 }
 
-function stopQrScanner() {
+function stopQrScanner({ keepPanel = false } = {}) {
   scanning = false;
+  scanStarting = false;
   if (scanStream) {
     for (const track of scanStream.getTracks()) track.stop();
     scanStream = null;
@@ -120,8 +135,11 @@ function stopQrScanner() {
     cancelAnimationFrame(scanFrameHandle);
     scanFrameHandle = 0;
   }
-  scanPanel?.classList.remove('open');
-  scanPanel?.setAttribute('aria-hidden', 'true');
+  if (!keepPanel) {
+    scanPanel?.classList.remove('open');
+    scanPanel?.setAttribute('aria-hidden', 'true');
+  }
+  if (scanQrBtn) scanQrBtn.disabled = false;
 }
 
 function detectQrFromCanvas(canvas) {
@@ -146,60 +164,91 @@ async function scanLoop() {
   try {
     let value = '';
     if (barcodeDetector) {
-      const codes = await barcodeDetector.detect(scanVideo);
-      value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean) || '';
+      try {
+        const codes = await barcodeDetector.detect(scanVideo);
+        value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean) || '';
+      } catch {
+        // Some platforms claim BarcodeDetector support but throw at runtime.
+        // Disable it for the rest of the session and fall back to jsQR.
+        barcodeDetector = null;
+      }
     }
     value = value || detectQrFromVideo();
     if (value) {
       applyScannedCode(value);
       return;
     }
-  } catch (err) {
-    if (!String(err?.name || err).includes('Security')) {
-      const value = detectQrFromVideo();
-      if (value) {
-        applyScannedCode(value);
-        return;
-      }
-    }
+  } catch {
+    // Ignore frame-level decode errors; the next frame will retry.
   }
   if (scanning) scanFrameHandle = requestAnimationFrame(scanLoop);
 }
 
-async function startQrScanner() {
+function openScanPanel() {
   scanPanel.classList.add('open');
   scanPanel.setAttribute('aria-hidden', 'false');
-  scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
+}
+
+async function startQrScanner() {
+  // Prevent double-start while getUserMedia is still resolving.
+  if (scanStarting || scanning) return;
+  scanStarting = true;
+  if (scanQrBtn) scanQrBtn.disabled = true;
+  openScanPanel();
+  scanStatus.textContent = 'Запрашиваем доступ к камере…';
   if (!navigator.mediaDevices?.getUserMedia) {
-    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
+    scanStatus.textContent = 'Камера недоступна на этой странице. Загрузи фото QR или введи 4 цифры.';
+    scanStarting = false;
+    if (scanQrBtn) scanQrBtn.disabled = false;
+    return;
+  }
+  // Modern Safari requires a secure context (HTTPS or localhost) for camera access.
+  if (window.isSecureContext === false) {
+    scanStatus.textContent = 'Камера доступна только на HTTPS или localhost. Загрузи фото QR или введи 4 цифры.';
+    scanStarting = false;
+    if (scanQrBtn) scanQrBtn.disabled = false;
     return;
   }
   try {
-    if ('BarcodeDetector' in window) {
-      barcodeDetector = barcodeDetector || new window.BarcodeDetector({ formats: ['qr_code'] });
+    if (!barcodeDetector && 'BarcodeDetector' in window) {
+      try {
+        barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      } catch {
+        barcodeDetector = null;
+      }
     }
     scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
     scanVideo.srcObject = scanStream;
-    await scanVideo.play();
+    try { await scanVideo.play(); } catch { /* iOS sometimes throws even on success */ }
     scanning = true;
+    scanStarting = false;
+    if (scanQrBtn) scanQrBtn.disabled = false;
+    scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
     scanFrameHandle = requestAnimationFrame(scanLoop);
-  } catch {
-    stopQrScanner();
-    scanPanel.classList.add('open');
-    scanPanel.setAttribute('aria-hidden', 'false');
-    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
+  } catch (err) {
+    stopQrScanner({ keepPanel: true });
+    const name = String(err?.name || '');
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      scanStatus.textContent = 'Доступ к камере запрещён. Загрузи фото QR или введи 4 цифры.';
+    } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+      scanStatus.textContent = 'Камера не найдена. Загрузи фото QR или введи 4 цифры.';
+    } else {
+      scanStatus.textContent = 'Камера недоступна. Загрузи фото QR или введи 4 цифры.';
+    }
   }
 }
 
 scanQrBtn?.addEventListener('click', () => {
-  if (scanning) stopQrScanner();
+  if (scanning || scanStarting) stopQrScanner();
   else startQrScanner();
 });
+scanCloseBtn?.addEventListener('click', () => stopQrScanner());
 scanFileBtn?.addEventListener('click', () => scanFileInput?.click());
 scanFileInput?.addEventListener('change', async () => {
   const file = scanFileInput.files?.[0];
   if (!file) return;
   try {
+    scanStatus.textContent = 'Распознаём QR на фото…';
     const bitmap = await createImageBitmap(file);
     const canvas = document.createElement('canvas');
     canvas.width = bitmap.width;
@@ -207,7 +256,7 @@ scanFileInput?.addEventListener('change', async () => {
     canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
     const value = detectQrFromCanvas(canvas);
     if (value) applyScannedCode(value);
-    else scanStatus.textContent = 'QR на фото не найден. Попробуй ещё раз или введи код.';
+    else scanStatus.textContent = 'QR на фото не найден. Попробуй другое фото или введи код.';
   } catch {
     scanStatus.textContent = 'Не удалось прочитать фото QR. Введи код вручную.';
   } finally {
@@ -499,21 +548,70 @@ function renderInteract(prompt) {
   }
 }
 
-function appendInventoryRows(container, s) {
-  const expanded = container === shopInventory ? shopExpanded : inventoryExpanded;
-  const toggle = (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    const row = ev.currentTarget;
-    if (row.dataset.toggledAt === String(ev.timeStamp)) return;
-    row.dataset.toggledAt = String(ev.timeStamp);
-    row.classList.toggle('open');
-    const key = row.dataset.invKey;
-    if (!key) return;
-    if (row.classList.contains('open')) expanded.add(key);
-    else expanded.delete(key);
-  };
+// ----------------------------------------------------------------------
+// Detail popup: shown when the player taps an item or ability row in the
+// shop or the inventory drawer. Closes on the × button or any tap outside
+// the card. Background is dimmed and blurred via CSS.
+// ----------------------------------------------------------------------
+function openDetailModal({ icon, name, meta, desc, count, rarity }) {
+  if (!detailModal) return;
+  detailIconEl.textContent = icon || '·';
+  detailNameEl.textContent = name || '';
+  detailMetaEl.textContent = meta || '';
+  detailMetaEl.style.display = meta ? '' : 'none';
+  if (count != null && count !== '') {
+    detailCountEl.textContent = `×${formatter.format(count)}`;
+    detailCountEl.style.display = '';
+  } else {
+    detailCountEl.style.display = 'none';
+  }
+  detailDescEl.textContent = desc || '';
+  if (rarity) detailCard.dataset.rar = rarity;
+  else delete detailCard.dataset.rar;
+  detailModal.classList.add('open');
+  detailModal.setAttribute('aria-hidden', 'false');
+}
 
+function closeDetailModal() {
+  if (!detailModal) return;
+  detailModal.classList.remove('open');
+  detailModal.setAttribute('aria-hidden', 'true');
+}
+
+detailCloseBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  closeDetailModal();
+});
+detailModal?.addEventListener('click', (e) => {
+  // Tap outside the card (i.e. on the dimmed/blurred backdrop) closes the popup.
+  if (e.target === detailModal) closeDetailModal();
+});
+
+function showAbilityDetail(ab) {
+  if (!ab) return;
+  openDetailModal({
+    icon: ab.icon || '✦',
+    name: ab.name || 'Способность',
+    meta: 'Способность',
+    desc: ab.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.',
+    rarity: null,
+  });
+}
+
+function showItemDetail(it) {
+  if (!it) return;
+  openDetailModal({
+    icon: it.icon || '?',
+    name: it.name || it.id || 'Предмет',
+    meta: it.rarity ? RARITY_LABELS[it.rarity] || it.rarity : '',
+    count: it.count,
+    desc: it.desc || '',
+    rarity: it.rarity || null,
+  });
+}
+
+function appendInventoryRows(container, s) {
   const ah = document.createElement('div');
   ah.className = 'inv-header';
   ah.textContent = 'Способность';
@@ -521,16 +619,16 @@ function appendInventoryRows(container, s) {
   if (s.ability) {
     const d = document.createElement('div');
     d.className = 'inv-row';
-    d.dataset.invKey = `ability:${s.ability.id || s.ability.name}`;
-    if (expanded.has(d.dataset.invKey)) d.classList.add('open');
     const name = document.createElement('span');
     name.className = 'inv-name';
     name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
-    const desc = document.createElement('div');
-    desc.className = 'inv-desc';
-    desc.textContent = s.ability.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.';
-    d.append(name, desc);
-    d.addEventListener('click', toggle);
+    d.append(name);
+    const ab = s.ability;
+    d.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showAbilityDetail(ab);
+    });
     container.appendChild(d);
   } else {
     const e = document.createElement('div');
@@ -565,8 +663,6 @@ function appendInventoryRows(container, s) {
     for (const it of items) {
       const d = document.createElement('div');
       d.className = 'inv-row';
-      d.dataset.invKey = `item:${it.id}`;
-      if (expanded.has(d.dataset.invKey)) d.classList.add('open');
       if (it.rarity) d.dataset.rar = it.rarity;
       const name = document.createElement('span');
       name.className = 'inv-name';
@@ -576,11 +672,13 @@ function appendInventoryRows(container, s) {
       count.className = 'inv-count';
       count.textContent = `×${formatter.format(it.count || 0)}`;
       name.append(label, count);
-      const desc = document.createElement('div');
-      desc.className = 'inv-desc';
-      desc.textContent = it.desc || '';
-      d.append(name, desc);
-      d.addEventListener('click', toggle);
+      d.append(name);
+      const itemRef = it;
+      d.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showItemDetail(itemRef);
+      });
       itemContainer.appendChild(d);
     }
     if (container === shopInventory) container.appendChild(itemContainer);
@@ -615,6 +713,26 @@ window.addEventListener('resize', refreshItemBarLimit);
 window.addEventListener('orientationchange', refreshItemBarLimit);
 refreshItemBarLimit();
 
+// Cached signatures used to skip rebuilding sub-DOMs that haven't changed
+// across the ~4Hz state push. This avoids destroying the DOM mid-tap, which
+// is the root cause of "every other tap doesn't register" on iOS.
+let _upgradesSig = '';
+let _shopInventorySig = '';
+let _inventoryBodySig = '';
+
+function inventorySig(s) {
+  const ab = s?.ability;
+  const abSig = ab ? `${ab.id || ab.name}|${ab.icon || ''}|${ab.desc || ''}` : 'none';
+  const items = (s?.items || []).filter(it => it.count > 0);
+  const itemsSig = items.map(it => `${it.id}:${it.count}:${it.rarity || ''}`).join('|');
+  return `${abSig}#${itemsSig}`;
+}
+
+function upgradesSig(s) {
+  const gold = s?.gold ?? 0;
+  return `${gold}|${(s?.upgrades || []).map(u => `${u.id}:${u.level}:${u.price}`).join('|')}`;
+}
+
 socket.on('state:player', (s) => {
   if (!s || typeof s.slot !== 'number') return;
   currentPlayerState = s;
@@ -625,32 +743,59 @@ socket.on('state:player', (s) => {
   document.getElementById('shopHp').textContent = s.hp;
   document.getElementById('shopMaxHp').textContent = s.maxHp;
   document.getElementById('shopGold').textContent = s.gold;
+  const wasShopOpen = shopOverlay.classList.contains('open');
   shopOverlay.classList.toggle('open', !!s.shopOpen);
   if (s.shopOpen && inventoryOpen) setInventoryOpen(false);
   renderItemBar(s.items);
   renderAbility(s.ability);
   renderInteract(s.interact);
-  if (inventoryOpen) renderInventory(inventoryBody, s);
-  // Render upgrades list
-  shopList.innerHTML = '';
-  for (const u of (s.upgrades || [])) {
-    const can = s.gold >= u.price;
-    const row = document.createElement('div');
-    row.className = 'upg-row' + (can ? '' : ' locked');
-    row.innerHTML = `
-      <div>
-        <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
-        <div class="desc">${u.desc}</div>
-      </div>
-      <button class="price-btn" data-id="${u.id}">⛁ ${u.price}</button>
-    `;
-    shopList.appendChild(row);
+
+  // Inventory drawer body: only rebuild when contents actually change.
+  if (inventoryOpen) {
+    const sig = inventorySig(s);
+    if (sig !== _inventoryBodySig) {
+      _inventoryBodySig = sig;
+      renderInventory(inventoryBody, s);
+    }
+  } else {
+    _inventoryBodySig = '';
   }
-  // Render inventory below upgrades
+
+  // Upgrades list: only rebuild when prices/levels/gold change.
+  const upSig = upgradesSig(s);
+  if (upSig !== _upgradesSig || (!s.shopOpen && wasShopOpen)) {
+    _upgradesSig = upSig;
+    shopList.innerHTML = '';
+    for (const u of (s.upgrades || [])) {
+      const can = s.gold >= u.price;
+      const row = document.createElement('div');
+      row.className = 'upg-row' + (can ? '' : ' locked');
+      row.innerHTML = `
+        <div>
+          <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
+          <div class="desc">${u.desc}</div>
+        </div>
+        <button class="price-btn" data-id="${u.id}">⛁ ${u.price}</button>
+      `;
+      shopList.appendChild(row);
+    }
+    // shopInventory was detached when shopList was cleared — invalidate its
+    // signature so it re-renders into the fresh DOM tree below.
+    _shopInventorySig = '';
+  }
+
+  // Shop inventory section: only rebuild when items/ability change.
   if (s.shopOpen) {
-    shopInventory.innerHTML = '';
-    shopList.appendChild(shopInventory);
-    renderShopInventory(s);
+    const invSig = inventorySig(s);
+    if (invSig !== _shopInventorySig || shopInventory.parentNode !== shopList) {
+      _shopInventorySig = invSig;
+      shopInventory.innerHTML = '';
+      if (shopInventory.parentNode !== shopList) shopList.appendChild(shopInventory);
+      renderShopInventory(s);
+    }
+  } else {
+    _shopInventorySig = '';
+    if (shopInventory.parentNode) shopInventory.parentNode.removeChild(shopInventory);
   }
 });
 
@@ -679,9 +824,14 @@ function isInteractive(el) {
   if (!el) return false;
   const tag = el.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
-  if (el.closest && el.closest('.inventory-drawer')) return true;
+  if (!el.closest) return false;
+  if (el.closest('.inventory-drawer')) return true;
   // Allow scrolling inside the shop overlay
-  if (el.closest && el.closest('.shop-overlay')) return true;
+  if (el.closest('.shop-overlay')) return true;
+  // Detail popup must receive its own clicks to dismiss / close.
+  if (el.closest('.detail-modal')) return true;
+  // Lobby form (code input, scan panel, file picker, buttons) must work freely.
+  if (el.closest('#lobby')) return true;
   return false;
 }
 
@@ -704,8 +854,11 @@ document.addEventListener('touchend', (e) => {
 }, { passive: false });
 
 // Manual double-tap-zoom guard for older iOS that ignores user-scalable=no.
+// Only fires on non-interactive parts of the page so it can't accidentally
+// swallow a synthetic click on shop/inventory rows or popup buttons.
 let _lastTouchEnd = 0;
 document.addEventListener('touchend', (e) => {
+  if (isInteractive(e.target)) return;
   const now = Date.now();
   if (now - _lastTouchEnd < 350) e.preventDefault();
   _lastTouchEnd = now;
