@@ -62,7 +62,7 @@ function createRenderer(canvas) {
   // Final fallback: surface a friendly error in the DOM.
   const msg = document.createElement('div');
   msg.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#222;font:16px system-ui;padding:20px;text-align:center;';
-  msg.innerHTML = `Не удалось инициализировать WebGL.<br>На iPhone попробуй зайти на <code>/controller.html</code> вместо хост-страницы.<br><br>${(lastErr?.message || lastErr || '')}`;
+  msg.innerHTML = `Не удалось инициализировать WebGL.<br>На iPhone попробуй зайти на <code>/controller</code> вместо хост-страницы.<br><br>${(lastErr?.message || lastErr || '')}`;
   document.body.appendChild(msg);
   throw lastErr || new Error('WebGL init failed');
 }

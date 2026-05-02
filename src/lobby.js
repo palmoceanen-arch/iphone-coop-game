@@ -53,7 +53,7 @@ export class Lobby {
     const codeEl = document.getElementById('lobby-code');
     if (codeEl) codeEl.textContent = code;
 
-    // Build join URL: same origin, /controller.html?code=XXXX
+    // Build join URL: same origin, /controller?code=1234
     // When the host page is opened on localhost the iPhone won't be able to
     // reach it, so we swap in a LAN host. Override priority:
     //   1) ?host=...  query param on the host page
@@ -66,7 +66,7 @@ export class Lobby {
     const isLoopback = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
     if (overrideHost) base = `${location.protocol}//${overrideHost}`;
     else if (isLoopback && LAN_HOST) base = `http://${LAN_HOST}`;
-    const joinUrl = `${base}/controller.html?code=${code}`;
+    const joinUrl = `${base}/controller?code=${code}`;
     const urlEl = document.getElementById('lobby-url');
     if (urlEl) {
       urlEl.textContent = joinUrl.replace(/^https?:\/\//, '');

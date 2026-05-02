@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Twin Controller" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#0c0f17" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Twin Hearts — Controller</title>
     <style>
       :root { color-scheme: dark; }
@@ -29,6 +32,7 @@
         touch-action: none;
       }
       input.codeinput { -webkit-user-select: text; user-select: text; touch-action: manipulation; }
+      button { font: inherit; }
       #lobby, #controller {
         position: absolute; inset: 0;
         display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -45,22 +49,35 @@
         pointer-events: none;
       }
       h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.5px; }
-      .sub { color: #9aa6c0; font-size: 14px; margin-bottom: 24px; text-align: center; max-width: 320px; }
+      .sub { color: #9aa6c0; font-size: 14px; margin-bottom: 6px; text-align: center; max-width: 320px; }
+      .lobby-card {
+        width: min(92vw, 420px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
       .codeinput {
         width: 220px;
         padding: 16px;
         font-size: 32px;
         text-align: center;
         letter-spacing: 8px;
-        text-transform: uppercase;
         background: #1a2030;
         color: #e0e6f3;
         border: 2px solid #2a3550;
         border-radius: 12px;
         outline: none;
-        margin-bottom: 14px;
+        margin-bottom: 0;
       }
       .codeinput:focus { border-color: #6ad0ff; }
+      .join-options {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
       .btn {
         background: linear-gradient(180deg, #3a83d0 0%, #2563b0 100%);
         color: white;
@@ -73,8 +90,43 @@
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
         margin-top: 6px;
       }
+      .btn.secondary {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.14);
+      }
       .btn:disabled { opacity: 0.5; }
-      .err { color: #ff8a8a; margin-top: 10px; font-size: 14px; min-height: 1.2em; }
+      .install-tip {
+        color: #8e9bb8;
+        font-size: 12px;
+        line-height: 1.35;
+        text-align: center;
+        max-width: 360px;
+      }
+      .scan-panel {
+        display: none;
+        width: min(92vw, 380px);
+        margin-top: 10px;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(20, 28, 48, 0.9);
+        border: 1px solid rgba(255,255,255,0.12);
+      }
+      .scan-panel.open { display: block; }
+      .scan-panel video {
+        width: 100%;
+        max-height: 220px;
+        border-radius: 10px;
+        background: #05070d;
+        object-fit: cover;
+      }
+      .scan-panel .scan-status {
+        min-height: 1.2em;
+        margin-top: 8px;
+        color: #9aa6c0;
+        font-size: 13px;
+        text-align: center;
+      }
+      .err { color: #ff8a8a; margin-top: 10px; font-size: 14px; min-height: 1.2em; text-align: center; }
 
       /* Controller surface */
       #controller .badge {
@@ -310,10 +362,10 @@
       .stats .gold { color: #ffd166; font-weight: 700; }
       .stats .hp { color: #ff8a8a; font-weight: 700; }
       .stats .dmg { color: #ffe28a; }
-      /* Shop overlay: full-screen, header sticks at top, list scrolls.
-         Two-column grid in landscape so all upgrades are visible. */
       .shop-overlay {
-        position: absolute; inset: 0;
+        position: fixed; inset: 0;
+        height: 100dvh;
+        max-height: 100dvh;
         background: rgba(8, 11, 18, 0.96);
         z-index: 50;
         display: none;
@@ -324,21 +376,33 @@
       .shop-overlay.open { display: flex; }
       .shop-overlay .top {
         flex: 0 0 auto;
-        display: flex; justify-content: space-between; align-items: center;
-        padding: calc(env(safe-area-inset-top, 0px) + 12px)
+        min-height: 44px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        padding: calc(env(safe-area-inset-top, 0px) + 6px)
                  calc(env(safe-area-inset-right, 0px) + 16px)
-                 10px
+                 6px
                  calc(env(safe-area-inset-left, 0px) + 16px);
-        gap: 12px;
+        gap: 8px;
         border-bottom: 1px solid rgba(255,255,255,0.08);
         background: rgba(8, 11, 18, 0.96);
       }
-      .shop-overlay h2 { margin: 0; font-size: 18px; }
-      .shop-overlay .gold { color: #ffd166; font-weight: 800; font-size: 16px; flex: 1 1 auto; text-align: center; }
+      .shop-overlay h2 { display: none; }
+      .shop-stats {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .shop-stats .hp { color: #ff8a8a; }
+      .shop-overlay .gold { color: #ffd166; font-weight: 800; }
       .shop-overlay .close-btn {
         background: rgba(255,255,255,0.08);
-        color: #e0e6f3; padding: 8px 14px; border: 1px solid rgba(255,255,255,0.18);
-        border-radius: 10px; font-size: 14px;
+        color: #e0e6f3; padding: 7px 12px; border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 10px; font-size: 13px;
         touch-action: manipulation;
       }
       #shopList {
@@ -346,9 +410,9 @@
         min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
-        padding: 10px
+        padding: 8px
                  calc(env(safe-area-inset-right, 0px) + 12px)
-                 calc(env(safe-area-inset-bottom, 0px) + 12px)
+                 calc(env(safe-area-inset-bottom, 0px) + 16px)
                  calc(env(safe-area-inset-left, 0px) + 12px);
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -356,13 +420,14 @@
         align-content: start;
         -webkit-overflow-scrolling: touch;
       }
+      #shopList,
+      #shopList *,
+      #inventoryBody,
+      #inventoryBody * {
+        touch-action: pan-y;
+      }
       #shopList #shopInventory {
         grid-column: 1 / -1;
-      }
-      .shop-summary {
-        flex: 0 0 auto;
-        padding: 8px 12px 0;
-        font-size: 13px;
       }
       @media (max-width: 480px) {
         #shopList { grid-template-columns: 1fr; }
@@ -372,7 +437,8 @@
         gap: 8px; align-items: center;
         background: rgba(255,255,255,0.04);
         border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 12px; padding: 8px 10px;
+        border-radius: 12px; padding: 7px 9px;
+        min-height: 56px;
       }
       .upg-row.locked { opacity: 0.45; }
       .upg-row .name { font-weight: 700; font-size: 13px; }
@@ -382,8 +448,8 @@
         background: linear-gradient(180deg, #d4a02a 0%, #a87a17 100%);
         color: #1a1206; font-weight: 800;
         border: none; border-radius: 10px;
-        padding: 8px 10px; font-size: 13px;
-        min-width: 68px; text-align: center;
+        padding: 7px 9px; font-size: 13px;
+        min-width: 62px; text-align: center;
         touch-action: manipulation;
       }
       .upg-row.locked .price-btn { background: #2a3142; color: #6e7a96; }
@@ -421,7 +487,7 @@
         padding: 10px 12px 12px;
         touch-action: pan-y;
       }
-      #shopInventory { padding: 8px 0 12px; }
+      #shopInventory { padding: 4px 0 16px; }
       .inv-header { font-size: 11px; opacity: 0.58; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px; }
       .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
       .inv-row:active { background: rgba(255,255,255,0.08); }
@@ -433,6 +499,28 @@
       #controller.p1 .badge .p { color: var(--p1); }
       #controller.p2 .badge .p { color: var(--p2); }
       @media (orientation: landscape) and (max-height: 430px) {
+        #lobby { padding: 10px 16px; }
+        .lobby-card {
+          max-height: calc(100dvh - 20px);
+          display: grid;
+          grid-template-columns: minmax(140px, 0.9fr) minmax(280px, 1.2fr);
+          grid-template-areas:
+            "title code"
+            "sub controls"
+            "tip scan";
+          column-gap: 18px;
+          row-gap: 8px;
+          justify-items: center;
+          align-content: center;
+        }
+        .lobby-card h1 { grid-area: title; margin: 0; font-size: 24px; }
+        .lobby-card .sub { grid-area: sub; margin: 0; font-size: 13px; }
+        .lobby-card .codeinput { grid-area: code; padding: 10px; font-size: 28px; }
+        .lobby-card .join-options { grid-area: controls; margin: 0; }
+        .lobby-card .install-tip { grid-area: tip; font-size: 11px; }
+        .lobby-card .scan-panel { grid-area: scan; margin: 0; max-width: 320px; padding: 8px; }
+        .scan-panel video { max-height: 150px; }
+        .btn { padding: 10px 18px; font-size: 15px; }
         #controller .badge { top: calc(env(safe-area-inset-top, 0px) + 8px); left: calc(env(safe-area-inset-left, 0px) + 10px); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         #controller .status { top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 10px); }
         .stats { top: calc(env(safe-area-inset-top, 0px) + 36px); left: calc(env(safe-area-inset-left, 0px) + 10px); gap: 8px; padding: 4px 9px; }
@@ -447,16 +535,48 @@
         .item-bar .item-icon { min-width: 31px; height: 29px; font-size: 16px; padding: 0 6px; }
         .hint { font-size: 12px; max-width: 220px; }
         .inventory-drawer { top: calc(env(safe-area-inset-top, 0px) + 62px); width: min(480px, calc(100vw - 190px)); max-height: calc(100dvh - 74px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
-        #shopList { grid-template-columns: 1fr 1fr; }
+        .shop-overlay .top {
+          min-height: 36px;
+          padding-top: calc(env(safe-area-inset-top, 0px) + 4px);
+          padding-bottom: 4px;
+        }
+        .shop-stats { font-size: 13px; gap: 8px; }
+        .shop-overlay .close-btn { padding: 5px 10px; }
+        #shopList {
+          grid-template-columns: 1fr 1fr;
+          gap: 6px;
+          padding-top: 6px;
+          padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+        }
+        .upg-row {
+          min-height: 48px;
+          padding: 5px 7px;
+          gap: 6px;
+        }
+        .upg-row .name { font-size: 12px; }
+        .upg-row .desc { font-size: 10px; line-height: 1.15; }
+        .upg-row .price-btn { min-width: 56px; padding: 6px 7px; font-size: 12px; }
+        #shopInventory .inv-header { margin: 5px 0 4px; }
+        #shopInventory .inv-row { margin: 3px 0; padding: 6px 8px; line-height: 1.2; }
       }
     </style>
   </head>
   <body>
     <div id="lobby">
-      <h1>Twin Hearts</h1>
-      <div class="sub">Введи 4-значный код, отображённый на экране ноутбука/телевизора, чтобы подключить контроллер.</div>
-      <input id="code" class="codeinput" autocomplete="off" autocapitalize="characters" inputmode="text" maxlength="4" placeholder="ABCD" />
-      <button id="join" class="btn">Подключиться</button>
+      <div class="lobby-card">
+        <h1>Twin Hearts</h1>
+        <div class="sub">Отсканируй QR с экрана хоста или введи 4 цифры вручную.</div>
+        <input id="code" class="codeinput" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="1234" />
+        <div class="join-options">
+          <button id="join" class="btn">Подключиться</button>
+          <button id="scanQr" class="btn secondary" type="button">Сканировать QR</button>
+        </div>
+        <div class="install-tip">Для fullscreen на iPhone: открой эту страницу в Safari → Поделиться → На экран «Домой».</div>
+        <div id="scanPanel" class="scan-panel" aria-hidden="true">
+          <video id="scanVideo" playsinline muted></video>
+          <div id="scanStatus" class="scan-status">Наведи камеру на QR-код комнаты.</div>
+        </div>
+      </div>
       <div id="err" class="err"></div>
     </div>
 
@@ -497,12 +617,11 @@
       <div class="shop-overlay" id="shopOverlay">
         <div class="top">
           <h2>Магазин</h2>
+          <div class="shop-stats">
+            <span class="hp">❤ <span id="shopHp">100</span>/<span id="shopMaxHp">100</span></span>
+            <span class="gold">⛁ <span id="shopGold">0</span></span>
+          </div>
           <button class="close-btn" id="shopClose">Закрыть</button>
-        </div>
-        <div class="shop-summary">
-          ❤ <span id="shopHp">100</span>/<span id="shopMaxHp">100</span>
-          &nbsp;·&nbsp;
-          <span class="gold">⛁ <span id="shopGold">0</span></span>
         </div>
         <div id="shopList"></div>
       </div>

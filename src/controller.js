@@ -9,6 +9,10 @@ const statusEl = document.getElementById('status');
 const errEl = document.getElementById('err');
 const codeInput = document.getElementById('code');
 const joinBtn = document.getElementById('join');
+const scanQrBtn = document.getElementById('scanQr');
+const scanPanel = document.getElementById('scanPanel');
+const scanVideo = document.getElementById('scanVideo');
+const scanStatus = document.getElementById('scanStatus');
 const roomCodeEl = document.getElementById('roomcode');
 const playerSpan = controllerEl.querySelector('.badge .p');
 const hintEl = document.getElementById('hint');
@@ -47,6 +51,9 @@ let started = false;
 let currentPlayerState = null;
 let itemBarLimit = 12;
 let inventoryOpen = false;
+let scanStream = null;
+let barcodeDetector = null;
+let scanning = false;
 
 const formatter = new Intl.NumberFormat('ru-RU');
 
@@ -57,24 +64,96 @@ function safeText(value) {
 // Pre-fill code from URL ?code=XXXX
 const initialCode = new URLSearchParams(location.search).get('code');
 if (initialCode) {
-  codeInput.value = initialCode.toUpperCase().slice(0, 4);
+  codeInput.value = initialCode.replace(/\D/g, '').slice(0, 4);
 }
 codeInput.addEventListener('input', () => {
-  codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 4);
 });
 codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryJoin(); });
 joinBtn.addEventListener('click', tryJoin);
 
 function tryJoin() {
-  const code = (codeInput.value || '').trim().toUpperCase();
+  const code = (codeInput.value || '').replace(/\D/g, '').slice(0, 4);
   if (code.length !== 4) {
-    errEl.textContent = 'Код состоит из 4 символов';
+    errEl.textContent = 'Код состоит из 4 цифр';
     return;
   }
   errEl.textContent = '';
   joinBtn.disabled = true;
   socket.emit('controller:join', { code });
 }
+
+function codeFromText(text) {
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    const queryCode = url.searchParams.get('code');
+    if (queryCode) return queryCode.replace(/\D/g, '').slice(0, 4);
+  } catch {
+    // Plain QR text is also supported.
+  }
+  const match = text.match(/\b\d{4}\b/);
+  return match ? match[0] : '';
+}
+
+function stopQrScanner() {
+  scanning = false;
+  if (scanStream) {
+    for (const track of scanStream.getTracks()) track.stop();
+    scanStream = null;
+  }
+  if (scanVideo) scanVideo.srcObject = null;
+  scanPanel?.classList.remove('open');
+  scanPanel?.setAttribute('aria-hidden', 'true');
+}
+
+async function scanLoop() {
+  if (!scanning || !barcodeDetector || !scanVideo) return;
+  try {
+    const codes = await barcodeDetector.detect(scanVideo);
+    const value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean);
+    if (value) {
+      codeInput.value = value;
+      scanStatus.textContent = `Код ${value} найден`;
+      stopQrScanner();
+      tryJoin();
+      return;
+    }
+  } catch {
+    scanStatus.textContent = 'Не удалось считать QR. Введи код вручную.';
+  }
+  if (scanning) requestAnimationFrame(scanLoop);
+}
+
+async function startQrScanner() {
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
+    scanStatus.textContent = 'Safari может не поддерживать сканер QR. Введи 4 цифры вручную.';
+    scanPanel.classList.add('open');
+    scanPanel.setAttribute('aria-hidden', 'false');
+    return;
+  }
+  try {
+    barcodeDetector = barcodeDetector || new window.BarcodeDetector({ formats: ['qr_code'] });
+    scanPanel.classList.add('open');
+    scanPanel.setAttribute('aria-hidden', 'false');
+    scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    scanVideo.srcObject = scanStream;
+    await scanVideo.play();
+    scanning = true;
+    requestAnimationFrame(scanLoop);
+  } catch {
+    stopQrScanner();
+    scanPanel.classList.add('open');
+    scanPanel.setAttribute('aria-hidden', 'false');
+    scanStatus.textContent = 'Камера недоступна. Введи 4 цифры вручную.';
+  }
+}
+
+scanQrBtn?.addEventListener('click', () => {
+  if (scanning) stopQrScanner();
+  else startQrScanner();
+});
 
 socket.on('connect_error', () => {
   errEl.textContent = 'Не удалось подключиться к серверу';
@@ -87,6 +166,7 @@ socket.on('controller:rejected', ({ reason }) => {
 });
 
 socket.on('controller:assigned', ({ slot, code }) => {
+  stopQrScanner();
   assignedSlot = slot;
   lobby.style.display = 'none';
   controllerEl.style.display = 'block';

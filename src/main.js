@@ -17,8 +17,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
   const params = new URLSearchParams(window.location.search);
   if (isMobile && !params.has('host')) {
-    const url = new URL('controller.html', window.location.href);
-    // forward seed code if present so /controller.html?code=... still works
+    const url = new URL('controller', window.location.href);
+    // forward seed code if present so /controller?code=... still works
     for (const [k, v] of params.entries()) url.searchParams.set(k, v);
     window.location.replace(url.toString());
     return;
