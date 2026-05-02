@@ -60,13 +60,16 @@ export const ITEMS = [
   },
   {
     id: 'regen', name: 'Серебряное ожерелье', icon: 'gem', rarity: 'common',
-    desc: '+0.6 HP в секунду регенерации за стак.',
+    desc: '+0.6 HP/с регенерации за стак (cap +6 HP/с).',
     hooks: {
       onTick(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || !ctx.dt) return;
         if (player.hp < player.maxHP) {
-          player.hp = Math.min(player.maxHP, player.hp + 0.6 * n * ctx.dt);
+          // Soft cap at 6 HP/s (10 stacks), so a flood of regen drops can
+          // still be picked up safely without trivialising late-game.
+          const rate = Math.min(6, 0.6 * n);
+          player.hp = Math.min(player.maxHP, player.hp + rate * ctx.dt);
         }
       },
     },
@@ -136,12 +139,14 @@ export const ITEMS = [
   },
   {
     id: 'leech', name: 'Пилюля кровавой охоты', icon: 'drop', rarity: 'uncommon',
-    desc: 'Вампиризм 4% от нанесённого урона за стак.',
+    desc: 'Вампиризм 4% от урона за стак (cap 30%).',
     hooks: {
       onHit(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const heal = ctx.dmg * 0.04 * n;
+        // Soft cap at 30% lifesteal so high-stack runs still need positioning.
+        const ratio = Math.min(0.30, 0.04 * n);
+        const heal = ctx.dmg * ratio;
         if (heal > 0) player.heal(heal);
       },
     },
@@ -162,13 +167,15 @@ export const ITEMS = [
   },
   {
     id: 'dashBlast', name: 'Аура отдачи', icon: 'burst', rarity: 'uncommon',
-    desc: 'Дэш создаёт взрыв в радиусе 2м (+0.6м за стак), 12 урона/стак.',
+    desc: 'Дэш создаёт взрыв (cap r=5м, 72 урона), +0.6м и +12 урона за стак.',
     hooks: {
       onDash(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const r = 2 + 0.6 * (n - 1);
-        const dmg = 12 * n;
+        // Cap radius at 5m and damage at 72 (6 stacks effective). Prevents
+        // late-stack runs from oneshotting whole screens on dash cooldown.
+        const r = Math.min(5, 2 + 0.6 * (n - 1));
+        const dmg = 12 * Math.min(n, 6);
         for (const e of (ctx.enemyList || [])) {
           if (!e.alive) continue;
           const d = Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
@@ -242,25 +249,27 @@ export const ITEMS = [
   // ---- coop synergies ------------------------------------------------
   {
     id: 'companion', name: 'Дружеский амулет', icon: 'handshake', rarity: 'rare',
-    desc: '+15% урона за стак, пока напарник в 5м.',
+    desc: '+15% урона за стак, пока напарник в 5м (cap +120%).',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        if (partnerDist(player, ctx) <= 5) ctx.dmgMult *= 1 + 0.15 * n;
+        // Soft cap at +120% (8 stacks) so coop synergy is strong but bounded.
+        if (partnerDist(player, ctx) <= 5) ctx.dmgMult *= 1 + Math.min(1.2, 0.15 * n);
       },
     },
   },
   {
     id: 'bond', name: 'Резонатор бонда', icon: 'heart', rarity: 'legendary',
-    desc: 'Когда поводок натянут — оба игрока получают +60% урона.',
+    desc: 'Поводок натянут — +60% урона за стак обоим (cap +180%).',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         const d = partnerDist(player, ctx);
         // "Натянут" — около границы предупреждения поводка (12м+).
-        if (d > 12) ctx.dmgMult *= 1 + 0.6 * n;
+        // Soft cap at +180% (3 stacks) — legendary still impactful but not exponential.
+        if (d > 12) ctx.dmgMult *= 1 + Math.min(1.8, 0.6 * n);
       },
     },
   },
