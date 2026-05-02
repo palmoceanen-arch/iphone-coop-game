@@ -53,19 +53,34 @@ export class Lobby {
     const codeEl = document.getElementById('lobby-code');
     if (codeEl) codeEl.textContent = code;
 
-    // Build join URL: same origin, /controller?code=1234
-    // When the host page is opened on localhost the iPhone won't be able to
-    // reach it, so we swap in a LAN host. Override priority:
-    //   1) ?host=...  query param on the host page
-    //   2) hardcoded LAN_HOST below (set this to your Wi-Fi LAN IP / port)
-    //   3) fallback to location.origin
-    const LAN_HOST = '192.168.0.7:3000';
+    // Build join URL: same origin, /controller?code=1234.
+    // The host page is typically opened on localhost / desktop, but the iPhone
+    // controller has to reach the server over the local network — and iOS Safari
+    // requires HTTPS for camera-based QR scanning. So we ask the server (which
+    // knows its own network interfaces and whether HTTPS is enabled) for the
+    // join URL components. Override priority:
+    //   1) ?host=...  query param on the host page (e.g. ?host=foo.local:3443)
+    //   2) /api/lan-host JSON from the server (preferred)
+    //   3) location.origin (works when host page is already on a routable IP)
     const params = new URLSearchParams(location.search);
-    let base = location.origin;
     const overrideHost = params.get('host');
-    const isLoopback = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-    if (overrideHost) base = `${location.protocol}//${overrideHost}`;
-    else if (isLoopback && LAN_HOST) base = `http://${LAN_HOST}`;
+    let base = location.origin;
+    if (overrideHost) {
+      const proto = params.get('protocol') || (overrideHost.startsWith('https://') ? 'https' : location.protocol.replace(':', ''));
+      base = `${proto.replace(/:$/, '')}://${overrideHost.replace(/^https?:\/\//, '')}`;
+    } else {
+      try {
+        const r = await fetch('/api/lan-host', { cache: 'no-store' });
+        if (r.ok) {
+          const info = await r.json();
+          if (info?.ip && info?.protocol && info?.port) {
+            base = `${info.protocol}://${info.ip}:${info.port}`;
+          }
+        }
+      } catch (err) {
+        console.warn('lan-host lookup failed; falling back to location.origin', err);
+      }
+    }
     const joinUrl = `${base}/controller?code=${code}`;
     const urlEl = document.getElementById('lobby-url');
     if (urlEl) {

@@ -60,6 +60,30 @@ npm run preview  # serves the built bundle
 npm run lint     # eslint
 ```
 
+### Phone controller — joining over LAN
+
+The lobby page generates a 4-digit code and a QR pointing at
+`/controller?code=XXXX`. The host page asks `GET /api/lan-host` for the right
+LAN URL to embed in the QR — you don't need to hard-code your IP anymore.
+
+iOS Safari only allows camera access (`getUserMedia`) over HTTPS or
+`localhost`, so to actually scan the QR with the iPhone camera you need to
+serve the game over HTTPS:
+
+```bash
+HTTPS=1 npm run dev
+```
+
+On first start the server auto-generates a self-signed cert under `./certs/`
+and listens on both `http://0.0.0.0:3000` (desktop host) and
+`https://0.0.0.0:3443` (iPhone). The QR code in the lobby will encode the
+HTTPS URL automatically. The first time you open it on the phone, Safari will
+warn about the cert — tap **Show details → visit this website**.
+
+If you don't want HTTPS, the phone can still join via the **Загрузить фото QR**
+button (pick a screenshot of the QR from the gallery) or by typing the
+4-digit code manually.
+
 ## Project layout
 
 ```

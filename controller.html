@@ -103,6 +103,7 @@
         max-width: 360px;
       }
       .scan-panel {
+        position: relative;
         display: none;
         width: min(92vw, 380px);
         margin-top: 10px;
@@ -112,12 +113,27 @@
         border: 1px solid rgba(255,255,255,0.12);
       }
       .scan-panel.open { display: block; }
+      .scan-viewport {
+        position: relative;
+        width: 100%;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #05070d;
+      }
       .scan-panel video {
+        display: block;
         width: 100%;
         max-height: 220px;
-        border-radius: 10px;
         background: #05070d;
         object-fit: cover;
+      }
+      .scan-reticle {
+        position: absolute;
+        inset: 12% 18%;
+        border: 2px solid rgba(255,209,102,0.85);
+        border-radius: 12px;
+        box-shadow: 0 0 0 9999px rgba(0,0,0,0.35) inset;
+        pointer-events: none;
       }
       .scan-panel .scan-status {
         min-height: 1.2em;
@@ -125,6 +141,19 @@
         color: #9aa6c0;
         font-size: 13px;
         text-align: center;
+      }
+      .scan-close {
+        position: absolute;
+        top: 6px; right: 6px;
+        width: 32px; height: 32px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(8, 11, 18, 0.7);
+        color: #e0e6f3;
+        font-size: 20px; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: manipulation;
+        z-index: 2;
       }
       .scan-file-btn {
         width: 100%;
@@ -512,9 +541,83 @@
       .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
       .inv-row:active { background: rgba(255,255,255,0.08); }
       .inv-row .inv-name { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; }
-      .inv-row .inv-desc { display: none; color: #aab6d3; font-size: 11px; margin-top: 5px; }
-      .inv-row.open .inv-desc { display: block; }
       .inv-count { color: #cbd5ee; font-weight: 800; }
+      .detail-modal {
+        position: fixed; inset: 0;
+        display: none;
+        align-items: center; justify-content: center;
+        background: rgba(8, 11, 18, 0.55);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        z-index: 200;
+        padding: 20px;
+        touch-action: manipulation;
+      }
+      .detail-modal.open { display: flex; }
+      .detail-card {
+        position: relative;
+        background: rgba(20, 28, 48, 0.96);
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 18px;
+        padding: 28px 22px 22px;
+        width: min(360px, 92vw);
+        max-height: calc(100dvh - 40px);
+        overflow-y: auto;
+        text-align: center;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+        -webkit-overflow-scrolling: touch;
+      }
+      .detail-card[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 18px rgba(102,217,122,0.35), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-card[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 18px rgba(106,166,255,0.4), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-card[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 22px rgba(255,184,77,0.5), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-close {
+        position: absolute; top: 8px; right: 8px;
+        width: 36px; height: 36px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.06);
+        color: #e0e6f3;
+        font-size: 22px; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .detail-icon {
+        font-size: 56px;
+        line-height: 1.1;
+        margin: 4px 0 2px;
+        filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+      }
+      .detail-name { font-size: 18px; font-weight: 800; margin-top: 6px; word-break: break-word; }
+      .detail-meta {
+        font-size: 11px;
+        color: #8a96b6;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        margin-top: 4px;
+        font-weight: 700;
+      }
+      .detail-card[data-rar="uncommon"] .detail-meta { color: #66d97a; }
+      .detail-card[data-rar="rare"] .detail-meta { color: #6aa6ff; }
+      .detail-card[data-rar="legendary"] .detail-meta { color: #ffb84d; }
+      .detail-desc {
+        font-size: 14px;
+        color: #cbd5ee;
+        line-height: 1.5;
+        margin-top: 14px;
+        text-align: left;
+      }
+      .detail-count {
+        display: inline-block;
+        margin-top: 10px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.14);
+        font-size: 12px;
+        font-weight: 800;
+        color: #cbd5ee;
+      }
       :root { --p1: #6ad0ff; --p2: #ff8a8a; }
       #controller.p1 .badge .p { color: var(--p1); }
       #controller.p2 .badge .p { color: var(--p2); }
@@ -595,9 +698,13 @@
         </div>
         <div class="install-tip">Для fullscreen на iPhone: открой эту страницу в Safari → Поделиться → На экран «Домой».</div>
         <div id="scanPanel" class="scan-panel" aria-hidden="true">
-          <video id="scanVideo" playsinline muted></video>
-          <button id="scanFileBtn" class="scan-file-btn" type="button">Фото QR</button>
-          <input id="scanFile" class="scan-file-input" type="file" accept="image/*" capture="environment" />
+          <button id="scanClose" class="scan-close" type="button" aria-label="Закрыть сканер">×</button>
+          <div class="scan-viewport">
+            <video id="scanVideo" playsinline muted></video>
+            <div class="scan-reticle" aria-hidden="true"></div>
+          </div>
+          <button id="scanFileBtn" class="scan-file-btn" type="button">Загрузить фото QR</button>
+          <input id="scanFile" class="scan-file-input" type="file" accept="image/*" />
           <div id="scanStatus" class="scan-status">Наведи камеру на QR-код комнаты.</div>
         </div>
       </div>
@@ -647,6 +754,17 @@
           <button class="close-btn" id="shopClose">Закрыть</button>
         </div>
         <div id="shopList"></div>
+      </div>
+
+      <div class="detail-modal" id="detailModal" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="detail-card" id="detailCard">
+          <button class="detail-close" id="detailClose" type="button" aria-label="Закрыть">×</button>
+          <div class="detail-icon" id="detailIcon"></div>
+          <div class="detail-name" id="detailName"></div>
+          <div class="detail-meta" id="detailMeta"></div>
+          <div class="detail-count" id="detailCount" style="display:none;"></div>
+          <div class="detail-desc" id="detailDesc"></div>
+        </div>
       </div>
     </div>
 

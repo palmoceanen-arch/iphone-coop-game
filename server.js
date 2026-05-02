@@ -6,14 +6,59 @@
 //     up to two controllers (iPhone joypads). Inputs are forwarded host-bound.
 import express from 'express';
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
+import os from 'os';
 import { Server as IOServer } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
+const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
 const HOST = process.env.HOST || '0.0.0.0';
 const isProd = process.env.NODE_ENV === 'production';
+// HTTPS is required for getUserMedia (camera) in iOS Safari over LAN.
+// Enable via HTTPS=1 npm run dev — a self-signed cert is auto-generated
+// on first start. Disable explicitly with HTTPS=0 if you only need HTTP.
+const wantHttps = process.env.HTTPS === '1' || process.env.HTTPS === 'true';
+
+function getLanIps() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
+async function ensureSelfSignedCert() {
+  const dir = path.join(__dirname, 'certs');
+  const certPath = path.join(dir, 'cert.pem');
+  const keyPath = path.join(dir, 'key.pem');
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    return { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) };
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const selfsignedMod = await import('selfsigned');
+  const selfsigned = selfsignedMod.default ?? selfsignedMod;
+  const ips = getLanIps();
+  const altNames = [
+    { type: 2, value: 'localhost' },
+    { type: 7, ip: '127.0.0.1' },
+    ...ips.map((ip) => ({ type: 7, ip })),
+  ];
+  // selfsigned >=3 returns a Promise.
+  const pems = await selfsigned.generate(
+    [{ name: 'commonName', value: ips[0] || 'localhost' }],
+    { days: 825, keySize: 2048, extensions: [{ name: 'subjectAltName', altNames }] },
+  );
+  fs.writeFileSync(certPath, pems.cert);
+  fs.writeFileSync(keyPath, pems.private);
+  console.log(`[https] Generated self-signed cert at ${dir}`);
+  return { cert: pems.cert, key: pems.private };
+}
 
 async function main() {
   const app = express();
@@ -128,6 +173,25 @@ async function main() {
   });
 
   // -------------------------------------------------------------------------
+  // LAN host hint for the host page: returns the IP / port the iPhone should
+  // connect to so the QR code can encode the right URL even when the host
+  // page is opened on localhost. Uses HTTPS:HTTPS_PORT when HTTPS is enabled
+  // so iOS Safari can grant camera permission.
+  // -------------------------------------------------------------------------
+  app.get('/api/lan-host', (_req, res) => {
+    const ips = getLanIps();
+    const ip = ips[0] || null;
+    res.json({
+      ip,
+      ips,
+      protocol: wantHttps ? 'https' : 'http',
+      port: wantHttps ? HTTPS_PORT : PORT,
+      httpPort: PORT,
+      httpsPort: wantHttps ? HTTPS_PORT : null,
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Static / Vite middleware
   // -------------------------------------------------------------------------
   app.get('/controller', (req, res) => {
@@ -154,6 +218,25 @@ async function main() {
   server.listen(PORT, HOST, () => {
     console.log(`Twin Hearts server listening on http://${HOST}:${PORT}  (NODE_ENV=${isProd ? 'production' : 'development'})`);
   });
+
+  if (wantHttps) {
+    try {
+      const certs = await ensureSelfSignedCert();
+      const httpsServer = https.createServer(certs, app);
+      // Attach the same Socket.IO instance so phones connected over HTTPS
+      // talk to the same room map as the desktop host on HTTP.
+      io.attach(httpsServer);
+      httpsServer.listen(HTTPS_PORT, HOST, () => {
+        const ips = getLanIps();
+        const lan = ips[0] || HOST;
+        console.log(`Twin Hearts HTTPS listening on https://${HOST}:${HTTPS_PORT}`);
+        console.log(`  iPhone join URL: https://${lan}:${HTTPS_PORT}/controller`);
+        console.log('  iOS will warn about the self-signed cert — tap "Show details" → "visit this website".');
+      });
+    } catch (err) {
+      console.warn('[https] Failed to start HTTPS listener:', err?.message || err);
+    }
+  }
 }
 
 main().catch((err) => {
