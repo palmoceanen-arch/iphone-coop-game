@@ -133,7 +133,7 @@ export class World {
     this._buildCampfire();
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
-    this.dayLength = 240;
+    this.dayLength = 480;
     this.update(0);
   }
 
@@ -152,10 +152,12 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff4d8, 1.4);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    // 4096² over the ~224 m active area = ~0.055 m / texel. With the texel-snap
-    // logic below, this is the resolution where tree-shadow edges stop looking
-    // pixelated at typical camera distances.
-    this.sun.shadow.mapSize.set(4096, 4096);
+    // 8192² over the ~224 m active area = ~0.027 m / texel. Combined with the
+    // texel-snap logic below this gives crisp tree-shadow edges at typical
+    // camera distances. ~64 MB GPU shadow texture — fine for desktop and iOS
+    // (4096² is the spec minimum, 8192² is supported by every WebGL2 device
+    // in practice).
+    this.sun.shadow.mapSize.set(8192, 8192);
     // Shadow camera covers the active 7×7 chunk area (~224m). The light + its
     // shadow camera follow the centroid of the players each frame so shadows
     // are always sharp around the action.
