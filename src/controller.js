@@ -22,6 +22,9 @@ const btnAbility = document.getElementById('btnAbility');
 const btnInteract = document.getElementById('btnInteract');
 const interactLabelEl = document.getElementById('interactLabel');
 const itemBarEl = document.getElementById('itemBar');
+const inventoryDrawer = document.getElementById('inventoryDrawer');
+const inventoryBody = document.getElementById('inventoryBody');
+const inventoryClose = document.getElementById('inventoryClose');
 const shopOverlay = document.getElementById('shopOverlay');
 const shopList = document.getElementById('shopList');
 const shopInventory = document.getElementById('shopInventory');
@@ -40,6 +43,15 @@ let state = {
 };
 let assignedSlot = -1;
 let started = false;
+let currentPlayerState = null;
+let itemBarLimit = 12;
+let inventoryOpen = false;
+
+const formatter = new Intl.NumberFormat('ru-RU');
+
+function safeText(value) {
+  return value == null ? '' : String(value);
+}
 
 // Pre-fill code from URL ?code=XXXX
 const initialCode = new URLSearchParams(location.search).get('code');
@@ -214,22 +226,55 @@ shopClose.addEventListener('click', (e) => {
   if (assignedSlot >= 0) socket.emit('input:event', { type: 'closeShop' });
 });
 
+function setInventoryOpen(open) {
+  inventoryOpen = !!open;
+  inventoryDrawer.classList.toggle('open', inventoryOpen);
+  inventoryDrawer.setAttribute('aria-hidden', inventoryOpen ? 'false' : 'true');
+  controllerEl.classList.toggle('inventory-open', inventoryOpen);
+  btnShop.classList.toggle('inventory-alert', inventoryOpen);
+  if (inventoryOpen) renderInventory(inventoryBody, currentPlayerState);
+}
+
+itemBarEl.addEventListener('click', () => {
+  if (!currentPlayerState || currentPlayerState.shopOpen) return;
+  setInventoryOpen(true);
+});
+inventoryClose.addEventListener('click', (e) => {
+  e.preventDefault();
+  setInventoryOpen(false);
+});
+
 // ----------------------------------------------------------------------
 // Player-state push from host: render HUD + shop list.
 // ----------------------------------------------------------------------
 let _itemBarSig = '';
 function renderItemBar(items) {
   items = items || [];
-  const sig = items.map(it => `${it.id}:${it.count}`).join('|');
+  const visible = items.slice(0, itemBarLimit);
+  const hiddenCount = Math.max(0, items.length - visible.length);
+  const sig = `${itemBarLimit}|${items.map(it => `${it.id}:${it.count}`).join('|')}`;
   if (sig === _itemBarSig) return;
   _itemBarSig = sig;
   itemBarEl.innerHTML = '';
-  for (const it of items) {
+  for (const it of visible) {
     const el = document.createElement('span');
     el.className = 'item-icon';
     if (it.rarity) el.dataset.rar = it.rarity;
-    el.title = it.name || it.id;
-    el.innerHTML = `<span class="ico">${it.icon || '?'}</span><span class="count">×${it.count}</span>`;
+    el.title = `${safeText(it.name || it.id)} ×${formatter.format(it.count || 0)}`;
+    const ico = document.createElement('span');
+    ico.className = 'ico';
+    ico.textContent = it.icon || '?';
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `×${formatter.format(it.count || 0)}`;
+    el.append(ico, count);
+    itemBarEl.appendChild(el);
+  }
+  if (hiddenCount > 0) {
+    const el = document.createElement('span');
+    el.className = 'item-icon more';
+    el.textContent = `+${hiddenCount}`;
+    el.title = 'Открыть полный инвентарь';
     itemBarEl.appendChild(el);
   }
 }
@@ -310,52 +355,106 @@ function renderInteract(prompt) {
   }
 }
 
-function renderShopInventory(s) {
-  shopInventory.innerHTML = '';
+function appendInventoryRows(container, s) {
   const toggle = (ev) => ev.currentTarget.classList.toggle('open');
 
-  // Ability
   const ah = document.createElement('div');
   ah.className = 'inv-header';
   ah.textContent = 'Способность';
-  shopInventory.appendChild(ah);
+  container.appendChild(ah);
   if (s.ability) {
     const d = document.createElement('div');
     d.className = 'inv-row';
-    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><div class="inv-desc">${s.ability.desc || ''}</div>`;
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
+    const desc = document.createElement('div');
+    desc.className = 'inv-desc';
+    desc.textContent = s.ability.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.';
+    d.append(name, desc);
     d.addEventListener('click', toggle);
-    shopInventory.appendChild(d);
+    container.appendChild(d);
   } else {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет способности</span>';
-    shopInventory.appendChild(e);
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.style.opacity = '0.4';
+    name.style.fontStyle = 'italic';
+    name.textContent = 'Нет способности';
+    e.appendChild(name);
+    container.appendChild(e);
   }
 
-  // Items
   const ih = document.createElement('div');
   ih.className = 'inv-header';
   ih.textContent = 'Предметы';
-  shopInventory.appendChild(ih);
+  container.appendChild(ih);
   const items = (s.items || []).filter(it => it.count > 0);
   if (items.length === 0) {
     const e = document.createElement('div');
     e.className = 'inv-row';
-    e.innerHTML = '<span class="inv-name" style="opacity:0.4;font-style:italic">Нет предметов</span>';
-    shopInventory.appendChild(e);
+    const name = document.createElement('span');
+    name.className = 'inv-name';
+    name.style.opacity = '0.4';
+    name.style.fontStyle = 'italic';
+    name.textContent = 'Нет предметов';
+    e.appendChild(name);
+    container.appendChild(e);
   } else {
     for (const it of items) {
       const d = document.createElement('div');
       d.className = 'inv-row';
-      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ' ×' + it.count : ''}</span><div class="inv-desc">${it.desc || ''}</div>`;
+      if (it.rarity) d.dataset.rar = it.rarity;
+      const name = document.createElement('span');
+      name.className = 'inv-name';
+      const label = document.createElement('span');
+      label.textContent = `${it.icon || ''} ${it.name || it.id}`;
+      const count = document.createElement('span');
+      count.className = 'inv-count';
+      count.textContent = `×${formatter.format(it.count || 0)}`;
+      name.append(label, count);
+      const desc = document.createElement('div');
+      desc.className = 'inv-desc';
+      desc.textContent = it.desc || '';
+      d.append(name, desc);
       d.addEventListener('click', toggle);
-      shopInventory.appendChild(d);
+      container.appendChild(d);
     }
   }
 }
 
+function renderInventory(container, s) {
+  container.innerHTML = '';
+  if (!s) return;
+  appendInventoryRows(container, s);
+}
+
+function renderShopInventory(s) {
+  renderInventory(shopInventory, s);
+}
+
+function computeItemBarLimit() {
+  const height = window.innerHeight || 0;
+  const width = window.innerWidth || 0;
+  if (height <= 430 && width > height) return width < 740 ? 8 : 10;
+  return 12;
+}
+
+function refreshItemBarLimit() {
+  const next = computeItemBarLimit();
+  if (next === itemBarLimit) return;
+  itemBarLimit = next;
+  _itemBarSig = '';
+  if (currentPlayerState) renderItemBar(currentPlayerState.items);
+}
+window.addEventListener('resize', refreshItemBarLimit);
+window.addEventListener('orientationchange', refreshItemBarLimit);
+refreshItemBarLimit();
+
 socket.on('state:player', (s) => {
   if (!s || typeof s.slot !== 'number') return;
+  currentPlayerState = s;
   document.getElementById('stHp').textContent = s.hp;
   document.getElementById('stMaxHp').textContent = s.maxHp;
   document.getElementById('stGold').textContent = s.gold;
@@ -364,9 +463,11 @@ socket.on('state:player', (s) => {
   document.getElementById('shopMaxHp').textContent = s.maxHp;
   document.getElementById('shopGold').textContent = s.gold;
   shopOverlay.classList.toggle('open', !!s.shopOpen);
+  if (s.shopOpen && inventoryOpen) setInventoryOpen(false);
   renderItemBar(s.items);
   renderAbility(s.ability);
   renderInteract(s.interact);
+  if (inventoryOpen) renderInventory(inventoryBody, s);
   // Render upgrades list
   shopList.innerHTML = '';
   for (const u of (s.upgrades || [])) {
@@ -411,6 +512,7 @@ function isInteractive(el) {
   if (!el) return false;
   const tag = el.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'A') return true;
+  if (el.closest && el.closest('.inventory-drawer')) return true;
   // Allow scrolling inside the shop overlay
   if (el.closest && el.closest('.shop-overlay')) return true;
   return false;

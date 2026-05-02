@@ -35,6 +35,15 @@
         padding: env(safe-area-inset-top, 16px) 16px env(safe-area-inset-bottom, 16px);
       }
       #controller { display: none; }
+      #controller.inventory-open .joystick,
+      #controller.inventory-open .action.attack,
+      #controller.inventory-open .action.dash,
+      #controller.inventory-open .action.ability,
+      #controller.inventory-open .action.interact,
+      #controller.inventory-open .hint {
+        opacity: 0.18;
+        pointer-events: none;
+      }
       h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.5px; }
       .sub { color: #9aa6c0; font-size: 14px; margin-bottom: 24px; text-align: center; max-width: 320px; }
       .codeinput {
@@ -172,6 +181,9 @@
         white-space: nowrap;
         pointer-events: none;
       }
+      .action.shop.inventory-alert {
+        box-shadow: 0 0 18px rgba(255,209,102,0.65), 0 4px 12px rgba(0,0,0,0.4);
+      }
       .action.ability.empty { opacity: 0.35; filter: grayscale(0.6); }
       .action.ability.cooling { opacity: 0.7; }
       .action.ability .ab-cd-text {
@@ -240,29 +252,42 @@
         left: 50%;
         transform: translateX(-50%);
         display: flex;
-        gap: 4px;
+        gap: 5px;
         flex-wrap: wrap;
-        max-width: min(60vw, 360px);
+        max-width: min(68vw, 420px);
+        max-height: calc(100dvh - 188px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        overflow: hidden;
         justify-content: center;
-        pointer-events: none;
+        pointer-events: auto;
+        align-content: flex-start;
+        z-index: 2;
       }
       .item-bar .item-icon {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 26px; height: 26px;
-        padding: 0 5px;
-        background: rgba(20, 28, 48, 0.9);
+        min-width: 34px; height: 32px;
+        padding: 0 7px;
+        background: rgba(20, 28, 48, 0.92);
         border: 1px solid rgba(255,255,255,0.18);
-        border-radius: 5px;
-        font-size: 14px;
-        gap: 2px;
+        border-radius: 8px;
+        font-size: 17px;
+        gap: 3px;
         color: #e0e6f3;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.28);
+        touch-action: manipulation;
+      }
+      .item-bar .item-icon.more {
+        min-width: 46px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        color: #ffd166;
       }
       .item-bar .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.45); }
       .item-bar .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.55); }
       .item-bar .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.7); }
-      .item-bar .item-icon .count { font-size: 11px; color: #cbd5ee; opacity: 0.85; }
+      .item-bar .item-icon .count { font-size: 12px; color: #cbd5ee; opacity: 0.92; font-weight: 800; }
       .action.pressed { transform: scale(0.92); filter: brightness(1.4); }
       .hint {
         position: absolute; top: 50%; left: 50%;
@@ -331,6 +356,11 @@
         align-content: start;
         -webkit-overflow-scrolling: touch;
       }
+      .shop-summary {
+        flex: 0 0 auto;
+        padding: 8px 12px 0;
+        font-size: 13px;
+      }
       @media (max-width: 480px) {
         #shopList { grid-template-columns: 1fr; }
       }
@@ -354,16 +384,68 @@
         touch-action: manipulation;
       }
       .upg-row.locked .price-btn { background: #2a3142; color: #6e7a96; }
-      #shopInventory { padding: 0 calc(env(safe-area-inset-right, 0px) + 12px) calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 12px); }
-      .inv-header { font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 6px; }
-      .inv-row { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; margin: 4px 0; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; touch-action: manipulation; }
+      .inventory-drawer {
+        position: absolute;
+        left: 50%;
+        top: calc(env(safe-area-inset-top, 0px) + 68px);
+        width: min(520px, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 20px));
+        max-height: calc(100dvh - 88px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        display: none;
+        flex-direction: column;
+        z-index: 12;
+        overflow: hidden;
+        background: rgba(9, 12, 20, 0.96);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 18px;
+        box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+      }
+      .inventory-drawer.open { display: flex; }
+      .inventory-top {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; padding: 10px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+      }
+      .inventory-title { font-size: 14px; font-weight: 800; letter-spacing: 0.2px; }
+      .inventory-close {
+        background: rgba(255,255,255,0.08); color: #e0e6f3;
+        border: 1px solid rgba(255,255,255,0.16); border-radius: 10px;
+        padding: 6px 10px; font-size: 13px; touch-action: manipulation;
+      }
+      #inventoryBody {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 10px 12px 12px;
+        touch-action: pan-y;
+      }
+      #shopInventory { padding: 8px 12px 12px; }
+      .inv-header { font-size: 11px; opacity: 0.58; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px; }
+      .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
       .inv-row:active { background: rgba(255,255,255,0.08); }
-      .inv-row .inv-name { font-weight: 600; }
-      .inv-row .inv-desc { display: none; opacity: 0.55; font-size: 11px; margin-top: 3px; }
+      .inv-row .inv-name { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; }
+      .inv-row .inv-desc { display: none; color: #aab6d3; font-size: 11px; margin-top: 5px; }
       .inv-row.open .inv-desc { display: block; }
+      .inv-count { color: #cbd5ee; font-weight: 800; }
       :root { --p1: #6ad0ff; --p2: #ff8a8a; }
       #controller.p1 .badge .p { color: var(--p1); }
       #controller.p2 .badge .p { color: var(--p2); }
+      @media (orientation: landscape) and (max-height: 430px) {
+        #controller .badge { top: calc(env(safe-area-inset-top, 0px) + 8px); left: calc(env(safe-area-inset-left, 0px) + 10px); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #controller .status { top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 10px); }
+        .stats { top: calc(env(safe-area-inset-top, 0px) + 36px); left: calc(env(safe-area-inset-left, 0px) + 10px); gap: 8px; padding: 4px 9px; }
+        .joystick { width: 142px; height: 142px; left: calc(env(safe-area-inset-left, 0px) + 12px); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+        .joystick .knob { width: 60px; height: 60px; margin: -30px 0 0 -30px; }
+        .action.attack { width: 80px; height: 80px; right: calc(env(safe-area-inset-right, 0px) + 12px); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+        .action.dash { width: 64px; height: 64px; right: calc(env(safe-area-inset-right, 0px) + 20px); bottom: calc(env(safe-area-inset-bottom, 0px) + 98px); }
+        .action.ability { width: 70px; height: 70px; right: calc(env(safe-area-inset-right, 0px) + 98px); bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); }
+        .action.interact { width: 62px; height: 62px; right: calc(env(safe-area-inset-right, 0px) + 104px); bottom: calc(env(safe-area-inset-bottom, 0px) + 98px); }
+        .action.shop { top: calc(env(safe-area-inset-top, 0px) + 6px); width: 52px; height: 52px; }
+        .item-bar { top: calc(env(safe-area-inset-top, 0px) + 64px); max-width: calc(100vw - 352px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); max-height: calc(100dvh - 132px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+        .item-bar .item-icon { min-width: 31px; height: 29px; font-size: 16px; padding: 0 6px; }
+        .hint { font-size: 12px; max-width: 220px; }
+        .inventory-drawer { top: calc(env(safe-area-inset-top, 0px) + 62px); width: min(480px, calc(100vw - 190px)); max-height: calc(100dvh - 74px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+        #shopList { grid-template-columns: 1fr 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -385,6 +467,13 @@
       </div>
       <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
       <div class="item-bar" id="itemBar"></div>
+      <div class="inventory-drawer" id="inventoryDrawer" aria-hidden="true">
+        <div class="inventory-top">
+          <div class="inventory-title">Инвентарь</div>
+          <button class="inventory-close" id="inventoryClose" type="button">Закрыть</button>
+        </div>
+        <div id="inventoryBody"></div>
+      </div>
       <div class="action attack" id="btnAttack">⚔</div>
       <div class="action dash" id="btnDash">⇢</div>
       <div class="action ability empty" id="btnAbility">
@@ -407,7 +496,7 @@
           <h2>Магазин</h2>
           <button class="close-btn" id="shopClose">Закрыть</button>
         </div>
-        <div style="margin-bottom: 12px;">
+        <div class="shop-summary">
           ❤ <span id="shopHp">100</span>/<span id="shopMaxHp">100</span>
           &nbsp;·&nbsp;
           <span class="gold">⛁ <span id="shopGold">0</span></span>
