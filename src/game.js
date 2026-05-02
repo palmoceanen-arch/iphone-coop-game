@@ -387,6 +387,20 @@ export class Game {
     const i1 = this.input.intent(0);
     const i2 = this.input.intent(1);
 
+    // If a teammate is downed and the alive partner is within revive range,
+    // their dash button is reserved for the revive hold — suppress the dash
+    // edge so pressing R/K starts the lift instead of also firing a dart-away
+    // dash on the same tap.
+    const intents = [i1, i2];
+    for (let i = 0; i < this.players.length; i++) {
+      const dead = this.players[i];
+      const partner = this.players[1 - i];
+      if (dead.alive || !partner.alive) continue;
+      if (vdist(dead.pos, partner.pos) <= REVIVE_RANGE) {
+        intents[partner.index].dash = false;
+      }
+    }
+
     // Update players
     this.players[0].update(dt, i1, this.players[1], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));
     this.players[1].update(dt, i2, this.players[0], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));

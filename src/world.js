@@ -607,10 +607,15 @@ export class World {
     const a = (this.dayTime - 0.25) * Math.PI * 2;
     const sunY = Math.sin(a);
     const sunX = Math.cos(a);
-    // Stay bright through most of the day, fade only around dusk/dawn.
-    const dayBoost = Math.max(0, sunY);
-    this.sun.intensity = (0.35 + dayBoost * 1.25);
-    if (sunY <= 0) this.sun.intensity = Math.max(0, sunY + 1) * 0.05;
+    // All time-of-day lighting is driven by smooth lerps across the horizon
+    // so 06:00 sunrise and 18:00 sunset transition continuously instead of
+    // stepping in a single tick. Day curve goes 0.35..1.6 above the horizon;
+    // night curve goes 0..0.05 below; the smoothstep blends them through a
+    // narrow twilight band centered at sunY = 0.
+    const sunDayInt = 0.35 + Math.max(0, sunY) * 1.25;
+    const sunNightInt = Math.max(0, sunY + 1) * 0.05;
+    const sunHorizonMix = THREE.MathUtils.smoothstep(sunY, -0.18, 0.18);
+    this.sun.intensity = THREE.MathUtils.lerp(sunNightInt, sunDayInt, sunHorizonMix);
     // Animate sun position along its east→up→west arc, anchored to the
     // player centroid. Height is clamped so the shadow camera's near/far
     // planes still cover the active chunks even when the sun is low.
@@ -619,18 +624,19 @@ export class World {
     const sunHeight = Math.max(15, Math.abs(sunY) * 70 + 20);
     this.sun.position.set(cx + sunX * 60, sunHeight, cz + 25);
 
-    const t = dayBoost; // 0 at sunset/sunrise, 1 at noon
     const dayCol = new THREE.Color(0x6cb6ff);
     const nightCol = new THREE.Color(0x0a1126);
     const sunset = new THREE.Color(0xff9a55);
-    const tt = t;
     const sunsetMix = Math.max(0, 1 - Math.abs((this.dayTime - 0.78) * 6)) + Math.max(0, 1 - Math.abs((this.dayTime - 0.22) * 6));
-    const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, tt).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
+    // Smooth day weight derived from sun elevation: 0 deep night, 1 full day,
+    // gradually crossing through twilight. Used to lerp sky/ambient/moon so
+    // they fade gracefully around dawn and dusk.
+    const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.18, 0.45);
+    const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, dayWeight).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
     this.scene.fog.color.copy(skyCol);
-    // Ambient stays low at all times so toon shading reads. Slight day/night dip.
-    this.ambient.intensity = 0.10 + tt * 0.12;
-    this.moonHelper.intensity = (1 - tt) * 0.25;
+    this.ambient.intensity = THREE.MathUtils.lerp(0.10, 0.22, dayWeight);
+    this.moonHelper.intensity = THREE.MathUtils.lerp(0.25, 0.0, dayWeight);
 
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
