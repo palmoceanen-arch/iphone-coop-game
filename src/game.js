@@ -254,9 +254,13 @@ export class Game {
 
   _refreshShopState() {
     // Game pauses if EITHER phone is in shop OR keyboard shop is open.
-    this.shopOpen = !!(this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1]);
-    document.getElementById('shop')?.classList.toggle('open', !!this._keyboardShop);
-    if (this._keyboardShop) {
+    const anyPhoneShop = this.phoneShopOpen[0] || this.phoneShopOpen[1];
+    this.shopOpen = !!(this._keyboardShop || anyPhoneShop);
+    // Show PC shop panel when phone OR keyboard opens shop — monitor
+    // has room for full descriptions/inventory that phone lacks.
+    const showPc = !!(this._keyboardShop || anyPhoneShop);
+    document.getElementById('shop')?.classList.toggle('open', showPc);
+    if (showPc) {
       renderShop(this.players[0], this.players[1], (slot, idx) => this._tryBuy(slot, idx));
     }
   }
@@ -287,7 +291,7 @@ export class Game {
     }));
     const items = Object.entries(p.items || {}).map(([id, count]) => {
       const def = ITEM_BY_ID[id];
-      return def ? { id, name: def.name, icon: def.icon, rarity: def.rarity, count } : null;
+      return def ? { id, name: def.name, icon: def.icon, rarity: def.rarity, count, desc: def.desc || '' } : null;
     }).filter(Boolean);
     let ability = null;
     if (p.ability) {
@@ -296,6 +300,7 @@ export class Game {
         ability = {
           id: p.ability,
           name: def.name,
+          desc: def.desc || '',
           icon: def.icon,
           color: '#' + def.color.toString(16).padStart(6, '0'),
           cd: Math.max(0, p.abilityCd || 0),

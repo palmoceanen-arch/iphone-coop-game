@@ -24,6 +24,7 @@ const interactLabelEl = document.getElementById('interactLabel');
 const itemBarEl = document.getElementById('itemBar');
 const shopOverlay = document.getElementById('shopOverlay');
 const shopList = document.getElementById('shopList');
+const shopInventory = document.getElementById('shopInventory');
 const shopClose = document.getElementById('shopClose');
 
 // Pre-cache cooldown circle circumference (radius=44 → C ≈ 276.46)
@@ -309,6 +310,47 @@ function renderInteract(prompt) {
   }
 }
 
+function renderShopInventory(s) {
+  shopInventory.innerHTML = '';
+
+  // Ability
+  const ah = document.createElement('div');
+  ah.className = 'inv-header';
+  ah.textContent = 'Способность';
+  shopInventory.appendChild(ah);
+  if (s.ability) {
+    const d = document.createElement('div');
+    d.className = 'inv-row';
+    d.innerHTML = `<span class="inv-name">${s.ability.icon || '✦'} ${s.ability.name}</span><br><span class="inv-desc">${s.ability.desc || ''}</span>`;
+    shopInventory.appendChild(d);
+  } else {
+    const e = document.createElement('div');
+    e.className = 'inv-row';
+    e.innerHTML = '<span class="inv-desc">Нет способности</span>';
+    shopInventory.appendChild(e);
+  }
+
+  // Items
+  const ih = document.createElement('div');
+  ih.className = 'inv-header';
+  ih.textContent = 'Предметы';
+  shopInventory.appendChild(ih);
+  const items = (s.items || []).filter(it => it.count > 0);
+  if (items.length === 0) {
+    const e = document.createElement('div');
+    e.className = 'inv-row';
+    e.innerHTML = '<span class="inv-desc">Нет предметов</span>';
+    shopInventory.appendChild(e);
+  } else {
+    for (const it of items) {
+      const d = document.createElement('div');
+      d.className = 'inv-row';
+      d.innerHTML = `<span class="inv-name">${it.icon || ''} ${it.name}${it.count > 1 ? ` ×${it.count}` : ''}</span><br><span class="inv-desc">${it.desc || ''}</span>`;
+      shopInventory.appendChild(d);
+    }
+  }
+}
+
 socket.on('state:player', (s) => {
   if (!s || typeof s.slot !== 'number') return;
   document.getElementById('stHp').textContent = s.hp;
@@ -337,6 +379,8 @@ socket.on('state:player', (s) => {
     `;
     shopList.appendChild(row);
   }
+  // Render inventory below upgrades
+  if (s.shopOpen) renderShopInventory(s);
 });
 
 shopList.addEventListener('click', (e) => {
