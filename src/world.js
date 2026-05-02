@@ -165,9 +165,10 @@ export class World {
     this.sun.shadow.camera.far = 250;
     this.sun.shadow.bias = -0.0008;
     this.sun.shadow.normalBias = 0.04;
-    // Softness via fixed PCF radius — keeps the previous low-poly look while
-    // staying stable frame-to-frame (PCFShadowMap kernel, see game.js).
-    this.sun.shadow.radius = 4;
+    // Hard-ish shadows: a 1-texel PCF radius gives a crisp edge that still
+    // anti-aliases (no jagged staircase), and stays stable frame-to-frame
+    // (PCFShadowMap kernel, see game.js).
+    this.sun.shadow.radius = 1;
     this.sun.target = new THREE.Object3D();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
