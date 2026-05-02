@@ -143,11 +143,11 @@ export class AbilityProjectile {
 
     if (this._customAoe) this._customAoe(this.pos);
 
-    const vfxR = Math.min(this.aoeRadius || 1.5, 2.5);
-    effects.flashSphere(this.pos.x, 1.0, this.pos.z, this.color, vfxR * 0.6, 0.25);
-    effects.ring(this.pos.x, 0.05, this.pos.z, this.color, vfxR, 0.35);
-    effects.burst(this.pos.x, 1.0, this.pos.z, this.color, 8, 4, 0.3);
-    effects.shakeCamera(0.2);
+    const vfxR = Math.min(this.aoeRadius || 1.0, 1.5);
+    effects.flashSphere(this.pos.x, 1.0, this.pos.z, this.color, vfxR * 0.5, 0.2);
+    effects.ring(this.pos.x, 0.05, this.pos.z, this.color, vfxR * 0.6, 0.3);
+    effects.burst(this.pos.x, 1.0, this.pos.z, this.color, 6, 3, 0.25);
+    effects.shakeCamera(0.15);
     sound.bomb?.();
 
     this._cleanup();
