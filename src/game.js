@@ -234,7 +234,11 @@ export class Game {
       this._pushPlayerState(slot);
       return;
     }
-    // Otherwise treat as input edge (attack, dash)
+    if (event.type === 'cast') {
+      this._tryCastAbility(slot);
+      return;
+    }
+    // Otherwise treat as input edge (attack, dash, interact)
     this.input.remoteEvent(slot, event.type);
   }
 
@@ -271,6 +275,24 @@ export class Game {
       level: p.upgradeLevels[u.id] || 0,
       price: priceFor(p, u),
     }));
+    const items = Object.entries(p.items || {}).map(([id, count]) => {
+      const def = ITEM_BY_ID[id];
+      return def ? { id, name: def.name, icon: def.icon, rarity: def.rarity, count } : null;
+    }).filter(Boolean);
+    let ability = null;
+    if (p.ability) {
+      const def = ABILITY_BY_ID[p.ability];
+      if (def) {
+        ability = {
+          id: p.ability,
+          name: def.name,
+          icon: def.icon,
+          color: '#' + def.color.toString(16).padStart(6, '0'),
+          cd: Math.max(0, p.abilityCd || 0),
+          cdMax: def.cd,
+        };
+      }
+    }
     this.lobby.sendToSlot(slot, 'state:player', {
       slot,
       hp: Math.round(p.hp),
@@ -280,7 +302,44 @@ export class Game {
       damage: Math.round(p.stats.damage),
       shopOpen: this.phoneShopOpen[slot],
       upgrades,
+      items,
+      ability,
+      interact: this._nearbyInteractFor(slot),
     });
+  }
+
+  _nearbyInteractFor(slot) {
+    const p = this.players[slot];
+    if (!p || !p.alive) return null;
+    let best = null;
+    let bestD = Infinity;
+    // Item runes auto-pickup so they don't need a prompt — only ability runes + chests do.
+    for (const r of this.runes) {
+      if (!r.alive || r.kind !== 'ability') continue;
+      const dx = r.mesh.position.x - p.pos.x;
+      const dz = r.mesh.position.z - p.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.0 && d < bestD) {
+        bestD = d;
+        const def = ABILITY_BY_ID[r.payloadId];
+        best = {
+          kind: 'ability',
+          label: def ? `Взять «${def.name}»` : 'Взять способность',
+          color: def ? '#' + def.color.toString(16).padStart(6, '0') : '#9bd1ff',
+        };
+      }
+    }
+    for (const c of this.chests) {
+      if (!c.alive || c.opened) continue;
+      const dx = c.pos.x - p.pos.x;
+      const dz = c.pos.z - p.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1.6 && d < bestD) {
+        bestD = d;
+        best = { kind: 'chest', label: 'Открыть сундук', color: '#ffd166' };
+      }
+    }
+    return best;
   }
 
   _startGame() {

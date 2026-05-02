@@ -17,8 +17,8 @@ export class Input {
     // Remote (mobile) state per slot. Each entry: { moveX, moveZ, attackHeld, dashHeld }
     // Edge events (attack/dash) come through pressed flags below, set true once and consumed by .intent().
     this.remote = [
-      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false },
-      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false },
+      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false, interactEdge: false },
+      { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false, interactEdge: false },
     ];
     this._onDown = (e) => {
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(e.code)) e.preventDefault();
@@ -52,6 +52,7 @@ export class Input {
     const r = this.remote[slot];
     if (type === 'attack') r.attackEdge = true;
     else if (type === 'dash') r.dashEdge = true;
+    else if (type === 'interact') r.interactEdge = true;
   }
 
   anyDown(codes) { for (const c of codes) if (this.down.has(c)) return true; return false; }
@@ -80,6 +81,7 @@ export class Input {
     const dashPressed = this.consumePressed(map.dash);
     const remoteAttackEdge = r.attackEdge; r.attackEdge = false;
     const remoteDashEdge = r.dashEdge; r.dashEdge = false;
+    const remoteInteractEdge = r.interactEdge; r.interactEdge = false;
 
     return {
       moveX: mx,
@@ -88,7 +90,7 @@ export class Input {
       attackHeld: this.anyDown(map.attack) || r.attackHeld,
       dash: dashPressed || remoteDashEdge,
       dashHeld: this.anyDown(map.dash) || r.dashHeld,
-      interact: this.consumePressed(map.interact),
+      interact: this.consumePressed(map.interact) || remoteInteractEdge,
     };
   }
 

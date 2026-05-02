@@ -129,6 +129,107 @@
       .action.attack { background: linear-gradient(180deg, rgba(255,138,138,0.55) 0%, rgba(220,80,80,0.4) 100%); border-color: rgba(255,138,138,0.6); }
       .action.dash { background: linear-gradient(180deg, rgba(106,208,255,0.55) 0%, rgba(60,148,200,0.4) 100%); border-color: rgba(106,208,255,0.6); }
       .action.shop { background: linear-gradient(180deg, rgba(255,209,102,0.55) 0%, rgba(212,160,42,0.4) 100%); border-color: rgba(255,209,102,0.6); width: 60px; height: 60px; font-size: 22px; }
+      .action.ability {
+        position: absolute;
+        right: 132px;
+        bottom: max(env(safe-area-inset-bottom, 0px), 138px);
+        width: 78px; height: 78px;
+        background: linear-gradient(180deg, rgba(173,138,255,0.55) 0%, rgba(126,86,212,0.4) 100%);
+        border-color: rgba(173,138,255,0.6);
+        font-size: 28px;
+        z-index: 3;
+      }
+      .action.ability.empty { opacity: 0.35; filter: grayscale(0.6); }
+      .action.ability.cooling { opacity: 0.7; }
+      .action.ability .ab-cd-text {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px; font-weight: 800;
+        text-shadow: 0 1px 3px #000;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg circle {
+        fill: none;
+        stroke: rgba(0,0,0,0.55);
+        stroke-width: 6;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+        transition: stroke-dashoffset 0.05s linear;
+      }
+      .action.interact {
+        position: absolute;
+        right: 132px;
+        bottom: max(env(safe-area-inset-bottom, 0px), 60px);
+        width: 76px; height: 76px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,209,102,0.85);
+        background: linear-gradient(180deg, rgba(255,221,138,0.85) 0%, rgba(218,166,52,0.7) 100%);
+        color: #1a1206;
+        font-size: 28px;
+        font-weight: 800;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45);
+        animation: pulseInteract 1.2s ease-in-out infinite;
+        touch-action: none;
+        z-index: 4;
+      }
+      .action.interact.show { display: flex; }
+      .action.interact.pressed { transform: scale(0.9); filter: brightness(1.3); }
+      .action.interact .label {
+        position: absolute;
+        right: 100%;
+        top: 50%;
+        transform: translate(-10px, -50%);
+        white-space: nowrap;
+        background: rgba(20, 28, 48, 0.92);
+        color: #e0e6f3;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,209,102,0.5);
+        pointer-events: none;
+      }
+      @keyframes pulseInteract {
+        0%, 100% { box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45); }
+        50% { box-shadow: 0 0 28px rgba(255,209,102,0.85), 0 4px 16px rgba(0,0,0,0.45); }
+      }
+      .item-bar {
+        position: absolute;
+        top: max(env(safe-area-inset-top, 0px), 110px);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        max-width: min(86vw, 480px);
+        justify-content: center;
+        pointer-events: none;
+      }
+      .item-bar .item-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px; height: 26px;
+        padding: 0 5px;
+        background: rgba(20, 28, 48, 0.9);
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 5px;
+        font-size: 14px;
+        gap: 2px;
+        color: #e0e6f3;
+      }
+      .item-bar .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.45); }
+      .item-bar .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.55); }
+      .item-bar .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.7); }
+      .item-bar .item-icon .count { font-size: 11px; color: #cbd5ee; opacity: 0.85; }
       .action.pressed { transform: scale(0.92); filter: brightness(1.4); }
       .hint {
         position: absolute; top: 50%; left: 50%;
@@ -210,12 +311,22 @@
         <span class="dmg">⚔ <span id="stDmg">0</span></span>
       </div>
       <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
+      <div class="item-bar" id="itemBar"></div>
       <div class="actions">
         <div class="action attack" id="btnAttack">⚔</div>
         <div class="action dash" id="btnDash">⇢</div>
         <div class="action shop" id="btnShop">⛁</div>
       </div>
-      <div class="hint" id="hint">Левый стик — движение · ⚔ удар · ⇢ рывок · ⛁ магазин</div>
+      <div class="action ability empty" id="btnAbility">
+        <span class="ab-icon">·</span>
+        <svg class="ab-cd-svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="0"/></svg>
+        <span class="ab-cd-text"></span>
+      </div>
+      <div class="action interact" id="btnInteract">
+        <span class="label" id="interactLabel">Взять</span>
+        ✋
+      </div>
+      <div class="hint" id="hint">Левый стик — движение · ⚔ удар · ⇢ рывок · ✦ способность · ⛁ магазин</div>
 
       <div class="shop-overlay" id="shopOverlay">
         <div class="top">
