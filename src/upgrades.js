@@ -1,5 +1,6 @@
 import { ITEM_BY_ID } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
+import { iconHTML } from './icons.js';
 
 // Upgrade definitions and shop UI logic.
 export const UPGRADES = [
@@ -42,7 +43,7 @@ export function renderShop(player1, player2, onBuy) {
           <div style="opacity:0.65;font-size:11px;">${u.desc}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
-          <span class="price">⛁ ${price}</span>
+          <span class="price">${iconHTML('coin', { size: 14 })} ${price}</span>
           <kbd>${idxKey}</kbd>
         </div>`;
       if (onBuy) {
@@ -74,7 +75,7 @@ export function renderShop(player1, player2, onBuy) {
         const d = document.createElement('div');
         d.className = 'inv-ability';
         const castKey = player.index === 0 ? 'G' : 'H';
-        d.innerHTML = `<span class="inv-name">${def.icon} ${def.name} <kbd>${castKey}</kbd></span><div class="inv-desc">${def.desc}</div>`;
+        d.innerHTML = `<span class="inv-name"><span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(def.icon || 'sparkle', { size: 16 })}</span>${def.name} <kbd>${castKey}</kbd></span><div class="inv-desc">${def.desc}</div>`;
         d.addEventListener('click', toggle);
         el.appendChild(d);
       }
@@ -101,7 +102,7 @@ export function renderShop(player1, player2, onBuy) {
         if (!def) continue;
         const d = document.createElement('div');
         d.className = 'inv-item';
-        d.innerHTML = `<span class="inv-name">${def.icon || ''} ${def.name}${count > 1 ? ' ×' + count : ''}</span><div class="inv-desc">${def.desc || ''}</div>`;
+        d.innerHTML = `<span class="inv-name"><span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(def.icon || 'sparkle', { size: 16 })}</span>${def.name}${count > 1 ? ' ×' + count : ''}</span><div class="inv-desc">${def.desc || ''}</div>`;
         d.addEventListener('click', toggle);
         el.appendChild(d);
       }

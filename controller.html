@@ -715,9 +715,9 @@
       <div class="badge">Игрок <span class="p">?</span> · комната <span id="roomcode">····</span></div>
       <div class="status" id="status">Жди старта игры…</div>
       <div class="stats">
-        <span class="hp">♥ <span id="stHp">100</span>/<span id="stMaxHp">100</span></span>
-        <span class="gold">⛁ <span id="stGold">0</span></span>
-        <span class="dmg">⚔ <span id="stDmg">0</span></span>
+        <span class="hp"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21C5 15 4 9 8 7c2-1 4 1 4 3 0-2 2-4 4-3 4 2 3 8-4 14z"/></svg> <span id="stHp">100</span>/<span id="stMaxHp">100</span></span>
+        <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="stGold">0</span></span>
+        <span class="dmg"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4L9 15"/><path d="M5 19l-2-2 4-4 4 4-4 4z"/><path d="M8 16l4 4"/></svg> <span id="stDmg">0</span></span>
       </div>
       <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
       <div class="item-bar" id="itemBar"></div>
@@ -728,7 +728,7 @@
         </div>
         <div id="inventoryBody"></div>
       </div>
-      <div class="action attack" id="btnAttack">⚔</div>
+      <div class="action attack" id="btnAttack"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4L9 15"/><path d="M5 19l-2-2 4-4 4 4-4 4z"/><path d="M8 16l4 4"/></svg></div>
       <div class="action dash" id="btnDash">⇢</div>
       <div class="action ability empty" id="btnAbility">
         <span class="ab-icon">·</span>
@@ -736,11 +736,11 @@
         <span class="ab-cd-text"></span>
       </div>
       <div class="action shop" id="btnShop" aria-label="Магазин" title="Магазин">
-        ⛁
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg>
       </div>
       <div class="action interact" id="btnInteract">
         <span class="label" id="interactLabel">Взять</span>
-        ✋
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11V6a1.5 1.5 0 0 1 3 0v5"/><path d="M10 11V4a1.5 1.5 0 0 1 3 0v7"/><path d="M13 11V5a1.5 1.5 0 0 1 3 0v6"/><path d="M16 11V7a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-2a7 7 0 0 1-7-7v-3l3 1"/></svg>
       </div>
       <div class="hint" id="hint">Стик — движение · удар · рывок · способность · магазин</div>
 
@@ -748,8 +748,8 @@
         <div class="top">
           <h2>Магазин</h2>
           <div class="shop-stats">
-            <span class="hp">❤ <span id="shopHp">100</span>/<span id="shopMaxHp">100</span></span>
-            <span class="gold">⛁ <span id="shopGold">0</span></span>
+            <span class="hp"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21C5 15 4 9 8 7c2-1 4 1 4 3 0-2 2-4 4-3 4 2 3 8-4 14z"/></svg> <span id="shopHp">100</span>/<span id="shopMaxHp">100</span></span>
+            <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shopGold">0</span></span>
           </div>
           <button class="close-btn" id="shopClose">Закрыть</button>
         </div>

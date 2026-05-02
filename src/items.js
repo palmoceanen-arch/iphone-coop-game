@@ -34,7 +34,7 @@ function partnerDist(player, ctx) {
 export const ITEMS = [
   // ---- common ---------------------------------------------------------
   {
-    id: 'boots', name: 'Ловкие сапоги', icon: '👟', rarity: 'common',
+    id: 'boots', name: 'Ловкие сапоги', icon: 'boot', rarity: 'common',
     desc: '+6% к скорости передвижения за стак.',
     hooks: {
       onTick(player, ctx) {
@@ -48,7 +48,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'thorns', name: 'Колючая броня', icon: '🛡', rarity: 'common',
+    id: 'thorns', name: 'Колючая броня', icon: 'shield', rarity: 'common',
     desc: 'Отражает 1 урон в атакующего за стак.',
     hooks: {
       onTakeDamage(player, ctx) {
@@ -59,7 +59,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'regen', name: 'Серебряное ожерелье', icon: '💎', rarity: 'common',
+    id: 'regen', name: 'Серебряное ожерелье', icon: 'gem', rarity: 'common',
     desc: '+0.6 HP в секунду регенерации за стак.',
     hooks: {
       onTick(player, ctx) {
@@ -72,7 +72,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'fang', name: 'Гадюкин клык', icon: '🐍', rarity: 'common',
+    id: 'fang', name: 'Гадюкин клык', icon: 'snake', rarity: 'common',
     desc: 'Атака отравляет цель: 4% макс HP в секунду на 2с (+1с/стак).',
     hooks: {
       onHit(player, ctx) {
@@ -87,7 +87,7 @@ export const ITEMS = [
 
   // ---- uncommon -------------------------------------------------------
   {
-    id: 'echo', name: 'Лук эхо', icon: '🏹', rarity: 'uncommon',
+    id: 'echo', name: 'Лук эхо', icon: 'bow', rarity: 'uncommon',
     desc: '20% шанс повторить удар по другому врагу (+10% за стак, макс 70%).',
     hooks: {
       onHit(player, ctx) {
@@ -110,7 +110,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'rage', name: 'Ярость берсерка', icon: '🔥', rarity: 'uncommon',
+    id: 'rage', name: 'Ярость берсерка', icon: 'flame', rarity: 'uncommon',
     desc: '+25% урона при HP < 50% (+15% за стак).',
     hooks: {
       onAttack(player, ctx) {
@@ -123,7 +123,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'crit', name: 'Молот разлома', icon: '⚒', rarity: 'uncommon',
+    id: 'crit', name: 'Молот разлома', icon: 'hammer', rarity: 'uncommon',
     desc: '+8% к шансу крита за стак (×2 урон при крите).',
     hooks: {
       onAttack(player, ctx) {
@@ -135,7 +135,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'leech', name: 'Пилюля кровавой охоты', icon: '🩸', rarity: 'uncommon',
+    id: 'leech', name: 'Пилюля кровавой охоты', icon: 'drop', rarity: 'uncommon',
     desc: 'Вампиризм 4% от нанесённого урона за стак.',
     hooks: {
       onHit(player, ctx) {
@@ -147,7 +147,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'doubleStrike', name: 'Мерцающий клинок', icon: '⚡', rarity: 'uncommon',
+    id: 'doubleStrike', name: 'Мерцающий клинок', icon: 'bolt', rarity: 'uncommon',
     desc: '20% шанс ударить дважды (+15% за стак, макс 75%).',
     hooks: {
       onHit(player, ctx) {
@@ -161,7 +161,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'dashBlast', name: 'Аура отдачи', icon: '💥', rarity: 'uncommon',
+    id: 'dashBlast', name: 'Аура отдачи', icon: 'burst', rarity: 'uncommon',
     desc: 'Дэш создаёт взрыв в радиусе 2м (+0.6м за стак), 12 урона/стак.',
     hooks: {
       onDash(player, ctx) {
@@ -186,7 +186,7 @@ export const ITEMS = [
 
   // ---- rare ----------------------------------------------------------
   {
-    id: 'frost', name: 'Снежная буря', icon: '❄', rarity: 'rare',
+    id: 'frost', name: 'Снежная буря', icon: 'snowflake', rarity: 'rare',
     desc: '8% шанс заморозить врага на 1с (+5%/стак, макс 50%).',
     hooks: {
       onHit(player, ctx) {
@@ -199,7 +199,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'dodge', name: 'Кольцо тени', icon: '💨', rarity: 'rare',
+    id: 'dodge', name: 'Кольцо тени', icon: 'wind', rarity: 'rare',
     desc: '8% шанс уклониться (+5%/стак, макс 50%).',
     hooks: {
       onTakeDamage(player, ctx) {
@@ -213,7 +213,7 @@ export const ITEMS = [
 
   // ---- legendary -----------------------------------------------------
   {
-    id: 'thunder', name: 'Молот Тора', icon: '🔱', rarity: 'legendary',
+    id: 'thunder', name: 'Молот Тора', icon: 'trident', rarity: 'legendary',
     desc: 'Каждый 8-й удар вызывает молнию (-1 удар за стак, мин 3).',
     hooks: {
       onHit(player, ctx) {
@@ -241,7 +241,7 @@ export const ITEMS = [
 
   // ---- coop synergies ------------------------------------------------
   {
-    id: 'companion', name: 'Дружеский амулет', icon: '🤝', rarity: 'rare',
+    id: 'companion', name: 'Дружеский амулет', icon: 'handshake', rarity: 'rare',
     desc: '+15% урона за стак, пока напарник в 5м.',
     hooks: {
       onAttack(player, ctx) {
@@ -252,7 +252,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'bond', name: 'Резонатор бонда', icon: '💖', rarity: 'legendary',
+    id: 'bond', name: 'Резонатор бонда', icon: 'heart', rarity: 'legendary',
     desc: 'Когда поводок натянут — оба игрока получают +60% урона.',
     hooks: {
       onAttack(player, ctx) {

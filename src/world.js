@@ -126,6 +126,7 @@ export class World {
     this.colliders = [];              // aggregated from active chunks only
     this.enemySpawns = [];            // queue read by Game on first frame after a chunk loads
     this.chestSpawns = [];            // same idea but for procedural chests
+    this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     this._buildSky();
@@ -243,6 +244,9 @@ export class World {
         if (chunk.chestSpawns) {
           for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
         }
+        if (chunk.breakableSpawns) {
+          for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
+        }
       }
     }
   }
@@ -320,6 +324,7 @@ export class World {
     const colliders = [];
     const enemySpawns = [];
     const chestSpawns = [];
+    const breakableSpawns = [];
 
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
@@ -462,7 +467,34 @@ export class World {
       }
     }
 
-    return { group, colliders, enemySpawns, chestSpawns, cx, cz };
+    // 8. Breakable props — clay pots and wooden crates. Skip the origin
+    // chunk so the campfire / starting clearing stays uncluttered. Pots
+    // appear in small clusters; crates are rarer and tend to sit alone.
+    // Materialised by Game so it can wire up the destruction-→loot path.
+    if (!isOrigin) {
+      const potAttempts = 4;
+      for (let i = 0; i < potAttempts; i++) {
+        if (!r.chance(0.45)) continue;
+        const x = minX + r.range(2, CHUNK_SIZE - 2);
+        const z = minZ + r.range(2, CHUNK_SIZE - 2);
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 0.7, colliders)) continue;
+        breakableSpawns.push({ x, z, kind: 'pot', chunkKey: `${cx},${cz}` });
+      }
+      const crateAttempts = 2;
+      for (let i = 0; i < crateAttempts; i++) {
+        if (!r.chance(0.40)) continue;
+        const x = minX + r.range(2, CHUNK_SIZE - 2);
+        const z = minZ + r.range(2, CHUNK_SIZE - 2);
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 0.85, colliders)) continue;
+        breakableSpawns.push({ x, z, kind: 'crate', chunkKey: `${cx},${cz}` });
+      }
+    }
+
+    return { group, colliders, enemySpawns, chestSpawns, breakableSpawns, cx, cz };
   }
 
   // True if the world position (x, z) is currently under water. Sampled

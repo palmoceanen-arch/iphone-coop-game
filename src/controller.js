@@ -1,5 +1,6 @@
 import jsQR from 'jsqr';
 import { io } from 'socket.io-client';
+import { iconHTML } from './icons.js';
 
 const PLAYER_COLORS = ['#6ad0ff', '#ff8a8a'];
 const PLAYER_NAMES = ['Cyan', 'Coral'];
@@ -79,6 +80,15 @@ const formatter = new Intl.NumberFormat('ru-RU');
 
 function safeText(value) {
   return value == null ? '' : String(value);
+}
+
+function escapeHtml(s) {
+  return safeText(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // Pre-fill code from URL ?code=XXXX
@@ -456,7 +466,7 @@ function renderItemBar(items) {
     el.title = `${safeText(it.name || it.id)} ×${formatter.format(it.count || 0)}`;
     const ico = document.createElement('span');
     ico.className = 'ico';
-    ico.textContent = it.icon || '?';
+    ico.innerHTML = iconHTML(it.icon, { size: 16 });
     const count = document.createElement('span');
     count.className = 'count';
     count.textContent = `×${formatter.format(it.count || 0)}`;
@@ -487,12 +497,12 @@ function renderAbility(ab) {
   if (sig !== _abilitySig) {
     _abilitySig = sig;
     if (ab) {
-      abilityIconEl.textContent = ab.icon || '✦';
+      abilityIconEl.innerHTML = iconHTML(ab.icon || 'sparkle', { size: 28 });
       btnAbility.classList.remove('empty');
       btnAbility.style.background = `linear-gradient(180deg, ${hexToRgba(ab.color, 0.55)} 0%, ${hexToRgba(ab.color, 0.35)} 100%)`;
       btnAbility.style.borderColor = hexToRgba(ab.color, 0.8);
     } else {
-      abilityIconEl.textContent = '·';
+      abilityIconEl.innerHTML = iconHTML('dot', { size: 22 });
       btnAbility.classList.add('empty');
       btnAbility.style.background = '';
       btnAbility.style.borderColor = '';
@@ -555,7 +565,7 @@ function renderInteract(prompt) {
 // ----------------------------------------------------------------------
 function openDetailModal({ icon, name, meta, desc, count, rarity }) {
   if (!detailModal) return;
-  detailIconEl.textContent = icon || '·';
+  detailIconEl.innerHTML = iconHTML(icon || 'sparkle', { size: 40 });
   detailNameEl.textContent = name || '';
   detailMetaEl.textContent = meta || '';
   detailMetaEl.style.display = meta ? '' : 'none';
@@ -591,7 +601,7 @@ detailModal?.addEventListener('click', (e) => {
 function showAbilityDetail(ab) {
   if (!ab) return;
   openDetailModal({
-    icon: ab.icon || '✦',
+    icon: ab.icon || 'sparkle',
     name: ab.name || 'Способность',
     meta: 'Способность',
     desc: ab.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.',
@@ -602,7 +612,7 @@ function showAbilityDetail(ab) {
 function showItemDetail(it) {
   if (!it) return;
   openDetailModal({
-    icon: it.icon || '?',
+    icon: it.icon || 'sparkle',
     name: it.name || it.id || 'Предмет',
     meta: it.rarity ? RARITY_LABELS[it.rarity] || it.rarity : '',
     count: it.count,
@@ -621,7 +631,7 @@ function appendInventoryRows(container, s) {
     d.className = 'inv-row';
     const name = document.createElement('span');
     name.className = 'inv-name';
-    name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
+    name.innerHTML = `<span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(s.ability.icon || 'sparkle', { size: 18 })}</span><span class="inv-text">${escapeHtml(s.ability.name || '')}</span>`;
     d.append(name);
     const ab = s.ability;
     d.addEventListener('click', (ev) => {
@@ -667,7 +677,7 @@ function appendInventoryRows(container, s) {
       const name = document.createElement('span');
       name.className = 'inv-name';
       const label = document.createElement('span');
-      label.textContent = `${it.icon || ''} ${it.name || it.id}`;
+      label.innerHTML = `<span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(it.icon || 'sparkle', { size: 18 })}</span><span class="inv-text">${escapeHtml(it.name || it.id || '')}</span>`;
       const count = document.createElement('span');
       count.className = 'inv-count';
       count.textContent = `×${formatter.format(it.count || 0)}`;
@@ -775,7 +785,7 @@ socket.on('state:player', (s) => {
           <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
           <div class="desc">${u.desc}</div>
         </div>
-        <button class="price-btn" data-id="${u.id}">⛁ ${u.price}</button>
+        <button class="price-btn" data-id="${u.id}"><span class="price-ico">${iconHTML('coin', { size: 14 })}</span>${u.price}</button>
       `;
       shopList.appendChild(row);
     }
