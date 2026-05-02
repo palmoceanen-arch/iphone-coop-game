@@ -12,9 +12,10 @@
   },
   "dependencies": {
     "express": "^4.21.2",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "qrcode": "^1.5.4",
     "three": "^0.165.0"
   },
   "devDependencies": {

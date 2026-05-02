@@ -126,6 +126,18 @@
         font-size: 13px;
         text-align: center;
       }
+      .scan-file-btn {
+        width: 100%;
+        margin-top: 8px;
+        padding: 9px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+        color: #e0e6f3;
+        font-weight: 700;
+        touch-action: manipulation;
+      }
+      .scan-file-input { display: none; }
       .err { color: #ff8a8a; margin-top: 10px; font-size: 14px; min-height: 1.2em; text-align: center; }
 
       /* Controller surface */
@@ -222,16 +234,6 @@
         background: linear-gradient(180deg, rgba(255,209,102,0.6) 0%, rgba(212,160,42,0.45) 100%);
         border-color: rgba(255,209,102,0.7);
         box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-      }
-      .action.shop .shop-label {
-        position: absolute; top: 100%;
-        left: 50%; transform: translateX(-50%) translateY(2px);
-        font-size: 10px; font-weight: 700;
-        color: #ffd166;
-        text-shadow: 0 1px 3px #000;
-        letter-spacing: 1px;
-        white-space: nowrap;
-        pointer-events: none;
       }
       .action.shop.inventory-alert {
         box-shadow: 0 0 18px rgba(255,209,102,0.65), 0 4px 12px rgba(0,0,0,0.4);
@@ -420,12 +422,9 @@
         align-content: start;
         -webkit-overflow-scrolling: touch;
       }
-      #shopList,
-      #shopList *,
-      #inventoryBody,
-      #inventoryBody * {
-        touch-action: pan-y;
-      }
+      #shopList, #inventoryBody { touch-action: pan-y; }
+      #shopList .upg-row, #shopList .inv-row, #shopList button,
+      #inventoryBody .inv-row, #inventoryBody button { touch-action: manipulation; }
       #shopList #shopInventory {
         grid-column: 1 / -1;
       }
@@ -488,6 +487,27 @@
         touch-action: pan-y;
       }
       #shopInventory { padding: 4px 0 16px; }
+      #shopInventory .shop-items-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+      }
+      #shopInventory .shop-items-grid .inv-row {
+        margin: 0;
+        min-width: 0;
+        padding: 6px 7px;
+      }
+      #shopInventory .shop-items-grid .inv-row.open {
+        grid-column: 1 / -1;
+      }
+      #shopInventory .shop-items-grid .inv-row .inv-name {
+        gap: 6px;
+      }
+      #shopInventory .shop-items-grid .inv-row .inv-name > span:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .inv-header { font-size: 11px; opacity: 0.58; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px; }
       .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
       .inv-row:active { background: rgba(255,255,255,0.08); }
@@ -558,6 +578,8 @@
         .upg-row .price-btn { min-width: 56px; padding: 6px 7px; font-size: 12px; }
         #shopInventory .inv-header { margin: 5px 0 4px; }
         #shopInventory .inv-row { margin: 3px 0; padding: 6px 8px; line-height: 1.2; }
+        #shopInventory .shop-items-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+        #shopInventory .shop-items-grid .inv-row { margin: 0; padding: 5px 6px; font-size: 11px; }
       }
     </style>
   </head>
@@ -574,6 +596,8 @@
         <div class="install-tip">Для fullscreen на iPhone: открой эту страницу в Safari → Поделиться → На экран «Домой».</div>
         <div id="scanPanel" class="scan-panel" aria-hidden="true">
           <video id="scanVideo" playsinline muted></video>
+          <button id="scanFileBtn" class="scan-file-btn" type="button">Фото QR</button>
+          <input id="scanFile" class="scan-file-input" type="file" accept="image/*" capture="environment" />
           <div id="scanStatus" class="scan-status">Наведи камеру на QR-код комнаты.</div>
         </div>
       </div>
@@ -604,9 +628,8 @@
         <svg class="ab-cd-svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="0"/></svg>
         <span class="ab-cd-text"></span>
       </div>
-      <div class="action shop" id="btnShop">
+      <div class="action shop" id="btnShop" aria-label="Магазин" title="Магазин">
         ⛁
-        <span class="shop-label">МАГАЗИН</span>
       </div>
       <div class="action interact" id="btnInteract">
         <span class="label" id="interactLabel">Взять</span>

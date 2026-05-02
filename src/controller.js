@@ -1,3 +1,4 @@
+import jsQR from 'jsqr';
 import { io } from 'socket.io-client';
 
 const PLAYER_COLORS = ['#6ad0ff', '#ff8a8a'];
@@ -13,6 +14,8 @@ const scanQrBtn = document.getElementById('scanQr');
 const scanPanel = document.getElementById('scanPanel');
 const scanVideo = document.getElementById('scanVideo');
 const scanStatus = document.getElementById('scanStatus');
+const scanFileBtn = document.getElementById('scanFileBtn');
+const scanFileInput = document.getElementById('scanFile');
 const roomCodeEl = document.getElementById('roomcode');
 const playerSpan = controllerEl.querySelector('.badge .p');
 const hintEl = document.getElementById('hint');
@@ -54,6 +57,9 @@ let inventoryOpen = false;
 let scanStream = null;
 let barcodeDetector = null;
 let scanning = false;
+let scanFrameHandle = 0;
+const inventoryExpanded = new Set();
+const shopExpanded = new Set();
 
 const formatter = new Intl.NumberFormat('ru-RU');
 
@@ -96,6 +102,13 @@ function codeFromText(text) {
   return match ? match[0] : '';
 }
 
+function applyScannedCode(value) {
+  codeInput.value = value;
+  scanStatus.textContent = `Код ${value} найден`;
+  stopQrScanner();
+  tryJoin();
+}
+
 function stopQrScanner() {
   scanning = false;
   if (scanStream) {
@@ -103,56 +116,103 @@ function stopQrScanner() {
     scanStream = null;
   }
   if (scanVideo) scanVideo.srcObject = null;
+  if (scanFrameHandle) {
+    cancelAnimationFrame(scanFrameHandle);
+    scanFrameHandle = 0;
+  }
   scanPanel?.classList.remove('open');
   scanPanel?.setAttribute('aria-hidden', 'true');
 }
 
+function detectQrFromCanvas(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return '';
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const result = jsQR(image.data, image.width, image.height);
+  return codeFromText(result?.data || '');
+}
+
+function detectQrFromVideo() {
+  if (!scanVideo.videoWidth || !scanVideo.videoHeight) return '';
+  const canvas = document.createElement('canvas');
+  canvas.width = scanVideo.videoWidth;
+  canvas.height = scanVideo.videoHeight;
+  canvas.getContext('2d')?.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
+  return detectQrFromCanvas(canvas);
+}
+
 async function scanLoop() {
-  if (!scanning || !barcodeDetector || !scanVideo) return;
+  if (!scanning || !scanVideo) return;
   try {
-    const codes = await barcodeDetector.detect(scanVideo);
-    const value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean);
+    let value = '';
+    if (barcodeDetector) {
+      const codes = await barcodeDetector.detect(scanVideo);
+      value = codes.map(code => code.rawValue).map(codeFromText).find(Boolean) || '';
+    }
+    value = value || detectQrFromVideo();
     if (value) {
-      codeInput.value = value;
-      scanStatus.textContent = `Код ${value} найден`;
-      stopQrScanner();
-      tryJoin();
+      applyScannedCode(value);
       return;
     }
-  } catch {
-    scanStatus.textContent = 'Не удалось считать QR. Введи код вручную.';
+  } catch (err) {
+    if (!String(err?.name || err).includes('Security')) {
+      const value = detectQrFromVideo();
+      if (value) {
+        applyScannedCode(value);
+        return;
+      }
+    }
   }
-  if (scanning) requestAnimationFrame(scanLoop);
+  if (scanning) scanFrameHandle = requestAnimationFrame(scanLoop);
 }
 
 async function startQrScanner() {
-  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
-    scanStatus.textContent = 'Safari может не поддерживать сканер QR. Введи 4 цифры вручную.';
-    scanPanel.classList.add('open');
-    scanPanel.setAttribute('aria-hidden', 'false');
+  scanPanel.classList.add('open');
+  scanPanel.setAttribute('aria-hidden', 'false');
+  scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
+  if (!navigator.mediaDevices?.getUserMedia) {
+    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
     return;
   }
   try {
-    barcodeDetector = barcodeDetector || new window.BarcodeDetector({ formats: ['qr_code'] });
-    scanPanel.classList.add('open');
-    scanPanel.setAttribute('aria-hidden', 'false');
-    scanStatus.textContent = 'Наведи камеру на QR-код комнаты.';
+    if ('BarcodeDetector' in window) {
+      barcodeDetector = barcodeDetector || new window.BarcodeDetector({ formats: ['qr_code'] });
+    }
     scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
     scanVideo.srcObject = scanStream;
     await scanVideo.play();
     scanning = true;
-    requestAnimationFrame(scanLoop);
+    scanFrameHandle = requestAnimationFrame(scanLoop);
   } catch {
     stopQrScanner();
     scanPanel.classList.add('open');
     scanPanel.setAttribute('aria-hidden', 'false');
-    scanStatus.textContent = 'Камера недоступна. Введи 4 цифры вручную.';
+    scanStatus.textContent = 'Камера недоступна. Нажми «Фото QR» или введи 4 цифры.';
   }
 }
 
 scanQrBtn?.addEventListener('click', () => {
   if (scanning) stopQrScanner();
   else startQrScanner();
+});
+scanFileBtn?.addEventListener('click', () => scanFileInput?.click());
+scanFileInput?.addEventListener('change', async () => {
+  const file = scanFileInput.files?.[0];
+  if (!file) return;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+    const value = detectQrFromCanvas(canvas);
+    if (value) applyScannedCode(value);
+    else scanStatus.textContent = 'QR на фото не найден. Попробуй ещё раз или введи код.';
+  } catch {
+    scanStatus.textContent = 'Не удалось прочитать фото QR. Введи код вручную.';
+  } finally {
+    scanFileInput.value = '';
+  }
 });
 
 socket.on('connect_error', () => {
@@ -302,10 +362,13 @@ btnInteract.addEventListener('pointerup', interactRelease);
 btnInteract.addEventListener('pointercancel', interactRelease);
 btnInteract.addEventListener('pointerleave', interactRelease);
 
-shopClose.addEventListener('click', (e) => {
+function closeShop(e) {
   e.preventDefault();
+  e.stopPropagation();
   if (assignedSlot >= 0) socket.emit('input:event', { type: 'closeShop' });
-});
+}
+shopClose.addEventListener('click', closeShop);
+shopClose.addEventListener('pointerdown', closeShop);
 
 function setInventoryOpen(open) {
   inventoryOpen = !!open;
@@ -437,7 +500,19 @@ function renderInteract(prompt) {
 }
 
 function appendInventoryRows(container, s) {
-  const toggle = (ev) => ev.currentTarget.classList.toggle('open');
+  const expanded = container === shopInventory ? shopExpanded : inventoryExpanded;
+  const toggle = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const row = ev.currentTarget;
+    if (row.dataset.toggledAt === String(ev.timeStamp)) return;
+    row.dataset.toggledAt = String(ev.timeStamp);
+    row.classList.toggle('open');
+    const key = row.dataset.invKey;
+    if (!key) return;
+    if (row.classList.contains('open')) expanded.add(key);
+    else expanded.delete(key);
+  };
 
   const ah = document.createElement('div');
   ah.className = 'inv-header';
@@ -446,6 +521,8 @@ function appendInventoryRows(container, s) {
   if (s.ability) {
     const d = document.createElement('div');
     d.className = 'inv-row';
+    d.dataset.invKey = `ability:${s.ability.id || s.ability.name}`;
+    if (expanded.has(d.dataset.invKey)) d.classList.add('open');
     const name = document.createElement('span');
     name.className = 'inv-name';
     name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
@@ -483,9 +560,13 @@ function appendInventoryRows(container, s) {
     e.appendChild(name);
     container.appendChild(e);
   } else {
+    const itemContainer = container === shopInventory ? document.createElement('div') : container;
+    if (container === shopInventory) itemContainer.className = 'shop-items-grid';
     for (const it of items) {
       const d = document.createElement('div');
       d.className = 'inv-row';
+      d.dataset.invKey = `item:${it.id}`;
+      if (expanded.has(d.dataset.invKey)) d.classList.add('open');
       if (it.rarity) d.dataset.rar = it.rarity;
       const name = document.createElement('span');
       name.className = 'inv-name';
@@ -500,8 +581,9 @@ function appendInventoryRows(container, s) {
       desc.textContent = it.desc || '';
       d.append(name, desc);
       d.addEventListener('click', toggle);
-      container.appendChild(d);
+      itemContainer.appendChild(d);
     }
+    if (container === shopInventory) container.appendChild(itemContainer);
   }
 }
 
