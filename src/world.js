@@ -165,6 +165,9 @@ export class World {
     this.sun.shadow.camera.far = 250;
     this.sun.shadow.bias = -0.0008;
     this.sun.shadow.normalBias = 0.04;
+    // Softness via fixed PCF radius — keeps the previous low-poly look while
+    // staying stable frame-to-frame (PCFShadowMap kernel, see game.js).
+    this.sun.shadow.radius = 4;
     this.sun.target = new THREE.Object3D();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);

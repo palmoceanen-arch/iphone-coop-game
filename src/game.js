@@ -84,7 +84,13 @@ export class Game {
     const enableShadows = !isLikelyLowEndGPU();
     this.renderer.shadowMap.enabled = enableShadows;
     if (enableShadows) {
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      // PCFShadowMap samples on a fixed kernel, so shadow edges stay stable
+      // frame-to-frame as the camera/sun move. PCFSoftShadowMap uses a
+      // screen-space derivative jitter for its softness, which produces the
+      // "shadow swimming" shimmer most visible on the long sunrise/sunset
+      // tree shadows. Softness is recovered via DirectionalLight.shadow.radius
+      // (configured in src/world.js).
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
     }
 
     this.scene = new THREE.Scene();
