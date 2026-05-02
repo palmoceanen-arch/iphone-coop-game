@@ -78,6 +78,15 @@
       .upg .lvl { font-size: 11px; opacity: 0.7; }
       .upg .price { color: #ffd166; font-weight: 700; }
       .upg.locked { opacity: 0.4; }
+      .inv-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+      .inv-section h4 { margin: 0 0 6px; font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.5px; }
+      .inv-item { padding: 5px 8px; margin: 4px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; }
+      .inv-item .inv-name { font-weight: 600; }
+      .inv-item .inv-desc { opacity: 0.6; font-size: 11px; }
+      .inv-ability { padding: 6px 8px; margin: 4px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; }
+      .inv-ability .inv-name { font-weight: 600; }
+      .inv-ability .inv-desc { opacity: 0.6; font-size: 11px; }
+      .inv-empty { opacity: 0.4; font-size: 11px; font-style: italic; padding: 4px 0; }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
       #help { position: absolute; left: 12px; bottom: 12px; font-size: 12px; opacity: 0.85; background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 12px; max-width: 360px; line-height: 1.55; }
       #help .row { display: flex; gap: 8px; align-items: center; }
@@ -254,10 +263,12 @@
               <div class="shop-col p1">
                 <h3><span class="who">Player 1 — Cyan</span><span class="gold">⛁ <span id="shop-gold1">0</span></span></h3>
                 <div id="shop-upgs-1"></div>
+                <div id="shop-inv-1" class="inv-section"></div>
               </div>
               <div class="shop-col p2">
                 <h3><span class="who">Player 2 — Coral</span><span class="gold">⛁ <span id="shop-gold2">0</span></span></h3>
                 <div id="shop-upgs-2"></div>
+                <div id="shop-inv-2" class="inv-section"></div>
               </div>
             </div>
           </div>

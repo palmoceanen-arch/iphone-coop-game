@@ -1,3 +1,6 @@
+import { ITEM_BY_ID } from './items.js';
+import { ABILITY_BY_ID } from './abilities.js';
+
 // Upgrade definitions and shop UI logic.
 export const UPGRADES = [
   { id: 'damage', name: 'Sharper Blade', desc: '+6 damage', baseCost: 20, growth: 1.6 },
@@ -53,4 +56,53 @@ export function renderShop(player1, player2, onBuy) {
   rebuild('shop-upgs-2', player2, 1);
   document.getElementById('shop-gold1').textContent = String(player1.gold);
   document.getElementById('shop-gold2').textContent = String(player2.gold);
+
+  const renderInv = (containerId, player) => {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    el.innerHTML = '';
+
+    // Ability
+    const ah = document.createElement('h4');
+    ah.textContent = 'Способность';
+    el.appendChild(ah);
+    if (player.ability) {
+      const def = ABILITY_BY_ID[player.ability];
+      if (def) {
+        const d = document.createElement('div');
+        d.className = 'inv-ability';
+        const castKey = player.index === 0 ? 'G' : 'H';
+        d.innerHTML = `<span class="inv-name">${def.icon} ${def.name}</span> <kbd>${castKey}</kbd><br><span class="inv-desc">${def.desc}</span>`;
+        el.appendChild(d);
+      }
+    } else {
+      const e = document.createElement('div');
+      e.className = 'inv-empty';
+      e.textContent = 'Нет способности';
+      el.appendChild(e);
+    }
+
+    // Items
+    const ih = document.createElement('h4');
+    ih.textContent = 'Предметы';
+    el.appendChild(ih);
+    const entries = Object.entries(player.items || {}).filter(([, n]) => n > 0);
+    if (entries.length === 0) {
+      const e = document.createElement('div');
+      e.className = 'inv-empty';
+      e.textContent = 'Нет предметов';
+      el.appendChild(e);
+    } else {
+      for (const [id, count] of entries) {
+        const def = ITEM_BY_ID[id];
+        if (!def) continue;
+        const d = document.createElement('div');
+        d.className = 'inv-item';
+        d.innerHTML = `<span class="inv-name">${def.icon || ''} ${def.name}${count > 1 ? ` ×${count}` : ''}</span><br><span class="inv-desc">${def.desc || ''}</span>`;
+        el.appendChild(d);
+      }
+    }
+  };
+  renderInv('shop-inv-1', player1);
+  renderInv('shop-inv-2', player2);
 }
