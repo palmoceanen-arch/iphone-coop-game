@@ -10,6 +10,8 @@ import { Sound } from './sound.js';
 import { Input } from './input.js';
 import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString } from './utils.js';
+import { getSettings } from './settings.js';
+import { PauseMenu } from './pause.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -117,8 +119,12 @@ export class Game {
     this.elapsed = 0;
 
     this.paused = false;
+    this.menuPaused = false; // true while #pause overlay is open
     this.shopOpen = false;
     this._keyboardShop = false;
+    this._fps = 0;
+    this._fpsAcc = 0;
+    this._fpsFrames = 0;
     // Per-slot phone shop state (independent from desktop Tab-shop):
     this.phoneShopOpen = [false, false];
     this.lobby = null; // injected from main.js
@@ -126,6 +132,20 @@ export class Game {
     this.dead = false;
     this.leashRatio = 0;
     this.timescale = 1;
+
+    // Wire user-tunable graphics + audio settings. The Settings module
+    // pulls saved values from localStorage in its constructor and applies
+    // them to renderer/world/sound/effects/followCam in attach().
+    this.settings = getSettings();
+    this.settings.attach({
+      renderer: this.renderer,
+      world: this.world,
+      scene: this.scene,
+      sound: this.sound,
+      followCam: this.followCam,
+      effects: this.effects,
+    });
+    this.pauseMenu = new PauseMenu(this.settings);
 
     this._bindUI();
     window.addEventListener('resize', () => {
@@ -141,8 +161,26 @@ export class Game {
   _bindUI() {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyP') this.paused = !this.paused;
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        this._togglePauseMenu();
+      }
     });
+    if (this.pauseMenu) {
+      this.pauseMenu.onToggle = (open) => {
+        this.menuPaused = !!open;
+      };
+    }
     document.getElementById('restart')?.addEventListener('click', () => this.restart());
+  }
+
+  _togglePauseMenu() {
+    if (!this.pauseMenu) return;
+    // Don't open the menu over the intro lobby — that's already a modal and
+    // the player hasn't actually started yet.
+    if (this._waitingForStart) return;
+    this.pauseMenu.toggle();
+    this.menuPaused = this.pauseMenu.isOpen;
   }
 
   // ---- Phone gamepad shop ------------------------------------------------
@@ -345,11 +383,24 @@ export class Game {
     const dt0 = Math.min(0.05, (t - this._lastT) / 1000) || 0;
     this._lastT = t;
     let dt = dt0;
-    if (this.paused || this.shopOpen || this._waitingForStart || this.dead) dt = 0;
+    if (this.paused || this.menuPaused || this.shopOpen || this._waitingForStart || this.dead) dt = 0;
     else if (this.effects.hitStop > 0) dt *= 0.15;
     this.update(dt, dt0);
     this.render();
+    this._updateFps(dt0);
     requestAnimationFrame((tt) => this._loop(tt));
+  }
+
+  _updateFps(dt0) {
+    if (!this.settings || !this.settings.showFps()) return;
+    this._fpsAcc += dt0;
+    this._fpsFrames += 1;
+    if (this._fpsAcc >= 0.5) {
+      this._fps = Math.round(this._fpsFrames / this._fpsAcc);
+      this._fpsAcc = 0; this._fpsFrames = 0;
+      const el = document.getElementById('fps');
+      if (el) el.textContent = `FPS ${this._fps}`;
+    }
   }
 
   update(dt, dt0) {

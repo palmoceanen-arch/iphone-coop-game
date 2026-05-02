@@ -105,6 +105,79 @@
       #loading .bar { width: 220px; height: 8px; background: #1a1f28; border-radius: 4px; overflow: hidden; margin: 8px auto 0; }
       #loading .bar > .fill { height: 100%; width: 0%; background: linear-gradient(90deg,#6ad0ff,#ff8a8a); transition: width 120ms ease-out; }
       #loading .stat { font-size: 12px; opacity: 0.6; margin-top: 6px; }
+      #pause {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.65); pointer-events: auto; z-index: 25;
+        backdrop-filter: blur(2px);
+      }
+      #pause.open { display: flex; }
+      .pause-panel {
+        width: min(640px, 94vw); max-height: 90vh; overflow-y: auto;
+        background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+        padding: 22px 26px;
+      }
+      .pause-panel h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0.5px; }
+      .pause-panel .sub { margin: 0 0 18px; font-size: 13px; opacity: 0.65; }
+      .pause-tabs { display: flex; gap: 4px; padding: 4px; background: #0e1218; border-radius: 10px; margin-bottom: 16px; }
+      .pause-tabs button {
+        flex: 1; background: transparent; border: 0; color: #cfd6e0; padding: 8px 10px;
+        font-size: 13px; border-radius: 8px; cursor: pointer; font-weight: 600;
+      }
+      .pause-tabs button.active { background: #2a313b; color: #fff; }
+      .pause-tab { display: none; }
+      .pause-tab.active { display: block; }
+      .pause-row {
+        display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; align-items: center;
+        padding: 10px 12px; margin: 6px 0; background: #0e1218; border-radius: 10px;
+      }
+      .pause-row .label { font-size: 13px; color: #cfd6e0; }
+      .pause-row .label .desc { display: block; font-size: 11px; opacity: 0.55; margin-top: 2px; font-weight: 400; }
+      .pause-row .control { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+      .seg { display: inline-flex; background: #1a2029; border-radius: 8px; padding: 2px; gap: 2px; }
+      .seg button {
+        background: transparent; border: 0; color: #cfd6e0; padding: 6px 10px;
+        font-size: 12px; border-radius: 6px; cursor: pointer; font-weight: 600;
+      }
+      .seg button.active { background: #3b82f6; color: #fff; }
+      .seg button:hover:not(.active) { background: #20262e; }
+      .pause-row .toggle {
+        position: relative; width: 44px; height: 24px; border-radius: 999px;
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.1); cursor: pointer;
+      }
+      .pause-row .toggle::after {
+        content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+        border-radius: 50%; background: #cfd6e0; transition: 160ms ease;
+      }
+      .pause-row .toggle.on { background: #3b82f6; border-color: #3b82f6; }
+      .pause-row .toggle.on::after { left: 22px; background: #fff; }
+      .pause-row .slider { display: flex; align-items: center; gap: 8px; min-width: 200px; }
+      .pause-row .slider input[type=range] { flex: 1; accent-color: #3b82f6; }
+      .pause-row .slider .val { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 38px; text-align: right; opacity: 0.85; }
+      .preset-row { display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap; }
+      .preset-row button {
+        flex: 1; min-width: 90px; background: #0e1218; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 10px 8px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px;
+      }
+      .preset-row button:hover { background: #1a2029; }
+      .preset-row button.active { border-color: #3b82f6; color: #fff; background: #1a2740; }
+      .pause-footer {
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
+      }
+      .pause-footer .left, .pause-footer .right { display: flex; gap: 10px; flex-wrap: wrap; }
+      .pause-footer button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 9px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      .pause-footer button.primary { background: linear-gradient(180deg,#3b82f6,#2563eb); border: none; box-shadow: 0 6px 16px rgba(37,99,235,0.3); }
+      .pause-footer button:hover { filter: brightness(1.08); }
+      #fps {
+        position: absolute; bottom: 12px; right: 12px; padding: 4px 8px; border-radius: 6px;
+        background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.08);
+        font-size: 12px; font-family: ui-monospace, monospace;
+        color: #7aff8a; pointer-events: none; display: none;
+      }
+      #fps.show { display: block; }
     </style>
   </head>
   <body>
@@ -141,7 +214,7 @@
         <div id="help">
           <div class="row"><span class="who p1">P1</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>F</kbd> attack · <kbd>R</kbd> dash</div>
           <div class="row"><span class="who p2">P2</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> move · <kbd>L</kbd> attack · <kbd>K</kbd> dash</div>
-          <div class="row"><kbd>Tab</kbd> upgrade shop · <kbd>1</kbd>‥<kbd>4</kbd> P1 buy · <kbd>7</kbd>‥<kbd>0</kbd> P2 buy · <kbd>P</kbd> pause</div>
+          <div class="row"><kbd>Tab</kbd> upgrade shop · <kbd>1</kbd>‥<kbd>4</kbd> P1 buy · <kbd>7</kbd>‥<kbd>0</kbd> P2 buy · <kbd>P</kbd> pause · <kbd>Esc</kbd> menu</div>
         </div>
         <div id="toast"></div>
         <div id="shop">
@@ -165,6 +238,117 @@
             <h1>You both fell.</h1>
             <p>Stay close to each other — the bond is your lifeline.</p>
             <button id="restart">Restart</button>
+          </div>
+        </div>
+        <div id="fps">FPS …</div>
+        <div id="pause" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <div class="pause-panel">
+            <h1 id="pause-title">Пауза</h1>
+            <p class="sub">Нажми <kbd>Esc</kbd>, чтобы вернуться в игру. Настройки сохраняются автоматически.</p>
+            <div class="pause-tabs" role="tablist">
+              <button id="pause-tab-video" class="active" role="tab">Видео</button>
+              <button id="pause-tab-audio" role="tab">Звук</button>
+            </div>
+
+            <div id="pause-pane-video" class="pause-tab active" role="tabpanel">
+              <div class="label" style="margin-bottom:6px;">Профиль качества <span class="desc">Применяет связку настроек одной кнопкой.</span></div>
+              <div class="preset-row" id="preset-row">
+                <button data-preset="low">Низкое</button>
+                <button data-preset="medium">Среднее</button>
+                <button data-preset="high">Высокое</button>
+                <button data-preset="ultra">Ультра</button>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Тени<span class="desc">Размер карты теней. Влияет на чёткость и нагрузку на GPU.</span></div>
+                <div class="control"><div class="seg" data-key="shadows" data-type="seg">
+                  <button data-val="off">Выкл</button>
+                  <button data-val="low">Низкие</button>
+                  <button data-val="medium">Средн.</button>
+                  <button data-val="high">Высокие</button>
+                  <button data-val="ultra">Ультра</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Качество теней<span class="desc">Жёсткие — быстрее, мягкие — красивее.</span></div>
+                <div class="control"><div class="seg" data-key="shadowType" data-type="seg">
+                  <button data-val="hard">Жёсткие</button>
+                  <button data-val="pcf">PCF</button>
+                  <button data-val="soft">Мягкие</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Разрешение<span class="desc">Масштаб внутреннего рендера. Понизь, если игра тормозит.</span></div>
+                <div class="control"><div class="seg" data-key="resolutionScale" data-type="seg-num">
+                  <button data-val="0.5">50%</button>
+                  <button data-val="0.75">75%</button>
+                  <button data-val="1">100%</button>
+                  <button data-val="1.25">125%</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Эффекты частиц<span class="desc">Густота брызг от ударов и взрывов.</span></div>
+                <div class="control"><div class="seg" data-key="particles" data-type="seg">
+                  <button data-val="off">Выкл</button>
+                  <button data-val="low">Мало</button>
+                  <button data-val="medium">Средне</button>
+                  <button data-val="high">Много</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Туман<span class="desc">Смягчает горизонт, скрывает дальние чанки.</span></div>
+                <div class="control"><div class="toggle" data-key="fog" data-type="toggle"></div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Поле зрения (FOV)<span class="desc">55 — кинематографично, 75 — обзорно.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="50" max="80" step="1" data-key="fov" data-type="slider">
+                  <span class="val" data-for="fov">60°</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Счётчик FPS<span class="desc">Показать FPS в углу экрана.</span></div>
+                <div class="control"><div class="toggle" data-key="showFps" data-type="toggle"></div></div>
+              </div>
+            </div>
+
+            <div id="pause-pane-audio" class="pause-tab" role="tabpanel">
+              <div class="pause-row">
+                <div class="label">Общая громкость<span class="desc">Главный регулятор звука.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="0" max="100" step="1" data-key="masterVolume" data-type="slider-pct">
+                  <span class="val" data-for="masterVolume">50%</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Эффекты (SFX)<span class="desc">Удары, взрывы, шаги.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="0" max="100" step="1" data-key="sfxVolume" data-type="slider-pct">
+                  <span class="val" data-for="sfxVolume">100%</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Без звука<span class="desc">Полностью заглушить игру.</span></div>
+                <div class="control"><div class="toggle" data-key="muted" data-type="toggle"></div></div>
+              </div>
+            </div>
+
+            <div class="pause-footer">
+              <div class="left">
+                <button id="pause-reset">Сбросить</button>
+              </div>
+              <div class="right">
+                <button id="pause-resume" class="primary">Продолжить (Esc)</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="intro">

@@ -706,7 +706,7 @@ export class World {
     const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
     const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, dayWeight).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
-    this.scene.fog.color.copy(skyCol);
+    if (this.scene.fog) this.scene.fog.color.copy(skyCol);
     // Lower ambient + moon floors so midnight is visibly darker than noon
     // without going pitch-black (silhouettes still readable).
     this.ambient.intensity = THREE.MathUtils.lerp(0.06, 0.22, dayWeight);

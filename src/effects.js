@@ -15,9 +15,16 @@ export class Effects {
     this._floatRoot = document.createElement('div');
     this._floatRoot.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
     document.getElementById('ui-root').appendChild(this._floatRoot);
+    // 1.0 = full particle density. Lowered by the Settings module when the
+    // player picks a lower-quality preset; 0 disables bursts entirely.
+    this.particleScale = 1.0;
   }
 
+  setParticleScale(s) { this.particleScale = Math.max(0, Math.min(2, Number(s) || 0)); }
+
   burst(x, y, z, color = 0xffe28a, count = 12, speed = 6, life = 0.45) {
+    count = Math.max(0, Math.round(count * this.particleScale));
+    if (count === 0) return;
     // Share geometry across particles in this burst; clone the material per
     // particle so each fades independently.
     const geo = new THREE.SphereGeometry(0.12, 6, 6);
