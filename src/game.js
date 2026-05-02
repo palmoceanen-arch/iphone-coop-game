@@ -84,7 +84,13 @@ export class Game {
     const enableShadows = !isLikelyLowEndGPU();
     this.renderer.shadowMap.enabled = enableShadows;
     if (enableShadows) {
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      // PCFShadowMap samples on a fixed kernel, so shadow edges stay stable
+      // frame-to-frame as the camera/sun move. PCFSoftShadowMap uses a
+      // screen-space derivative jitter for its softness, which produces the
+      // "shadow swimming" shimmer most visible on the long sunrise/sunset
+      // tree shadows. Softness is recovered via DirectionalLight.shadow.radius
+      // (configured in src/world.js).
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
     }
 
     this.scene = new THREE.Scene();
@@ -349,10 +355,10 @@ export class Game {
   update(dt, dt0) {
     // Always update FX timing using real dt0 (so shake decays even paused)
     this.effects.update(dt > 0 ? dt : dt0 * 0);
-    this.world.update(dt);
-    // Stream chunks around the players (lazy generation; cheap when nothing
-    // changed). Done every frame because crossing a chunk boundary is rare.
+    // Stream chunks around the players first so the world update reads a
+    // fresh centroid when it snaps the sun shadow camera to the texel grid.
     this._streamChunks();
+    this.world.update(dt);
     // Throttled state sync to phones (uses real dt0 so it works while paused)
     this._stateSyncT += dt0;
     if (this._stateSyncT > 0.25 && this.lobby) {
@@ -386,6 +392,20 @@ export class Game {
     // Player intents
     const i1 = this.input.intent(0);
     const i2 = this.input.intent(1);
+
+    // If a teammate is downed and the alive partner is within revive range,
+    // their dash button is reserved for the revive hold — suppress the dash
+    // edge so pressing R/K starts the lift instead of also firing a dart-away
+    // dash on the same tap.
+    const intents = [i1, i2];
+    for (let i = 0; i < this.players.length; i++) {
+      const dead = this.players[i];
+      const partner = this.players[1 - i];
+      if (dead.alive || !partner.alive) continue;
+      if (vdist(dead.pos, partner.pos) <= REVIVE_RANGE) {
+        intents[partner.index].dash = false;
+      }
+    }
 
     // Update players
     this.players[0].update(dt, i1, this.players[1], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));

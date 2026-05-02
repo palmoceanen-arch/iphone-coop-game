@@ -3,6 +3,30 @@ import { makeRng } from './utils.js';
 import { spawnProp } from './models.js';
 import { TOON_GRADIENT } from './shading.js';
 
+// Day cycle anchors (dayTime units, 1.0 = 24h). Day window 06:00 → 21:00
+// (15h) and night window 21:00 → 06:00 (9h); deepest night sits at ~01:30.
+const SUNRISE = 6 / 24;
+const SUNSET  = 21 / 24;
+
+// Sun intensity anchors (matches THREE.DirectionalLight.intensity). The
+// horizon value is the "golden hour" brightness; the floor is the deep-night
+// minimum (kept non-zero so silhouettes remain visible at midnight).
+const SUN_PEAK    = 1.6;
+const SUN_HORIZON = 0.18;
+const SUN_FLOOR   = 0.005;
+
+// Smooth bell centred on `centre` (in dayTime units), 1 at the peak and 0
+// outside ±halfWidth, with a cosine taper. dayTime wraps mod 1 so the bell
+// works near the 0/1 boundary too. Used to drive the sunset/sunrise tint
+// without the kink the previous triangular max(0, 1 - |...|) had at its apex.
+function sunsetBell(dayTime, centre, halfWidth = 1 / 6) {
+  let d = dayTime - centre;
+  d -= Math.round(d);
+  if (Math.abs(d) >= halfWidth) return 0;
+  const c = Math.cos((d / halfWidth) * Math.PI * 0.5);
+  return c * c;
+}
+
 // Chunk-based deterministic world.
 //
 // Generation pipeline (per chunk, fully seeded):
@@ -109,7 +133,7 @@ export class World {
     this._buildCampfire();
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
-    this.dayLength = 240;
+    this.dayLength = 480;
     this.update(0);
   }
 
@@ -128,7 +152,12 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff4d8, 1.4);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    // 8192² over the ~224 m active area = ~0.027 m / texel. Combined with the
+    // texel-snap logic below this gives crisp tree-shadow edges at typical
+    // camera distances. ~64 MB GPU shadow texture — fine for desktop and iOS
+    // (4096² is the spec minimum, 8192² is supported by every WebGL2 device
+    // in practice).
+    this.sun.shadow.mapSize.set(8192, 8192);
     // Shadow camera covers the active 7×7 chunk area (~224m). The light + its
     // shadow camera follow the centroid of the players each frame so shadows
     // are always sharp around the action.
@@ -141,6 +170,10 @@ export class World {
     this.sun.shadow.camera.far = 250;
     this.sun.shadow.bias = -0.0008;
     this.sun.shadow.normalBias = 0.04;
+    // Hard-ish shadows: a 1-texel PCF radius gives a crisp edge that still
+    // anti-aliases (no jagged staircase), and stays stable frame-to-frame
+    // (PCFShadowMap kernel, see game.js).
+    this.sun.shadow.radius = 1;
     this.sun.target = new THREE.Object3D();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
@@ -261,12 +294,10 @@ export class World {
         this._lastGroundCx = sx;
         this._lastGroundCz = sz;
       }
-      // Cache centroid; the sun's actual position (which depends on the
-      // time-of-day arc) is set every frame in update().
+      // Cache centroid; sun.target/position are written (snapped to shadow
+      // texel grid) every frame in update() to keep shadows stable.
       this._sunCentroidX = cxAvg;
       this._sunCentroidZ = czAvg;
-      this.sun.target.position.set(cxAvg, 0, czAvg);
-      this.sun.target.updateMatrixWorld();
     }
   }
 
@@ -595,42 +626,91 @@ export class World {
     return true;
   }
 
-  isNight() { return this.dayTime < 0.22 || this.dayTime > 0.78; }
+  isNight() { return this.dayTime < SUNRISE || this.dayTime >= SUNSET; }
 
   update(dt) {
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
-    // Map dayTime ∈ [0,1] (clock = dayTime*24) to sun elevation:
-    //   0.00 midnight → sunY = -1 (below horizon)
-    //   0.25 dawn 6h  → sunY =  0 (just rising)
-    //   0.50 noon 12h → sunY = +1 (peak)
-    //   0.75 dusk 18h → sunY =  0 (setting)
-    const a = (this.dayTime - 0.25) * Math.PI * 2;
-    const sunY = Math.sin(a);
-    const sunX = Math.cos(a);
-    // Stay bright through most of the day, fade only around dusk/dawn.
-    const dayBoost = Math.max(0, sunY);
-    this.sun.intensity = (0.35 + dayBoost * 1.25);
-    if (sunY <= 0) this.sun.intensity = Math.max(0, sunY + 1) * 0.05;
-    // Animate sun position along its east→up→west arc, anchored to the
-    // player centroid. Height is clamped so the shadow camera's near/far
-    // planes still cover the active chunks even when the sun is low.
-    const cx = this._sunCentroidX || 0;
-    const cz = this._sunCentroidZ || 0;
+    // Asymmetric day cycle:
+    //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
+    //   13:30 peak    (dayTime 0.5625) → sunY = +1, sunX =  0 (zenith)
+    //   21:00 sunset  (dayTime 0.875)  → sunY = 0,  sunX = -1 (west horizon)
+    //   01:30 deep nt (dayTime 0.0625) → sunY = -1
+    // Day window = 15h, night window = 9h. Pushing the sunset to 21:00 means
+    // 18:00 is mid-afternoon (sunY ≈ 0.59) and the brightness ramp through
+    // dusk plays out over ~3 in-game hours instead of compressing around 18:00.
+    const tNow = this.dayTime;
+    let sunY, sunX;
+    if (tNow >= SUNRISE && tNow < SUNSET) {
+      const phase = (tNow - SUNRISE) / (SUNSET - SUNRISE);
+      sunY = Math.sin(phase * Math.PI);
+      sunX = Math.cos(phase * Math.PI);
+    } else {
+      const tNight = tNow < SUNRISE ? tNow + 1 : tNow;
+      const phase = (tNight - SUNSET) / (1 + SUNRISE - SUNSET);
+      sunY = -Math.sin(phase * Math.PI);
+      sunX = -Math.cos(phase * Math.PI);
+    }
+    // Sun intensity: two C¹-smooth ramps meeting at the horizon.
+    //   sunY in [0, 0.5]  → SUN_HORIZON (0.18, "golden hour") → SUN_PEAK (1.6)
+    //   sunY in [-0.5, 0] → SUN_FLOOR (0.005, deep-night minimum) → SUN_HORIZON
+    // Both ramps have zero slope at sunY = 0 so the join is kink-free. Lower
+    // SUN_FLOOR drops night much darker than before while keeping silhouettes
+    // visible thanks to ambient + moon hemisphere fill.
+    if (sunY >= 0) {
+      const s = THREE.MathUtils.smoothstep(sunY, 0, 0.5);
+      this.sun.intensity = THREE.MathUtils.lerp(SUN_HORIZON, SUN_PEAK, s);
+    } else {
+      const s = THREE.MathUtils.smoothstep(sunY, -0.5, 0);
+      this.sun.intensity = THREE.MathUtils.lerp(SUN_FLOOR, SUN_HORIZON, s);
+    }
+    // Stabilise the sun's shadow-camera so shadow edges don't shimmer as
+    // players walk or as the sun arc advances. Two changes vs. a naïve
+    // setup are critical here:
+    //   1. Snap the centroid (target.x/z) to whole shadow-texel multiples
+    //      in world space.
+    //   2. Snap the sun's offset from the target (offset.x/y/z) to the same
+    //      texel grid. This keeps the light direction (= position − target)
+    //      pinned across many consecutive frames; only when the offset
+    //      crosses a texel boundary does direction step. Without snapping
+    //      the offset's y-component, the per-frame drift of sunHeight
+    //      (~0.024 m/frame) rotates the light view matrix sub-texel each
+    //      frame and PCF samples crawl across shadow edges.
+    // PCF shadows sample several texels, so any sub-texel motion of the
+    // projection makes edges slosh visibly; texel-aligning everything in
+    // world space replaces the slosh with discrete texel-sized jumps that
+    // read as stable.
+    const sm = this.sun.shadow.mapSize.x;
+    const halfSpan = this.sun.shadow.camera.right;
+    const texelSize = (halfSpan * 2) / sm;
+    const snap = (v) => Math.round(v / texelSize) * texelSize;
+    const cx = snap(this._sunCentroidX || 0);
+    const cz = snap(this._sunCentroidZ || 0);
+    this.sun.target.position.set(cx, 0, cz);
+    this.sun.target.updateMatrixWorld();
     const sunHeight = Math.max(15, Math.abs(sunY) * 70 + 20);
-    this.sun.position.set(cx + sunX * 60, sunHeight, cz + 25);
+    const offsetX = snap(sunX * 60);
+    const offsetY = snap(sunHeight);
+    const offsetZ = snap(25);
+    this.sun.position.set(cx + offsetX, offsetY, cz + offsetZ);
 
-    const t = dayBoost; // 0 at sunset/sunrise, 1 at noon
     const dayCol = new THREE.Color(0x6cb6ff);
-    const nightCol = new THREE.Color(0x0a1126);
+    const nightCol = new THREE.Color(0x070b15); // deeper navy for darker midnight
     const sunset = new THREE.Color(0xff9a55);
-    const tt = t;
-    const sunsetMix = Math.max(0, 1 - Math.abs((this.dayTime - 0.78) * 6)) + Math.max(0, 1 - Math.abs((this.dayTime - 0.22) * 6));
-    const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, tt).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
+    // Cosine-bell sunset/sunrise tint window centred on the actual horizon
+    // crossings. Half-width 1h so the orange glow swells from ~05:00→07:00
+    // and ~20:00→22:00.
+    const sunsetMix = sunsetBell(this.dayTime, SUNRISE, 1 / 24) + sunsetBell(this.dayTime, SUNSET, 1 / 24);
+    // Day weight: 0 deep night, 1 full day, lerped across the full ±0.5
+    // sunY band so sky / ambient / moon all fade gradually over several
+    // in-game hours either side of the horizon.
+    const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
+    const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, dayWeight).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
     this.scene.fog.color.copy(skyCol);
-    // Ambient stays low at all times so toon shading reads. Slight day/night dip.
-    this.ambient.intensity = 0.10 + tt * 0.12;
-    this.moonHelper.intensity = (1 - tt) * 0.25;
+    // Lower ambient + moon floors so midnight is visibly darker than noon
+    // without going pitch-black (silhouettes still readable).
+    this.ambient.intensity = THREE.MathUtils.lerp(0.06, 0.22, dayWeight);
+    this.moonHelper.intensity = THREE.MathUtils.lerp(0.18, 0.0, dayWeight);
 
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
