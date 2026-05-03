@@ -16,6 +16,8 @@ import { runItemHook, ITEM_BY_ID, pickRandomItemId } from './items.js';
 import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
 import { Chest } from './chest.js';
+import { Breakable } from './breakable.js';
+import { iconHTML } from './icons.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -122,9 +124,11 @@ export class Game {
     this.pickups = [];
     this.runes = [];   // item / ability rune drops in the world
     this.chests = []; // procedurally placed treasure chests
+    this.breakables = []; // pots / crates scattered through chunks
 
     this._spawnInitialEnemies();
     this._drainChestSpawns();
+    this._drainBreakableSpawns();
     this._spawnStarterChest();
 
     this.totalKills = 0;
@@ -202,8 +206,13 @@ export class Game {
     const player = this.players[slot];
     if (!player) return;
     const partner = this.players[1 - slot];
+    // Pass the cached damageables list so AoE / chain-lightning style
+    // abilities also break pots & crates in the area. Falls back to the
+    // raw enemies list if the damageables snapshot hasn't been built yet
+    // (e.g. when the player casts on the very first frame).
+    const targets = this._damageables || this.enemies;
     const ctx = {
-      enemyList: this.enemies,
+      enemyList: targets,
       partner,
       effects: this.effects,
       sound: this.sound,
@@ -374,7 +383,8 @@ export class Game {
     for (const p of this.pickups) { p._destroy?.(); }
     for (const r of this.runes) { r._destroy?.(); }
     for (const c of this.chests) { c._destroy?.(); }
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = [];
+    for (const b of this.breakables) { b.destroyMesh?.(); }
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = [];
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
@@ -425,6 +435,37 @@ export class Game {
     }
   }
 
+  _drainBreakableSpawns() {
+    if (!this.world.breakableSpawns) return;
+    while (this.world.breakableSpawns.length > 0) {
+      const s = this.world.breakableSpawns.shift();
+      const b = new Breakable(this.scene, s.x, s.z, s.kind);
+      this.breakables.push(b);
+    }
+  }
+
+  // Called when a breakable's `alive` flips to false (any damage source).
+  // Spawns the kind-specific gold drops and — for crates — sometimes an
+  // item rune. Plays a small particle burst + ring + bomb sfx so the
+  // destruction reads visually and audibly.
+  _onBreakableDestroyed(b) {
+    const dropFood = Math.random() < b.foodChance;
+    const drops = spawnDrops(this.scene, b.pos.x, b.pos.z, b.gold, dropFood);
+    for (const d of drops) this.pickups.push(d);
+    if (b.itemDropChance > 0 && Math.random() < b.itemDropChance) {
+      const id = pickRandomItemId();
+      if (id) {
+        const r = new Rune(this.scene, b.pos.x, b.pos.z, 'item', id);
+        this.runes.push(r);
+      }
+    }
+    const color = b.burstColor();
+    this.effects.burst(b.pos.x, 0.5, b.pos.z, color, 10, 4, 0.45);
+    this.effects.ring(b.pos.x, 0.05, b.pos.z, 0xffd166, 0.8, 0.3);
+    this.sound.bomb?.();
+    b.destroyMesh();
+  }
+
   // Always spawn one chest near origin on first load so players see the
   // pickup loop within a few seconds — discovering the first chest can
   // otherwise take a few minutes of exploration.
@@ -449,6 +490,7 @@ export class Game {
     this.world.refreshActiveChunks(positions);
     this._drainPendingEnemySpawns();
     this._drainChestSpawns();
+    this._drainBreakableSpawns();
   }
 
   // Lazy-build and update a small billboarded HP-style bar above a downed
@@ -487,10 +529,12 @@ export class Game {
   _onPlayerHitsEnemy(player, enemy) {
     const partner = this.players[1 - player.index];
     // ctx is shared between onAttack and onHit so items can tag e.g. crit.
+    // enemyList includes breakables (via cached _damageables) so item hooks
+    // like Echo / DashBlast can also chain into pots & crates.
     const ctx = {
       enemy,
       partner,
-      enemyList: this.enemies,
+      enemyList: this._damageables || this.enemies,
       dmgMult: 1,
       crit: false,
       dmg: 0,
@@ -622,9 +666,25 @@ export class Game {
       }
     }
 
+    // Damageables = enemies + breakables. Sword swings, ability projectiles
+    // and AoE pulses all hit anything in this list. The swing callback below
+    // routes breakables to their loot path so item-on-kill hooks (xp, drops)
+    // don't fire for crates / pots.
+    const damageables = (this.breakables.length > 0)
+      ? [...this.enemies, ...this.breakables]
+      : this.enemies;
+    this._damageables = damageables;
+    const swingHit = (player, target) => {
+      if (target.isBreakable) {
+        target.takeDamage(0, player.pos.x, player.pos.z, 0);
+      } else {
+        this._onPlayerHitsEnemy(player, target);
+      }
+    };
+
     // Update players
-    this.players[0].update(dt, i1, this.players[1], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));
-    this.players[1].update(dt, i2, this.players[0], this.enemies, (a, b) => this._onPlayerHitsEnemy(a, b));
+    this.players[0].update(dt, i1, this.players[1], damageables, swingHit);
+    this.players[1].update(dt, i2, this.players[0], damageables, swingHit);
 
     // Update enemies
     const ctx = {
@@ -649,8 +709,8 @@ export class Game {
     for (const pr of this.projectiles) pr.update(dt, this.players, this.world);
     this.projectiles = this.projectiles.filter(pr => pr.alive);
 
-    // Ability projectiles (hit enemies, not players)
-    for (const ap of this.abilityProjectiles) ap.update(dt, this.enemies, this.effects, this.sound, this.world);
+    // Ability projectiles (hit enemies AND breakables, not players)
+    for (const ap of this.abilityProjectiles) ap.update(dt, damageables, this.effects, this.sound, this.world);
     this.abilityProjectiles = this.abilityProjectiles.filter(ap => ap.alive);
 
     // Credit kills from ability projectiles and instant-damage abilities
@@ -671,6 +731,18 @@ export class Game {
     this.chests = this.chests.filter(c => c.alive);
     for (const r of this.runes) r.update(dt, this.players, this.sound, this.effects);
     this.runes = this.runes.filter(r => r.alive);
+
+    // Breakables: idle wobble, then drain anything destroyed this frame and
+    // emit its drops + sfx + visual burst. Iterating from the end lets us
+    // splice without skipping.
+    for (const b of this.breakables) b.update(dt);
+    for (let i = this.breakables.length - 1; i >= 0; i--) {
+      const b = this.breakables[i];
+      if (!b.alive) {
+        this._onBreakableDestroyed(b);
+        this.breakables.splice(i, 1);
+      }
+    }
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
@@ -784,7 +856,7 @@ export class Game {
       node.className = 'item-icon';
       node.dataset.rar = def.rarity;
       node.title = `${def.name} ×${player.items[id]} — ${def.desc}`;
-      node.innerHTML = `<span>${def.icon || '?'}</span><span class="stk">×${player.items[id]}</span>`;
+      node.innerHTML = `<span class="hud-ico">${iconHTML(def.icon || 'sparkle', { size: 16 })}</span><span class="stk">×${player.items[id]}</span>`;
       el.appendChild(node);
     }
   }
@@ -797,7 +869,7 @@ export class Game {
       if (!el.classList.contains('empty')) {
         el.classList.add('empty');
         el.classList.remove('ready');
-        el.querySelector('.icon').textContent = '·';
+        el.querySelector('.icon').innerHTML = iconHTML('dot', { size: 22 });
         el.querySelector('.ab-name').textContent = 'пусто';
         el.querySelector('.cd-text').textContent = '';
         const circle = el.querySelector('circle');
@@ -810,7 +882,7 @@ export class Game {
     el.classList.remove('empty');
     if (el.dataset.id !== id) {
       el.dataset.id = id;
-      el.querySelector('.icon').textContent = def.icon;
+      el.querySelector('.icon').innerHTML = iconHTML(def.icon || 'sparkle', { size: 28 });
       el.querySelector('.ab-name').textContent = def.name;
       el.querySelector('.icon-wrap').style.boxShadow = `inset 0 0 0 2px #${def.color.toString(16).padStart(6, '0')}`;
     }

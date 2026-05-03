@@ -34,7 +34,7 @@ function partnerDist(player, ctx) {
 export const ITEMS = [
   // ---- common ---------------------------------------------------------
   {
-    id: 'boots', name: 'Ловкие сапоги', icon: '👟', rarity: 'common',
+    id: 'boots', name: 'Ловкие сапоги', icon: 'boot', rarity: 'common',
     desc: '+6% к скорости передвижения за стак.',
     hooks: {
       onTick(player, ctx) {
@@ -48,7 +48,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'thorns', name: 'Колючая броня', icon: '🛡', rarity: 'common',
+    id: 'thorns', name: 'Колючая броня', icon: 'shield', rarity: 'common',
     desc: 'Отражает 1 урон в атакующего за стак.',
     hooks: {
       onTakeDamage(player, ctx) {
@@ -59,20 +59,23 @@ export const ITEMS = [
     },
   },
   {
-    id: 'regen', name: 'Серебряное ожерелье', icon: '💎', rarity: 'common',
-    desc: '+0.6 HP в секунду регенерации за стак.',
+    id: 'regen', name: 'Серебряное ожерелье', icon: 'gem', rarity: 'common',
+    desc: '+0.6 HP/с регенерации за стак (cap +6 HP/с).',
     hooks: {
       onTick(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || !ctx.dt) return;
         if (player.hp < player.maxHP) {
-          player.hp = Math.min(player.maxHP, player.hp + 0.6 * n * ctx.dt);
+          // Soft cap at 6 HP/s (10 stacks), so a flood of regen drops can
+          // still be picked up safely without trivialising late-game.
+          const rate = Math.min(6, 0.6 * n);
+          player.hp = Math.min(player.maxHP, player.hp + rate * ctx.dt);
         }
       },
     },
   },
   {
-    id: 'fang', name: 'Гадюкин клык', icon: '🐍', rarity: 'common',
+    id: 'fang', name: 'Гадюкин клык', icon: 'snake', rarity: 'common',
     desc: 'Атака отравляет цель: 4% макс HP в секунду на 2с (+1с/стак).',
     hooks: {
       onHit(player, ctx) {
@@ -87,7 +90,7 @@ export const ITEMS = [
 
   // ---- uncommon -------------------------------------------------------
   {
-    id: 'echo', name: 'Лук эхо', icon: '🏹', rarity: 'uncommon',
+    id: 'echo', name: 'Лук эхо', icon: 'bow', rarity: 'uncommon',
     desc: '20% шанс повторить удар по другому врагу (+10% за стак, макс 70%).',
     hooks: {
       onHit(player, ctx) {
@@ -110,7 +113,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'rage', name: 'Ярость берсерка', icon: '🔥', rarity: 'uncommon',
+    id: 'rage', name: 'Ярость берсерка', icon: 'flame', rarity: 'uncommon',
     desc: '+25% урона при HP < 50% (+15% за стак).',
     hooks: {
       onAttack(player, ctx) {
@@ -123,7 +126,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'crit', name: 'Молот разлома', icon: '⚒', rarity: 'uncommon',
+    id: 'crit', name: 'Молот разлома', icon: 'hammer', rarity: 'uncommon',
     desc: '+8% к шансу крита за стак (×2 урон при крите).',
     hooks: {
       onAttack(player, ctx) {
@@ -135,19 +138,21 @@ export const ITEMS = [
     },
   },
   {
-    id: 'leech', name: 'Пилюля кровавой охоты', icon: '🩸', rarity: 'uncommon',
-    desc: 'Вампиризм 4% от нанесённого урона за стак.',
+    id: 'leech', name: 'Пилюля кровавой охоты', icon: 'drop', rarity: 'uncommon',
+    desc: 'Вампиризм 4% от урона за стак (cap 30%).',
     hooks: {
       onHit(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const heal = ctx.dmg * 0.04 * n;
+        // Soft cap at 30% lifesteal so high-stack runs still need positioning.
+        const ratio = Math.min(0.30, 0.04 * n);
+        const heal = ctx.dmg * ratio;
         if (heal > 0) player.heal(heal);
       },
     },
   },
   {
-    id: 'doubleStrike', name: 'Мерцающий клинок', icon: '⚡', rarity: 'uncommon',
+    id: 'doubleStrike', name: 'Мерцающий клинок', icon: 'bolt', rarity: 'uncommon',
     desc: '20% шанс ударить дважды (+15% за стак, макс 75%).',
     hooks: {
       onHit(player, ctx) {
@@ -161,14 +166,16 @@ export const ITEMS = [
     },
   },
   {
-    id: 'dashBlast', name: 'Аура отдачи', icon: '💥', rarity: 'uncommon',
-    desc: 'Дэш создаёт взрыв в радиусе 2м (+0.6м за стак), 12 урона/стак.',
+    id: 'dashBlast', name: 'Аура отдачи', icon: 'burst', rarity: 'uncommon',
+    desc: 'Дэш создаёт взрыв (cap r=5м, 72 урона), +0.6м и +12 урона за стак.',
     hooks: {
       onDash(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const r = 2 + 0.6 * (n - 1);
-        const dmg = 12 * n;
+        // Cap radius at 5m and damage at 72 (6 stacks effective). Prevents
+        // late-stack runs from oneshotting whole screens on dash cooldown.
+        const r = Math.min(5, 2 + 0.6 * (n - 1));
+        const dmg = 12 * Math.min(n, 6);
         for (const e of (ctx.enemyList || [])) {
           if (!e.alive) continue;
           const d = Math.hypot(e.pos.x - player.pos.x, e.pos.z - player.pos.z);
@@ -186,7 +193,7 @@ export const ITEMS = [
 
   // ---- rare ----------------------------------------------------------
   {
-    id: 'frost', name: 'Снежная буря', icon: '❄', rarity: 'rare',
+    id: 'frost', name: 'Снежная буря', icon: 'snowflake', rarity: 'rare',
     desc: '8% шанс заморозить врага на 1с (+5%/стак, макс 50%).',
     hooks: {
       onHit(player, ctx) {
@@ -199,7 +206,7 @@ export const ITEMS = [
     },
   },
   {
-    id: 'dodge', name: 'Кольцо тени', icon: '💨', rarity: 'rare',
+    id: 'dodge', name: 'Кольцо тени', icon: 'wind', rarity: 'rare',
     desc: '8% шанс уклониться (+5%/стак, макс 50%).',
     hooks: {
       onTakeDamage(player, ctx) {
@@ -213,7 +220,7 @@ export const ITEMS = [
 
   // ---- legendary -----------------------------------------------------
   {
-    id: 'thunder', name: 'Молот Тора', icon: '🔱', rarity: 'legendary',
+    id: 'thunder', name: 'Молот Тора', icon: 'trident', rarity: 'legendary',
     desc: 'Каждый 8-й удар вызывает молнию (-1 удар за стак, мин 3).',
     hooks: {
       onHit(player, ctx) {
@@ -241,26 +248,28 @@ export const ITEMS = [
 
   // ---- coop synergies ------------------------------------------------
   {
-    id: 'companion', name: 'Дружеский амулет', icon: '🤝', rarity: 'rare',
-    desc: '+15% урона за стак, пока напарник в 5м.',
+    id: 'companion', name: 'Дружеский амулет', icon: 'handshake', rarity: 'rare',
+    desc: '+15% урона за стак, пока напарник в 5м (cap +120%).',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        if (partnerDist(player, ctx) <= 5) ctx.dmgMult *= 1 + 0.15 * n;
+        // Soft cap at +120% (8 stacks) so coop synergy is strong but bounded.
+        if (partnerDist(player, ctx) <= 5) ctx.dmgMult *= 1 + Math.min(1.2, 0.15 * n);
       },
     },
   },
   {
-    id: 'bond', name: 'Резонатор бонда', icon: '💖', rarity: 'legendary',
-    desc: 'Когда поводок натянут — оба игрока получают +60% урона.',
+    id: 'bond', name: 'Резонатор бонда', icon: 'heart', rarity: 'legendary',
+    desc: 'Поводок натянут — +60% урона за стак обоим (cap +180%).',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         const d = partnerDist(player, ctx);
         // "Натянут" — около границы предупреждения поводка (12м+).
-        if (d > 12) ctx.dmgMult *= 1 + 0.6 * n;
+        // Soft cap at +180% (3 stacks) — legendary still impactful but not exponential.
+        if (d > 12) ctx.dmgMult *= 1 + Math.min(1.8, 0.6 * n);
       },
     },
   },

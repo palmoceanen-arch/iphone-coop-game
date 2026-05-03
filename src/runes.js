@@ -95,7 +95,7 @@ export class Rune {
       if (nd < ITEM_PICKUP_RADIUS) {
         near.addItem?.(this.payloadId);
         const def = ITEM_BY_ID[this.payloadId];
-        if (def) effects.toast?.(`+${def.icon || ''} ${def.name}: ${def.desc || ''}`, '#' + this.color.toString(16).padStart(6, '0'));
+        if (def) effects.toast?.(`+ ${def.name}: ${def.desc || ''}`, '#' + this.color.toString(16).padStart(6, '0'));
         sound.pickupGold?.();
         if (effects.ring) effects.ring(near.pos.x, 0.05, near.pos.z, this.color, 1.4, 0.3);
         onPickup?.(this, near);
@@ -119,7 +119,7 @@ export class Rune {
         const intent = near._lastIntent;
         if (intent && intent.interact && nd < ABILITY_PICKUP_RADIUS && this._pickupCooldown <= 0) {
           near.setAbility?.(this.payloadId);
-          if (def) effects.toast?.(`Способность: ${def.icon} ${def.name}`, '#' + this.color.toString(16).padStart(6, '0'));
+          if (def) effects.toast?.(`Способность: ${def.name}`, '#' + this.color.toString(16).padStart(6, '0'));
           sound.bell?.();
           if (effects.ring) effects.ring(near.pos.x, 0.05, near.pos.z, this.color, 1.6, 0.4);
           onPickup?.(this, near);

@@ -167,7 +167,7 @@ export class AbilityProjectile {
 
 export const ABILITIES = [
   {
-    id: 'fireball', name: 'Фаербол', icon: '🔥', color: 0xff8a30, cd: 6,
+    id: 'fireball', name: 'Фаербол', icon: 'flame', color: 0xff8a30, cd: 6,
     desc: 'Огненный снаряд, летящий вперёд. Взрывается при попадании, 45 AoE-урона в 2.5м.',
     cast(player, ctx) {
       ctx.spawnAbilityProjectile({
@@ -182,7 +182,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'icebolt', name: 'Ледяная стрела', icon: '❄', color: 0x9dfcff, cd: 5,
+    id: 'icebolt', name: 'Ледяная стрела', icon: 'snowflake', color: 0x9dfcff, cd: 5,
     desc: 'Ледяной снаряд в ближайшего врага. 30 урона и заморозка на 2с в радиусе 2.5м.',
     cast(player, ctx) {
       let dx = player.facing.x, dz = player.facing.z;
@@ -219,7 +219,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'chainLightning', name: 'Цепная молния', icon: '⚡', color: 0xfff7a0, cd: 7,
+    id: 'chainLightning', name: 'Цепная молния', icon: 'bolt', color: 0xfff7a0, cd: 7,
     desc: 'Прыгает по 4 целям, 30 урона за прыжок (-15% за каждый).',
     cast(player, ctx) {
       let from = { x: player.pos.x, z: player.pos.z };
@@ -254,7 +254,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'shield', name: 'Орб-щит', icon: '🛡', color: 0x6aa6ff, cd: 12,
+    id: 'shield', name: 'Орб-щит', icon: 'shield', color: 0x6aa6ff, cd: 12,
     desc: 'Поглощает следующие 80 урона в течение 5с.',
     cast(player, ctx) {
       player._shield = { hp: 80, ttl: 5 };
@@ -264,7 +264,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'regenAura', name: 'Аура регенерации', icon: '💚', color: 0x7aff8a, cd: 16,
+    id: 'regenAura', name: 'Аура регенерации', icon: 'heart', color: 0x7aff8a, cd: 16,
     desc: 'Лечит обоих игроков по 15 HP/с в течение 5с.',
     cast(player, ctx) {
       const apply = (p) => {
@@ -279,7 +279,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'slowtime', name: 'Замедление времени', icon: '⏱', color: 0xc9a3ff, cd: 14,
+    id: 'slowtime', name: 'Замедление времени', icon: 'clock', color: 0xc9a3ff, cd: 14,
     desc: 'Замедляет всех врагов в 6м до ×0.35 на 3с.',
     cast(player, ctx) {
       const list = enemiesInRadius(player, ctx.enemyList, 6);
@@ -291,7 +291,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'windpush', name: 'Ветер удар', icon: '🌪', color: 0xa0e8ff, cd: 8,
+    id: 'windpush', name: 'Ветер удар', icon: 'wind', color: 0xa0e8ff, cd: 8,
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
       const list = enemiesInRadius(player, ctx.enemyList, 4);
@@ -306,7 +306,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'berserk', name: 'Берсерк', icon: '😡', color: 0xff5050, cd: 14,
+    id: 'berserk', name: 'Берсерк', icon: 'skull', color: 0xff5050, cd: 14,
     desc: 'Урон ×1.4 и атака ×1.3 быстрее на 5с.',
     cast(player, ctx) {
       player._berserk = { ttl: 5, dmg: 1.4, atk: 1.3 };

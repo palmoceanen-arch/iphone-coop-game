@@ -126,6 +126,7 @@ export class World {
     this.colliders = [];              // aggregated from active chunks only
     this.enemySpawns = [];            // queue read by Game on first frame after a chunk loads
     this.chestSpawns = [];            // same idea but for procedural chests
+    this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     this._buildSky();
@@ -243,6 +244,9 @@ export class World {
         if (chunk.chestSpawns) {
           for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
         }
+        if (chunk.breakableSpawns) {
+          for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
+        }
       }
     }
   }
@@ -320,6 +324,7 @@ export class World {
     const colliders = [];
     const enemySpawns = [];
     const chestSpawns = [];
+    const breakableSpawns = [];
 
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
@@ -415,6 +420,9 @@ export class World {
 
     // 6. Enemy camps — origin chunk excluded. Camp probability grows with
     // distance from origin so the world stays interesting as players explore.
+    // Camp centers (`campCenters`) are remembered so chests and breakables
+    // below can cluster around them as "points of interest" for the player.
+    const campCenters = [];
     if (!isOrigin) {
       const dist = Math.hypot(cx, cz);
       const pCamp = Math.min(0.65, 0.18 + dist * 0.08);
@@ -444,25 +452,97 @@ export class World {
               elite: r.chance(0.15),
             });
           }
+          campCenters.push({ x: cxw, z: czw });
         }
       }
     }
 
-    // 7. Procedural chests — ~10% of non-origin chunks contain a chest in a
-    // safe spot. The chest is materialised by Game (so we can attach pickup
-    // logic), this just queues a request.
-    if (!isOrigin && r.chance(0.1)) {
-      for (let i = 0; i < 12; i++) {
-        const x = minX + r.range(4, CHUNK_SIZE - 4);
-        const z = minZ + r.range(4, CHUNK_SIZE - 4);
+    // Helper: try a few seeded jitter offsets around (cx0, cz0) until we find
+    // a clear spot, push it into `out` if successful. Returns true on a
+    // successful placement.
+    const tryClusterPlace = (out, kind, cx0, cz0, range, radius, attempts) => {
+      for (let i = 0; i < attempts; i++) {
+        const x = cx0 + r.range(-range, range);
+        const z = cz0 + r.range(-range, range);
+        if (x < minX + 1 || x > minX + CHUNK_SIZE - 1) continue;
+        if (z < minZ + 1 || z > minZ + CHUNK_SIZE - 1) continue;
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
         if (isOnWater(x, z)) continue;
-        if (!this._spotClear(x, z, 1.0, colliders)) continue;
-        chestSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
-        break;
+        if (!this._spotClear(x, z, radius, colliders)) continue;
+        if (kind === 'chest') {
+          out.push({ x, z, chunkKey: `${cx},${cz}` });
+        } else {
+          out.push({ x, z, kind, chunkKey: `${cx},${cz}` });
+        }
+        return true;
+      }
+      return false;
+    };
+
+    // 7. Chests — tend to spawn next to enemy camps so the player gets a
+    // visible "points of interest" cluster. A small fraction of chunks with
+    // no camp also have a stray chest, so empty regions still hide rewards.
+    if (!isOrigin) {
+      let placed = false;
+      for (const cc of campCenters) {
+        if (!r.chance(0.55)) continue;
+        if (tryClusterPlace(chestSpawns, 'chest', cc.x, cc.z, 5.5, 1.0, 12)) {
+          placed = true;
+        }
+      }
+      if (!placed && r.chance(0.06)) {
+        for (let i = 0; i < 12; i++) {
+          const x = minX + r.range(4, CHUNK_SIZE - 4);
+          const z = minZ + r.range(4, CHUNK_SIZE - 4);
+          if (isOnWater(x, z)) continue;
+          if (!this._spotClear(x, z, 1.0, colliders)) continue;
+          chestSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+          break;
+        }
       }
     }
 
-    return { group, colliders, enemySpawns, chestSpawns, cx, cz };
+    // 8. Breakable props — clay pots and wooden crates. Strongly biased to
+    // sit around enemy camps (dense little clusters of 3-5 pots + 1-2 crates
+    // per camp), with a smaller scatter elsewhere so the world isn't empty
+    // between camps. Origin chunk stays uncluttered.
+    if (!isOrigin) {
+      // Cluster around each enemy camp.
+      for (const cc of campCenters) {
+        const potCount = 2 + r.int(0, 2); // 2..4 pots per camp
+        for (let i = 0; i < potCount; i++) {
+          tryClusterPlace(breakableSpawns, 'pot', cc.x, cc.z, 3.5, 0.7, 6);
+        }
+        const crateCount = r.chance(0.7) ? 1 + r.int(0, 1) : 0; // 0..2 crates
+        for (let i = 0; i < crateCount; i++) {
+          tryClusterPlace(breakableSpawns, 'crate', cc.x, cc.z, 4.0, 0.85, 6);
+        }
+      }
+      // Free-floating scatter: lower frequency so map isn't empty between
+      // camps but camps remain the visual focal point.
+      const freePotAttempts = 2;
+      for (let i = 0; i < freePotAttempts; i++) {
+        if (!r.chance(0.30)) continue;
+        const x = minX + r.range(2, CHUNK_SIZE - 2);
+        const z = minZ + r.range(2, CHUNK_SIZE - 2);
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 0.7, colliders)) continue;
+        breakableSpawns.push({ x, z, kind: 'pot', chunkKey: `${cx},${cz}` });
+      }
+      const freeCrateAttempts = 1;
+      for (let i = 0; i < freeCrateAttempts; i++) {
+        if (!r.chance(0.20)) continue;
+        const x = minX + r.range(2, CHUNK_SIZE - 2);
+        const z = minZ + r.range(2, CHUNK_SIZE - 2);
+        if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 0.85, colliders)) continue;
+        breakableSpawns.push({ x, z, kind: 'crate', chunkKey: `${cx},${cz}` });
+      }
+    }
+
+    return { group, colliders, enemySpawns, chestSpawns, breakableSpawns, cx, cz };
   }
 
   // True if the world position (x, z) is currently under water. Sampled

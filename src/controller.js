@@ -1,5 +1,16 @@
 import jsQR from 'jsqr';
 import { io } from 'socket.io-client';
+import { iconHTML } from './icons.js';
+import {
+  LAYOUT_DEFAULTS,
+  EDITABLE_IDS,
+  SIZE_LIMITS,
+  BUTTON_LABEL,
+  loadLayout,
+  saveLayout,
+  clearLayout,
+  applyLayout,
+} from './controllerLayout.js';
 
 const PLAYER_COLORS = ['#6ad0ff', '#ff8a8a'];
 const PLAYER_NAMES = ['Cyan', 'Coral'];
@@ -47,6 +58,16 @@ const shopInventory = document.createElement('div');
 shopInventory.id = 'shopInventory';
 const shopClose = document.getElementById('shopClose');
 
+// Layout edit-mode UI references.
+const layoutEditBtn = document.getElementById('layoutEditBtn');
+const layoutSelName = document.getElementById('layoutSelName');
+const layoutSaveBtn = document.getElementById('layoutSave');
+const layoutResetBtn = document.getElementById('layoutReset');
+const layoutPrevBtn = document.getElementById('layoutPrev');
+const layoutNextBtn = document.getElementById('layoutNext');
+const layoutShrinkBtn = document.getElementById('layoutShrink');
+const layoutGrowBtn = document.getElementById('layoutGrow');
+
 // Pre-cache cooldown circle circumference (radius=44 → C ≈ 276.46)
 const ABILITY_CD_CIRC = 2 * Math.PI * 44;
 
@@ -79,6 +100,15 @@ const formatter = new Intl.NumberFormat('ru-RU');
 
 function safeText(value) {
   return value == null ? '' : String(value);
+}
+
+function escapeHtml(s) {
+  return safeText(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // Pre-fill code from URL ?code=XXXX
@@ -456,7 +486,7 @@ function renderItemBar(items) {
     el.title = `${safeText(it.name || it.id)} ×${formatter.format(it.count || 0)}`;
     const ico = document.createElement('span');
     ico.className = 'ico';
-    ico.textContent = it.icon || '?';
+    ico.innerHTML = iconHTML(it.icon, { size: 16 });
     const count = document.createElement('span');
     count.className = 'count';
     count.textContent = `×${formatter.format(it.count || 0)}`;
@@ -487,12 +517,12 @@ function renderAbility(ab) {
   if (sig !== _abilitySig) {
     _abilitySig = sig;
     if (ab) {
-      abilityIconEl.textContent = ab.icon || '✦';
+      abilityIconEl.innerHTML = iconHTML(ab.icon || 'sparkle', { size: 28 });
       btnAbility.classList.remove('empty');
       btnAbility.style.background = `linear-gradient(180deg, ${hexToRgba(ab.color, 0.55)} 0%, ${hexToRgba(ab.color, 0.35)} 100%)`;
       btnAbility.style.borderColor = hexToRgba(ab.color, 0.8);
     } else {
-      abilityIconEl.textContent = '·';
+      abilityIconEl.innerHTML = iconHTML('dot', { size: 22 });
       btnAbility.classList.add('empty');
       btnAbility.style.background = '';
       btnAbility.style.borderColor = '';
@@ -555,7 +585,7 @@ function renderInteract(prompt) {
 // ----------------------------------------------------------------------
 function openDetailModal({ icon, name, meta, desc, count, rarity }) {
   if (!detailModal) return;
-  detailIconEl.textContent = icon || '·';
+  detailIconEl.innerHTML = iconHTML(icon || 'sparkle', { size: 40 });
   detailNameEl.textContent = name || '';
   detailMetaEl.textContent = meta || '';
   detailMetaEl.style.display = meta ? '' : 'none';
@@ -591,7 +621,7 @@ detailModal?.addEventListener('click', (e) => {
 function showAbilityDetail(ab) {
   if (!ab) return;
   openDetailModal({
-    icon: ab.icon || '✦',
+    icon: ab.icon || 'sparkle',
     name: ab.name || 'Способность',
     meta: 'Способность',
     desc: ab.desc || 'Активная способность. Нажми фиолетовую кнопку, чтобы применить.',
@@ -602,7 +632,7 @@ function showAbilityDetail(ab) {
 function showItemDetail(it) {
   if (!it) return;
   openDetailModal({
-    icon: it.icon || '?',
+    icon: it.icon || 'sparkle',
     name: it.name || it.id || 'Предмет',
     meta: it.rarity ? RARITY_LABELS[it.rarity] || it.rarity : '',
     count: it.count,
@@ -621,7 +651,7 @@ function appendInventoryRows(container, s) {
     d.className = 'inv-row';
     const name = document.createElement('span');
     name.className = 'inv-name';
-    name.textContent = `${s.ability.icon || '✦'} ${s.ability.name}`;
+    name.innerHTML = `<span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(s.ability.icon || 'sparkle', { size: 18 })}</span><span class="inv-text">${escapeHtml(s.ability.name || '')}</span>`;
     d.append(name);
     const ab = s.ability;
     d.addEventListener('click', (ev) => {
@@ -667,7 +697,7 @@ function appendInventoryRows(container, s) {
       const name = document.createElement('span');
       name.className = 'inv-name';
       const label = document.createElement('span');
-      label.textContent = `${it.icon || ''} ${it.name || it.id}`;
+      label.innerHTML = `<span class="inv-ico" style="display:inline-flex;align-items:center;margin-right:6px;">${iconHTML(it.icon || 'sparkle', { size: 18 })}</span><span class="inv-text">${escapeHtml(it.name || it.id || '')}</span>`;
       const count = document.createElement('span');
       count.className = 'inv-count';
       count.textContent = `×${formatter.format(it.count || 0)}`;
@@ -775,7 +805,7 @@ socket.on('state:player', (s) => {
           <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
           <div class="desc">${u.desc}</div>
         </div>
-        <button class="price-btn" data-id="${u.id}">⛁ ${u.price}</button>
+        <button class="price-btn" data-id="${u.id}"><span class="price-ico">${iconHTML('coin', { size: 14 })}</span>${u.price}</button>
       `;
       shopList.appendChild(row);
     }
@@ -832,8 +862,191 @@ function isInteractive(el) {
   if (el.closest('.detail-modal')) return true;
   // Lobby form (code input, scan panel, file picker, buttons) must work freely.
   if (el.closest('#lobby')) return true;
+  // Layout editor toolbar / pencil button.
+  if (el.closest('.layout-toolbar')) return true;
+  if (el.closest('.layout-edit-btn')) return true;
   return false;
 }
+
+// =====================================================================
+// Layout edit mode — drag controls to taste, persist to localStorage.
+// =====================================================================
+//
+// We apply the saved layout immediately so the player's customisation is
+// in place before any input handler runs. Edit mode itself is a thin
+// state machine: while `editing` is on we intercept pointerdown in the
+// capture phase and turn it into a drag, and gameplay handlers bail out
+// on the same flag so taps don't double-trigger an attack.
+
+let activeLayout = loadLayout();
+applyLayout(activeLayout);
+
+let editing = false;
+let workingLayout = null;
+let selectedKey = EDITABLE_IDS[0];
+let dragState = null;
+
+function cloneLayout(src) {
+  const out = {};
+  for (const k of Object.keys(src)) out[k] = { ...src[k] };
+  return out;
+}
+
+function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
+
+function setEditMode(on) {
+  editing = !!on;
+  controllerEl.classList.toggle('editing', editing);
+  if (editing) {
+    workingLayout = cloneLayout(activeLayout);
+    addLayoutLabels();
+    selectButton(selectedKey || EDITABLE_IDS[0]);
+    refreshToolbar();
+  } else {
+    removeLayoutLabels();
+    clearSelectionHighlight();
+    workingLayout = null;
+    dragState = null;
+  }
+}
+
+function addLayoutLabels() {
+  for (const id of EDITABLE_IDS) {
+    const el = document.getElementById(id);
+    if (!el || el.querySelector('.layout-edit-label')) continue;
+    const lbl = document.createElement('span');
+    lbl.className = 'layout-edit-label';
+    lbl.textContent = BUTTON_LABEL[id] || id;
+    el.appendChild(lbl);
+  }
+}
+
+function removeLayoutLabels() {
+  for (const id of EDITABLE_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.querySelectorAll('.layout-edit-label').forEach((n) => n.remove());
+  }
+}
+
+function clearSelectionHighlight() {
+  for (const id of EDITABLE_IDS) {
+    const el = document.getElementById(id);
+    if (el) delete el.dataset.editSelected;
+  }
+}
+
+function selectButton(id) {
+  selectedKey = id;
+  clearSelectionHighlight();
+  const el = document.getElementById(id);
+  if (el) el.dataset.editSelected = 'true';
+  refreshToolbar();
+}
+
+function refreshToolbar() {
+  if (!layoutSelName) return;
+  layoutSelName.textContent = BUTTON_LABEL[selectedKey] || selectedKey || '';
+}
+
+function cycleSelection(dir) {
+  const i = EDITABLE_IDS.indexOf(selectedKey);
+  const next = (i + dir + EDITABLE_IDS.length) % EDITABLE_IDS.length;
+  selectButton(EDITABLE_IDS[next]);
+}
+
+function changeSize(delta) {
+  if (!editing || !workingLayout || !selectedKey) return;
+  const lim = SIZE_LIMITS[selectedKey] || { min: 32, max: 320 };
+  const cur = workingLayout[selectedKey].size || 64;
+  workingLayout[selectedKey].size = clamp(cur + delta, lim.min, lim.max);
+  applyLayout(workingLayout);
+}
+
+function commitLayout() {
+  if (!workingLayout) return;
+  activeLayout = workingLayout;
+  saveLayout(activeLayout);
+  setEditMode(false);
+}
+
+function resetLayoutToDefaults() {
+  workingLayout = cloneLayout(LAYOUT_DEFAULTS);
+  applyLayout(workingLayout);
+  selectButton(selectedKey || EDITABLE_IDS[0]);
+}
+
+// Wipe localStorage too so a fresh load starts from defaults.
+function fullReset() {
+  clearLayout();
+  resetLayoutToDefaults();
+}
+
+// Capture-phase pointerdown: in edit mode we route taps on any of the
+// editable controls into the drag handler instead of letting the
+// gameplay handlers fire. We use capture so this runs *before* the
+// per-button listeners that were registered later.
+controllerEl.addEventListener('pointerdown', (e) => {
+  if (!editing) return;
+  const sel = '#stick, #btnAttack, #btnDash, #btnAbility, #btnInteract, #btnShop';
+  const el = e.target.closest && e.target.closest(sel);
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  selectButton(el.id);
+  startDrag(el, e);
+}, true);
+
+function startDrag(el, e) {
+  const rect = el.getBoundingClientRect();
+  const parent = controllerEl.getBoundingClientRect();
+  dragState = {
+    el,
+    pointerId: e.pointerId,
+    grabDX: e.clientX - (rect.left + rect.width / 2),
+    grabDY: e.clientY - (rect.top + rect.height / 2),
+    parent,
+  };
+  el.setPointerCapture?.(e.pointerId);
+}
+
+function moveDrag(e) {
+  if (!dragState || e.pointerId !== dragState.pointerId) return;
+  const { el, parent, grabDX, grabDY } = dragState;
+  const cxPx = e.clientX - grabDX;
+  const cyPx = e.clientY - grabDY;
+  const cx = clamp(((cxPx - parent.left) / parent.width) * 100, 4, 96);
+  const cy = clamp(((cyPx - parent.top) / parent.height) * 100, 4, 96);
+  if (workingLayout && workingLayout[el.id]) {
+    workingLayout[el.id].cx = cx;
+    workingLayout[el.id].cy = cy;
+    applyLayout(workingLayout);
+  }
+}
+
+function endDrag(e) {
+  if (!dragState || e.pointerId !== dragState.pointerId) return;
+  try { dragState.el.releasePointerCapture?.(dragState.pointerId); } catch { /* */ }
+  dragState = null;
+}
+
+document.addEventListener('pointermove', moveDrag);
+document.addEventListener('pointerup', endDrag);
+document.addEventListener('pointercancel', endDrag);
+
+if (layoutEditBtn) {
+  layoutEditBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    setEditMode(!editing);
+  });
+}
+if (layoutSaveBtn) layoutSaveBtn.addEventListener('click', (e) => { e.preventDefault(); commitLayout(); });
+if (layoutResetBtn) layoutResetBtn.addEventListener('click', (e) => { e.preventDefault(); fullReset(); });
+if (layoutPrevBtn) layoutPrevBtn.addEventListener('click', (e) => { e.preventDefault(); cycleSelection(-1); });
+if (layoutNextBtn) layoutNextBtn.addEventListener('click', (e) => { e.preventDefault(); cycleSelection(1); });
+if (layoutShrinkBtn) layoutShrinkBtn.addEventListener('click', (e) => { e.preventDefault(); changeSize(-6); });
+if (layoutGrowBtn) layoutGrowBtn.addEventListener('click', (e) => { e.preventDefault(); changeSize(+6); });
 
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());

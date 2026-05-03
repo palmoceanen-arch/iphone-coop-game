@@ -44,6 +44,19 @@ const NATURE_MANIFEST = {
   bush_large: { url: 'models/nature/plant_bushLarge.glb' },
 };
 
+// Destructible props. Both source GLBs are CC0 by Kay Lousberg — see
+// `public/models/breakables/CREDITS.md` for full attribution.
+//   pot   — KayKit "Dungeon Remastered" bottle_C_brown (pot-bellied pitcher
+//           with a corked neck — the classic "кувшин" silhouette)
+//   crate — KayKit "Dungeon Remastered" box_small (sealed wooden crate)
+// Both ship with the same gradient colormap atlas as the rest of the KayKit
+// characters in the project, so we just toon-ify the materials and let the
+// atlas drive the colour — no recolouring is needed.
+const BREAKABLE_MANIFEST = {
+  pot: { url: 'models/breakables/pot.glb' },
+  crate: { url: 'models/breakables/crate.glb' },
+};
+
 // Animation aliases — pick the closest baked animation for each gameplay slot.
 // All KayKit models share the same naming convention so this map works for both
 // the Knight and the Skeleton variants.
@@ -63,6 +76,7 @@ const ANIM_MAP = {
 
 const cache = {};
 const propCache = {};
+const breakableCache = {};
 let loaderPromise = null;
 
 export function preloadModels(onProgress) {
@@ -72,7 +86,8 @@ export function preloadModels(onProgress) {
 
   const charEntries = Object.entries(MANIFEST);
   const propEntries = Object.entries(NATURE_MANIFEST);
-  const total = charEntries.length + propEntries.length;
+  const breakableEntries = Object.entries(BREAKABLE_MANIFEST);
+  const total = charEntries.length + propEntries.length + breakableEntries.length;
   let done = 0;
   const charPromises = charEntries.map(([key, { url }]) =>
     new Promise((resolve, reject) => {
@@ -136,7 +151,55 @@ export function preloadModels(onProgress) {
       });
     })
   );
-  loaderPromise = Promise.all([...charPromises, ...propPromises]).then(() => ({ cache, propCache }));
+  // Load destructible props (pots, crates). These are auto-fitted to a
+  // unit-height bounding box so each model lines up with a 1m gameplay
+  // collider regardless of its native source scale.
+  const breakablePromises = breakableEntries.map(([key, { url }]) =>
+    new Promise((resolve, reject) => {
+      loader.load(url, (gltf) => {
+        const root = gltf.scene;
+        // KayKit's models ship with a single shared colormap atlas plus per-
+        // vertex colours; toon-ify each material in place so the atlas tones
+        // are preserved (terracotta jug, weathered wooden crate) but the
+        // shading matches the rest of the cel-shaded world.
+        root.traverse((obj) => {
+          if (obj.isMesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            const replaced = mats.map((m) => m ? toToonMaterial(m) : m);
+            obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
+          }
+        });
+        // Normalize source scale by the model's largest horizontal extent
+        // (max of X/Z bbox). Pots want a footprint around 0.55m so they read
+        // as knee-high jugs, crates want 0.85m so they look like a crouching
+        // sealed box. Y is left to follow whatever aspect the source authored
+        // (a tall jar stays tall).
+        const box = new THREE.Box3().setFromObject(root);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const target = (key === 'pot') ? 0.55 : 0.85;
+        const refDim = Math.max(size.x, size.z, 1e-4);
+        const baseScale = target / refDim;
+        breakableCache[key] = {
+          scene: root,
+          baseScale,
+          // Y-offset between model origin and floor in source units; needed
+          // when the source mesh isn't centered on its own base.
+          baseY: -box.min.y,
+        };
+        done += 1;
+        onProgress?.(done, total, key);
+        resolve();
+      }, undefined, (err) => {
+        console.error('[models] failed to load', url, err);
+        reject(err);
+      });
+    })
+  );
+  loaderPromise = Promise.all([...charPromises, ...propPromises, ...breakablePromises])
+    .then(() => ({ cache, propCache, breakableCache }));
   return loaderPromise;
 }
 
@@ -180,6 +243,30 @@ export function spawnProp(kind, { scale = 1, rotationY = 0 } = {}) {
 
 export function getPropKinds() {
   return Object.keys(propCache);
+}
+
+// Returns true if the breakable prop GLBs have been loaded. Breakables fall
+// back to procedural primitives in `Breakable._buildFallbackMesh()` until the
+// cache is populated, so a first-frame breakable can still render before the
+// preload finishes.
+export function isBreakableLoaded(kind) {
+  return !!breakableCache[kind];
+}
+
+// Clone a breakable prop. Returns null if the source GLB hasn't loaded yet
+// (caller should fall back to a procedural mesh in that case). The returned
+// scene is auto-scaled so its bounding box height matches the target chosen
+// at preload time, then multiplied by the caller's `scale` for final size.
+export function spawnBreakable(kind, { scale = 1, rotationY = 0 } = {}) {
+  const src = breakableCache[kind];
+  if (!src) return null;
+  const root = src.scene.clone(true);
+  const finalScale = src.baseScale * scale;
+  root.scale.setScalar(finalScale);
+  root.rotation.y = rotationY;
+  // Lift the model so its bounding-box bottom touches y=0 even after scale.
+  root.position.y = src.baseY * finalScale;
+  return root;
 }
 
 // Reusable color buffer to convert hex tints into linear-space color (matches
