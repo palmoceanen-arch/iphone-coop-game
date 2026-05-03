@@ -46,7 +46,8 @@ const NATURE_MANIFEST = {
 
 // Destructible props. Both source GLBs are CC0 by Kay Lousberg — see
 // `public/models/breakables/CREDITS.md` for full attribution.
-//   pot   — KayKit "Restaurant Bits" jar_C_large (terracotta clay jug)
+//   pot   — KayKit "Dungeon Remastered" bottle_C_brown (pot-bellied pitcher
+//           with a corked neck — the classic "кувшин" silhouette)
 //   crate — KayKit "Dungeon Remastered" box_small (sealed wooden crate)
 // Both ship with the same gradient colormap atlas as the rest of the KayKit
 // characters in the project, so we just toon-ify the materials and let the
