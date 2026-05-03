@@ -64,6 +64,65 @@ export class Effects {
     this.flashes.push({ mesh: m, ttl: life, life: 0, growTo: radius * 1.4 });
   }
 
+  // Crescent / arc that fans out in front of a swinging player. Drawn as a
+  // thin ring slice in the horizontal plane at hand height, oriented by the
+  // player's facing yaw. The opacity has a fast attack + long fade so it
+  // reads as a slash trail rather than a static dome, and the mesh rotates
+  // a few degrees during its life to suggest follow-through.
+  //
+  // Args:
+  //   x,y,z  — world position of the swinging character (y typically near 0)
+  //   yaw    — facing yaw (radians); same convention as Player.yaw
+  //   opts   — { range, arc, duration, color, height, thickness }
+  //     range     : outer radius of the arc (default 2.0m)
+  //     arc       : total angular width of the wedge in radians (default ~120°)
+  //     duration  : seconds before the arc fully fades (default 0.28)
+  //     color     : hex tint (default 0xeaffff)
+  //     height    : vertical offset above the input y (default 1.0m)
+  //     thickness : ring thickness as a fraction of range (default 0.45)
+  slashArc(x, y, z, yaw, opts = {}) {
+    if (this.particleScale <= 0) return;
+    const {
+      range = 2.0,
+      arc = Math.PI * 0.7,
+      duration = 0.28,
+      color = 0xeaffff,
+      height = 1.0,
+      thickness = 0.45,
+    } = opts;
+    const outer = range * 1.05;
+    const inner = Math.max(0.15, outer * (1 - thickness));
+    // Segment count scales with arc width so wide sweeps stay round.
+    const seg = Math.max(20, Math.ceil(arc * 16));
+    // Build a wedge centred on +Z (player-forward when rotation.y = 0). After
+    // rotateX(-PI/2) the ring lies in XZ; theta=-PI/2 maps to +Z, so we offset
+    // thetaStart by -PI/2 so the wedge bisector points forward.
+    const geo = new THREE.RingGeometry(inner, outer, seg, 1, -Math.PI / 2 - arc / 2, arc);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y + height, z);
+    m.rotation.y = yaw;
+    // Draw on top of nearby geometry so the slash isn't swallowed by the
+    // character body or props it overlaps.
+    m.renderOrder = 5;
+    this.scene.add(m);
+    this.flashes.push({
+      mesh: m,
+      ttl: duration,
+      life: 0,
+      _kind: 'arc',
+      _yaw: yaw,
+    });
+  }
+
   shakeCamera(amt) { this.shakeMax = Math.max(this.shakeMax, amt); }
   doHitStop(secs) { this.hitStop = Math.max(this.hitStop, secs); }
 
@@ -120,9 +179,22 @@ export class Effects {
         this.flashes.splice(i, 1);
         continue;
       }
-      f.mesh.material.opacity = 0.85 * (1 - t);
-      const s = 1 + t * (f.growTo - 1);
-      f.mesh.scale.setScalar(s);
+      if (f._kind === 'arc') {
+        // Arc envelope: snap up over the first ~18% of life, then long fade.
+        // Scale grows from 0.7 to ~1.15 so the slash looks like it's still
+        // travelling outward as it fades out.
+        const inT = Math.min(1, t / 0.18);
+        const outT = Math.max(0, (t - 0.18) / 0.82);
+        f.mesh.material.opacity = inT * (1 - outT) * 0.95;
+        const s = 0.70 + t * 0.45;
+        f.mesh.scale.setScalar(s);
+        // Rotate ~10° over the lifetime to fake a follow-through swing.
+        f.mesh.rotation.y = f._yaw + t * 0.18;
+      } else {
+        f.mesh.material.opacity = 0.85 * (1 - t);
+        const s = 1 + t * (f.growTo - 1);
+        f.mesh.scale.setScalar(s);
+      }
     }
     // damage numbers
     for (let i = this._floats.length - 1; i >= 0; i--) {

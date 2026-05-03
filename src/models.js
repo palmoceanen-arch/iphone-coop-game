@@ -431,6 +431,8 @@ function applyHueShift(material, shift) {
 //   - `damageMult`  : multiplier on the player's base damage stat
 //   - `showNodes`   : built-in child meshes to make visible (others are hidden)
 //   - `attach`      : key into WEAPON_MANIFEST for an external mesh, or null
+//   - `slash`       : optional swing-arc VFX spec (`{ color, height }`); omit
+//                     for non-slash weapons (e.g. wand jab) so no arc spawns
 //
 // Weapon profiles intentionally tune *swing length* and *impactAt* together
 // so the gameplay damage window (in `Player.update`) lands at the exact frame
@@ -444,58 +446,70 @@ function applyHueShift(material, shift) {
 // clip, so cooldown drives "how often you can swing" while swing drives
 // "how long the visible motion lasts".
 export const WEAPONS = {
-  // Default: knight's built-in 1H sword + round shield. The swing is a
-  // proper overhead chop with windup + follow-through, and the damage
-  // window lands ~half-way through, so the hit reads as the weapon's
-  // arc connecting rather than instantly on press.
+  // Default: knight's built-in 1H sword + round shield. Wide horizontal
+  // slice — reads as a much bigger swipe than the old overhead chop and
+  // covers a generous front arc so positioning still matters but glancing
+  // blows are forgiving. Damage window lands at the midpoint of the swipe.
   sword_1h: {
     label: 'Sword',
     showNodes: ['1H_Sword', 'Round_Shield'],
     attach: null,
-    attackAnim: 'attack_1h_chop',   // 1.07s baked
-    swing: 0.90,
-    impactAt: 0.55,
-    range: 2.1,
-    arc: Math.PI * 0.7,    // ~125°
+    attackAnim: 'attack_1h_horiz',  // 1H horizontal slice (~1.0s baked)
+    swing: 0.85,
+    impactAt: 0.50,
+    range: 2.3,
+    arc: Math.PI * 0.85,   // ~153° — wide horizontal sweep
     cooldown: 0.55,
     damageMult: 1.0,
+    slash: { color: 0xdfeaff, height: 1.05 },
   },
-  // Heavy two-hander — wider arc, more reach, more wind-up.
+  // Heavy two-hander — wider arc, more reach, more wind-up. Uses the
+  // 2H horizontal slice clip (the same wide sweep as `attack_2h_slice`).
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_slice',  // 1.10s baked
+    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
     swing: 1.00,
     impactAt: 0.55,
-    range: 2.6,
-    arc: Math.PI * 0.9,    // ~160°
+    range: 2.7,
+    arc: Math.PI * 0.95,   // ~171° — sweeps almost shoulder to shoulder
     cooldown: 0.75,
     damageMult: 1.6,
+    slash: { color: 0xc8d6ff, height: 1.10 },
   },
+  // 1H axe — shares the 1H horizontal slice clip with the sword. Slightly
+  // slower swing and tighter arc on the rebuild because an axe head feels
+  // weightier than a sword tip; a warm-steel slash colour to read distinct
+  // from the sword in coop play.
   axe_1h: {
     label: 'Axe',
     showNodes: ['Round_Shield'],   // axe in main hand, shield offhand
     attach: 'axe_1h',
-    attackAnim: 'attack_1h_chop',   // 1.07s baked
-    swing: 0.95,
-    impactAt: 0.58,
-    range: 2.1,
-    arc: Math.PI * 0.6,
+    attackAnim: 'attack_1h_horiz',  // 1H horizontal slice
+    swing: 0.92,
+    impactAt: 0.52,
+    range: 2.3,
+    arc: Math.PI * 0.80,   // ~144°
     cooldown: 0.65,
     damageMult: 1.2,
+    slash: { color: 0xffd28a, height: 1.05 },
   },
+  // 2H battle axe — wide horizontal sweep instead of the old vertical chop.
+  // Heaviest reach + arc in the kit and the slowest cooldown so it hits like
+  // a truck without dominating DPS.
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_chop',   // 1.63s baked — slow heavy chop
-    swing: 1.20,
-    impactAt: 0.58,
-    range: 2.5,
-    arc: Math.PI * 0.85,
+    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep
+    swing: 1.10,
+    impactAt: 0.55,
+    range: 2.7,
+    arc: Math.PI * 0.95,   // ~171°
     cooldown: 0.85,
     damageMult: 1.8,
+    slash: { color: 0xffae6a, height: 1.05 },
   },
   staff: {
     label: 'Staff',
@@ -505,10 +519,12 @@ export const WEAPONS = {
     swing: 0.95,
     impactAt: 0.55,
     range: 2.4,
-    arc: Math.PI * 0.55,
+    arc: Math.PI * 0.70,
     cooldown: 0.60,
     damageMult: 1.1,
+    slash: { color: 0x9adfff, height: 1.15 },
   },
+  // Wand — spell jab. No swing arc VFX (it's a forward cast, not a slash).
   wand: {
     label: 'Wand',
     showNodes: [],

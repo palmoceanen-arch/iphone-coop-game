@@ -286,6 +286,24 @@ export class Player {
       this.swingActive = true;
       this.swingProcessed = false;
       this.sound.swing();
+      // Spawn the swing-arc VFX in front of the player. Uses the smoothed
+      // render pose (smoothPos / yaw) so the arc tracks the visible
+      // character instead of jittering with raw input. Weapons without a
+      // `slash` profile (e.g. wand, which jabs) skip this.
+      if (wp.slash) {
+        this.effects.slashArc(
+          this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
+          {
+            range: wp.range,
+            arc: wp.arc,
+            // Duration is tied to the swing so heavier weapons leave a
+            // longer trail; clamp so it never outlives the cooldown.
+            duration: Math.min(wp.swing * 0.7, wp.cooldown * 0.9),
+            color: wp.slash.color,
+            height: wp.slash.height,
+          }
+        );
+      }
       const actions = this._character?.actions;
       const action = actions?.[this._attackActionKey];
       if (action && actions) {
