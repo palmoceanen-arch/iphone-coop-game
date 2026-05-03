@@ -1,22 +1,31 @@
 # Breakable Prop Models
 
 Both models are licensed CC0 (Creative Commons Zero — no attribution required,
-but credit appreciated).
+but credit appreciated). They were authored by **Kay Lousberg**
+(<https://kaylousberg.com>) and ship as part of his open KayKit asset packs.
+Sticking with KayKit for these breakables matches the existing characters
+(Knight, Skeleton variants) which are also from KayKit, so the cel-shaded
+look stays consistent across the world.
 
 ## pot.glb
 
-- Source: Quaternius — Survival Pack (2020)
-- Author: Quaternius (https://quaternius.com)
-- Original file: `Survival Pack - Sept 2020/OBJ/Pot.obj` (+ `Pot.mtl`)
-- Conversion: `obj2gltf` (binary GLB, materials preserved)
-- License: Public Domain (CC0 1.0)
-- Pack: https://opengameart.org/content/lowpoly-survival-pack
+Terracotta clay jug with a wooden lid (visually a "кувшин").
+
+- Source pack: **KayKit — Restaurant Bits 1.0**
+- Original file: `addons/kaykit_restaurant_bits/Assets/gltf/jar_C_large.gltf`
+- Conversion: `gltf-pipeline -i jar_C_large.gltf -o pot.glb -b`
+  (single-file binary GLB with the colormap atlas embedded)
+- License: Creative Commons Zero (CC0 1.0)
+- Pack home: <https://kaylousberg.itch.io/kaykit-restaurant>
+- GitHub mirror: <https://github.com/KayKit-Game-Assets/KayKit-Restaurant-Bits-1.0>
 
 ## crate.glb
 
-- Source: Kenney — Survival Kit (April 2024, v2.0)
-- Author: Kenney.nl (https://kenney.nl)
-- Original file: `Models/GLB format/box.glb`
-- Texture: `Textures/colormap.png` (shared atlas)
+Sealed wooden crate with iron banding.
+
+- Source pack: **KayKit — Dungeon Remastered 1.0**
+- Original file: `addons/kaykit_dungeon_remastered/Assets/gltf/box_small.gltf.glb`
+  (already a binary GLB, copied verbatim)
 - License: Creative Commons Zero (CC0 1.0)
-- Pack: https://kenney.nl/assets/survival-kit
+- Pack home: <https://kaylousberg.itch.io/kaykit-dungeon-remastered>
+- GitHub mirror: <https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0>

@@ -44,15 +44,16 @@ const NATURE_MANIFEST = {
   bush_large: { url: 'models/nature/plant_bushLarge.glb' },
 };
 
-// Destructible props. Both source GLBs are CC0 — see
+// Destructible props. Both source GLBs are CC0 by Kay Lousberg — see
 // `public/models/breakables/CREDITS.md` for full attribution.
-//   pot   — Quaternius "Survival Pack" Pot.obj (converted to GLB)
-//   crate — Kenney "Survival Kit" box.glb (uses shared colormap.png atlas)
-// Re-tinted at load time to a clay/wood palette so they read consistently
-// against our forest tile set.
+//   pot   — KayKit "Restaurant Bits" jar_C_large (terracotta clay jug)
+//   crate — KayKit "Dungeon Remastered" box_small (sealed wooden crate)
+// Both ship with the same gradient colormap atlas as the rest of the KayKit
+// characters in the project, so we just toon-ify the materials and let the
+// atlas drive the colour — no recolouring is needed.
 const BREAKABLE_MANIFEST = {
-  pot: { url: 'models/breakables/pot.glb', tint: 'clay' },
-  crate: { url: 'models/breakables/crate.glb', tint: 'wood' },
+  pot: { url: 'models/breakables/pot.glb' },
+  crate: { url: 'models/breakables/crate.glb' },
 };
 
 // Animation aliases — pick the closest baked animation for each gameplay slot.
@@ -152,49 +153,34 @@ export function preloadModels(onProgress) {
   // Load destructible props (pots, crates). These are auto-fitted to a
   // unit-height bounding box so each model lines up with a 1m gameplay
   // collider regardless of its native source scale.
-  const breakablePromises = breakableEntries.map(([key, { url, tint }]) =>
+  const breakablePromises = breakableEntries.map(([key, { url }]) =>
     new Promise((resolve, reject) => {
       loader.load(url, (gltf) => {
         const root = gltf.scene;
-        // Re-tint source materials. Quaternius's pot is black/grey, Kenney's
-        // crate is a beige atlas — both look out of place against the rest of
-        // the world unless we override them with our forest-friendly palette.
+        // KayKit's models ship with a single shared colormap atlas plus per-
+        // vertex colours; toon-ify each material in place so the atlas tones
+        // are preserved (terracotta jug, weathered wooden crate) but the
+        // shading matches the rest of the cel-shaded world.
         root.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
             obj.receiveShadow = true;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-            const replaced = mats.map((m) => {
-              if (!m) return m;
-              const color = remapBreakableColor(tint, m.name || '', m.color);
-              const fakeSrc = {
-                color,
-                map: tint === 'wood' ? (m.map || null) : null,
-                transparent: !!m.transparent,
-                opacity: m.opacity ?? 1,
-                side: THREE.FrontSide,
-                name: m.name,
-              };
-              return toToonMaterial(fakeSrc);
-            });
+            const replaced = mats.map((m) => m ? toToonMaterial(m) : m);
             obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
           }
         });
         // Normalize source scale by the model's largest horizontal extent
-        // (max of X / Z bbox). Pots want a footprint around 0.65m so they
-        // read as a knee-high cauldron, crates want 0.7m so they look like
-        // a crouching wooden chest. Y is left to follow whatever aspect the
-        // source authored (a tall vase stays tall, a low cauldron stays low).
+        // (max of X/Z bbox). Pots want a footprint around 0.55m so they read
+        // as knee-high jugs, crates want 0.85m so they look like a crouching
+        // sealed box. Y is left to follow whatever aspect the source authored
+        // (a tall jar stays tall).
         const box = new THREE.Box3().setFromObject(root);
         const size = new THREE.Vector3();
         box.getSize(size);
-        const target = (key === 'pot') ? 0.65 : 0.7;
+        const target = (key === 'pot') ? 0.55 : 0.85;
         const refDim = Math.max(size.x, size.z, 1e-4);
         const baseScale = target / refDim;
-        // Re-anchor so the model sits on y=0 rather than centered around its
-        // original origin.
-        const center = new THREE.Vector3();
-        box.getCenter(center);
         breakableCache[key] = {
           scene: root,
           baseScale,
@@ -214,27 +200,6 @@ export function preloadModels(onProgress) {
   loaderPromise = Promise.all([...charPromises, ...propPromises, ...breakablePromises])
     .then(() => ({ cache, propCache, breakableCache }));
   return loaderPromise;
-}
-
-// Re-tint helper for breakable props. We don't have material name conventions
-// like Kenney's Nature Kit, so this just maps "clay" / "wood" tint slots onto
-// hand-picked colors that read well against the green/brown world palette.
-function remapBreakableColor(tint, materialName, srcColor) {
-  const n = (materialName || '').toLowerCase();
-  if (tint === 'clay') {
-    // Quaternius's pot has two materials (Black + Grey rim). Map the body to
-    // a terracotta clay tone and keep the rim a darker variant for contrast.
-    if (n.includes('grey') || n.includes('gray')) return new THREE.Color(0x6b3a1a);
-    if (n.includes('black')) return new THREE.Color(0xb4753a);
-    return new THREE.Color(0xb4753a);
-  }
-  if (tint === 'wood') {
-    // Kenney's crate uses a single shared colormap atlas. We don't override
-    // the texture itself — multiplying by a slightly warm tan reads as a
-    // sun-faded wooden box.
-    return new THREE.Color(0xc99a6a);
-  }
-  return srcColor ? srcColor.clone() : new THREE.Color(0xffffff);
 }
 
 // Map Kenney Nature Kit material names to natural forest colors. Falls back
