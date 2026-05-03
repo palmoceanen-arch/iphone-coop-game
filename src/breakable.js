@@ -9,13 +9,26 @@
 // the game's existing damageables loop can hit them without special casing.
 // `isBreakable=true` is the marker the game's swing callback uses to route
 // the destruction path to its own loot spawn instead of the enemy-death path.
+//
+// Visuals are sourced from CC0 GLBs preloaded by `models.js`:
+//   pot   — Quaternius "Survival Pack" (terracotta cauldron)
+//   crate — Kenney "Survival Kit" (wooden box)
+// If the asset isn't loaded yet (first-frame race during world streaming) we
+// fall back to a procedural primitive so the breakable still renders.
 
 import * as THREE from 'three';
 import { TOON_GRADIENT } from './shading.js';
+import { spawnBreakable } from './models.js';
 
 const POT_GOLD = [2, 5];
 const CRATE_GOLD = [3, 7];
 const CRATE_ITEM_CHANCE = 0.10;
+
+// Per-kind visual scales applied on top of the model's auto-fitted base size.
+// Tweaking these is the cheap way to make a kind read bigger/smaller without
+// re-exporting the source GLB.
+const POT_SCALE = 1.0;
+const CRATE_SCALE = 1.0;
 
 export class Breakable {
   constructor(scene, x, z, kind /* 'pot' | 'crate' */) {
@@ -35,14 +48,39 @@ export class Breakable {
     this.foodChance = kind === 'pot' ? 0.06 : 0.10;
     this.isBreakable = true;
     this._wobbleT = Math.random() * Math.PI * 2;
-    this.mesh = (kind === 'pot') ? this._buildPotMesh() : this._buildCrateMesh();
+    this.mesh = this._buildMesh();
     this.scene.add(this.mesh);
   }
 
-  _buildPotMesh() {
+  // Pick a deterministic Y rotation per spot so identical chunks regenerate
+  // with the same orientation, keeping the world stable across players.
+  _seededRotation(salt = 0) {
+    const seed = (this.pos.x * 17 + this.pos.z * 31 + salt * 7) | 0;
+    return ((seed % 360) + 360) % 360 * Math.PI / 180;
+  }
+
+  _buildMesh() {
+    const scale = (this.kind === 'pot') ? POT_SCALE : CRATE_SCALE;
+    const rotationY = this._seededRotation(this.kind === 'pot' ? 0 : 1);
+    const imported = spawnBreakable(this.kind, { scale, rotationY });
+    if (imported) {
+      // The imported scene already has Y=baseY*scale. Translate XZ to the
+      // world position; world.js queues the prop with the spot already
+      // resolved so we just plant it.
+      imported.position.x = this.pos.x;
+      imported.position.z = this.pos.z;
+      return imported;
+    }
+    // Fallback path — only hit if the GLB hasn't finished preloading yet
+    // (e.g. first-frame breakables during initial chunk stream). Visually
+    // close enough to the imported model that swap-in is unnoticeable.
+    return (this.kind === 'pot') ? this._buildPotFallback() : this._buildCrateFallback();
+  }
+
+  _buildPotFallback() {
     const grp = new THREE.Group();
-    const clay = new THREE.MeshToonMaterial({ color: 0xa66a3a, gradientMap: TOON_GRADIENT });
-    const dark = new THREE.MeshToonMaterial({ color: 0x6e3a1a, gradientMap: TOON_GRADIENT });
+    const clay = new THREE.MeshToonMaterial({ color: 0xb4753a, gradientMap: TOON_GRADIENT });
+    const dark = new THREE.MeshToonMaterial({ color: 0x6b3a1a, gradientMap: TOON_GRADIENT });
     const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.22, 0.55, 12), clay);
     body.castShadow = true; body.position.y = 0.28;
     grp.add(body);
@@ -50,18 +88,17 @@ export class Breakable {
     rim.rotation.x = Math.PI / 2; rim.position.y = 0.55;
     grp.add(rim);
     grp.position.set(this.pos.x, 0, this.pos.z);
-    grp.rotation.y = ((this.pos.x * 17 + this.pos.z * 31) | 0) % 360 * Math.PI / 180;
+    grp.rotation.y = this._seededRotation(0);
     return grp;
   }
 
-  _buildCrateMesh() {
+  _buildCrateFallback() {
     const grp = new THREE.Group();
-    const wood = new THREE.MeshToonMaterial({ color: 0x8a5a2c, gradientMap: TOON_GRADIENT });
-    const dark = new THREE.MeshToonMaterial({ color: 0x4d2f17, gradientMap: TOON_GRADIENT });
+    const wood = new THREE.MeshToonMaterial({ color: 0xc99a6a, gradientMap: TOON_GRADIENT });
+    const dark = new THREE.MeshToonMaterial({ color: 0x6b4023, gradientMap: TOON_GRADIENT });
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.65, 0.7), wood);
     body.castShadow = true; body.position.y = 0.33;
     grp.add(body);
-    // Edge rails to read as a wooden crate from any angle.
     const railGeoX = new THREE.BoxGeometry(0.74, 0.08, 0.08);
     const railGeoZ = new THREE.BoxGeometry(0.08, 0.08, 0.74);
     for (const y of [0.07, 0.59]) {
@@ -77,7 +114,7 @@ export class Breakable {
       }
     }
     grp.position.set(this.pos.x, 0, this.pos.z);
-    grp.rotation.y = ((this.pos.x * 13 + this.pos.z * 29) | 0) % 360 * Math.PI / 180;
+    grp.rotation.y = this._seededRotation(1);
     return grp;
   }
 
@@ -87,7 +124,8 @@ export class Breakable {
     return true;
   }
 
-  // Subtle idle wobble so destructibles read as interactive on screen.
+  // Subtle idle wobble so destructibles read as interactive on screen. Pots
+  // bob slightly; crates stay put (heavy wood doesn't read as floaty).
   update(dt) {
     if (!this.alive || !this.mesh) return;
     this._wobbleT += dt;
@@ -106,8 +144,9 @@ export class Breakable {
     this.mesh = null;
   }
 
-  // Color used for the destruction particle burst. Matches the body tint.
+  // Color used for the destruction particle burst. Matches the body tint
+  // applied in models.js (`remapBreakableColor`).
   burstColor() {
-    return this.kind === 'pot' ? 0xa66a3a : 0x8a5a2c;
+    return this.kind === 'pot' ? 0xb4753a : 0xc99a6a;
   }
 }
