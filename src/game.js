@@ -541,7 +541,10 @@ export class Game {
       echo: false,
     };
     runItemHook(player, 'onAttack', ctx);
-    let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult;
+    // Weapon profile scales base damage — a 2H battle axe hits much harder
+    // than a wand, but the wand swings ~40% faster so DPS stays comparable.
+    const weaponMult = player.weaponProfile?.damageMult ?? 1.0;
+    let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult * weaponMult;
     if (player._berserk) dmg *= player._berserk.dmg;
     ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {

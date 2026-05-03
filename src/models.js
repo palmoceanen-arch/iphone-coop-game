@@ -59,25 +59,63 @@ const BREAKABLE_MANIFEST = {
 
 // Animation aliases — pick the closest baked animation for each gameplay slot.
 // All KayKit models share the same naming convention so this map works for both
-// the Knight and the Skeleton variants.
+// the Knight and the Skeleton variants. The full Knight.glb (KayKit Adventurers
+// 1.0 source) ships with 76 animations; the older Skeleton GLBs only include
+// a small subset, so the loader silently drops slots that aren't present in
+// the source clip list.
 const ANIM_MAP = {
   idle: 'Idle',
   run: 'Running_A',
-  walk: 'Running_B',
-  attack_melee: '1H_Melee_Attack_Slice_Diagonal',
+  walk: 'Walking_A',
+  // 1H melee variants
+  attack_1h_chop:     '1H_Melee_Attack_Chop',
+  attack_1h_slice:    '1H_Melee_Attack_Slice_Diagonal',
+  attack_1h_horiz:    '1H_Melee_Attack_Slice_Horizontal',
+  attack_1h_stab:     '1H_Melee_Attack_Stab',
+  // 2H melee variants — bigger reach + impact
+  attack_2h_chop:     '2H_Melee_Attack_Chop',
+  attack_2h_slice:    '2H_Melee_Attack_Slice',
+  attack_2h_spin:     '2H_Melee_Attack_Spin',
+  attack_2h_stab:     '2H_Melee_Attack_Stab',
+  // dual-wield, ranged, magic
+  attack_dual_chop:   'Dualwield_Melee_Attack_Chop',
+  attack_dual_slice:  'Dualwield_Melee_Attack_Slice',
+  attack_dual_stab:   'Dualwield_Melee_Attack_Stab',
+  attack_ranged:      '1H_Ranged_Shoot',
+  attack_spell:       'Spellcast_Shoot',
+  attack_spell_long:  'Spellcast_Long',
+  attack_throw:       'Throw',
+  attack_unarmed:     'Unarmed_Melee_Attack_Punch_A',
+  // legacy aliases — keep `attack_melee` and `attack_melee_heavy` working for
+  // any callsite that hasn't been migrated to the per-weapon map yet.
+  attack_melee:       '1H_Melee_Attack_Slice_Diagonal',
   attack_melee_heavy: '2H_Melee_Attack_Slice',
-  attack_ranged: '1H_Ranged_Shoot',
-  attack_spell: 'Spellcast_Shoot',
-  attack_throw: 'Throw',
-  attack_unarmed: 'Unarmed_Melee_Attack_Punch_A',
-  hit: 'Hit_A',
-  death: 'Death_A',
+  hit:    'Hit_A',
+  hit_b:  'Hit_B',
+  block:  'Block',
+  death:  'Death_A',
+};
+
+// Stand-alone weapon meshes that get parented to the character's `handslot.r`
+// bone at runtime. Only weapons that aren't already baked into a character GLB
+// live here (the Knight already includes 1H_Sword / 2H_Sword as named child
+// meshes, so they're toggled instead of attached). All sources are CC0
+// KayKit Adventurers Pack 1.0 — see `public/models/weapons/CREDITS.md`.
+const WEAPON_MANIFEST = {
+  axe_1h:    { url: 'models/weapons/axe_1handed.glb' },
+  axe_2h:    { url: 'models/weapons/axe_2handed.glb' },
+  staff:     { url: 'models/weapons/staff.glb' },
+  wand:      { url: 'models/weapons/wand.glb' },
+  dagger:    { url: 'models/weapons/dagger.glb' },
+  spellbook: { url: 'models/weapons/spellbook_closed.glb' },
 };
 
 const cache = {};
 const propCache = {};
 const breakableCache = {};
+const weaponCache = {};
 let loaderPromise = null;
+let weaponLoaderPromise = null;
 
 export function preloadModels(onProgress) {
   if (loaderPromise) return loaderPromise;
@@ -323,7 +361,14 @@ export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = 
   actions.idle?.setLoop(THREE.LoopRepeat).play();
   if (actions.run) actions.run.setLoop(THREE.LoopRepeat);
   if (actions.walk) actions.walk.setLoop(THREE.LoopRepeat);
-  for (const k of ['attack_melee', 'attack_melee_heavy', 'attack_ranged', 'attack_spell', 'attack_throw', 'attack_unarmed', 'hit']) {
+  for (const k of [
+    'attack_1h_chop', 'attack_1h_slice', 'attack_1h_horiz', 'attack_1h_stab',
+    'attack_2h_chop', 'attack_2h_slice', 'attack_2h_spin', 'attack_2h_stab',
+    'attack_dual_chop', 'attack_dual_slice', 'attack_dual_stab',
+    'attack_ranged', 'attack_spell', 'attack_spell_long', 'attack_throw',
+    'attack_unarmed', 'attack_melee', 'attack_melee_heavy',
+    'hit', 'hit_b', 'block',
+  ]) {
     if (actions[k]) {
       actions[k].setLoop(THREE.LoopOnce);
       actions[k].clampWhenFinished = true;
@@ -358,6 +403,236 @@ function applyHueShift(material, shift) {
   hsl.h = (hsl.h + shift) % 1;
   if (hsl.h < 0) hsl.h += 1;
   material.color.setHSL(hsl.h, hsl.s, hsl.l);
+}
+
+// =============================================================================
+// Weapon system
+// =============================================================================
+//
+// The Knight character (KayKit Adventurers, Rig_Medium) has named weapon and
+// shield meshes baked in as direct children of `handslot.r` / `handslot.l`:
+//
+//     1H_Sword, 2H_Sword, 1H_Sword_Offhand,
+//     Round_Shield, Rectangle_Shield, Spike_Shield, Badge_Shield
+//
+// We expose a single `setEquippedWeapon(character, weaponKind)` entry point
+// that handles two cases uniformly:
+//
+//   1. *Built-in* weapons — toggle visibility of the relevant child node(s).
+//   2. *External* weapons — clone a weapon GLB once and re-parent it to the
+//      character's `handslot.r` bone.
+//
+// Each weapon advertises a gameplay profile in `WEAPONS`:
+//   - `attackAnim`  : ANIM_MAP slot to play on swing
+//   - `swing`       : total animation length we want on screen (sec)
+//   - `impactAt`    : 0..1 — point in the swing where damage is dealt
+//   - `range` / `arc`: hit volume (m / radians)
+//   - `cooldown`    : time between swings (sec, before attackSpeed upgrades)
+//   - `damageMult`  : multiplier on the player's base damage stat
+//   - `showNodes`   : built-in child meshes to make visible (others are hidden)
+//   - `attach`      : key into WEAPON_MANIFEST for an external mesh, or null
+//
+// Weapon profiles intentionally tune *swing length* and *impactAt* together
+// so the gameplay damage window (in `Player.update`) lands at the exact frame
+// the animation looks like it's hitting — this is what makes the swing feel
+// like it has weight, instead of registering as soon as the button is pressed.
+
+export const WEAPONS = {
+  // Default: knight's built-in 1H sword + round shield. The swing is a
+  // proper overhead chop with windup + follow-through, and the damage
+  // window lands ~half-way through, so the hit reads as the weapon's
+  // arc connecting rather than instantly on press.
+  sword_1h: {
+    label: 'Sword',
+    showNodes: ['1H_Sword', 'Round_Shield'],
+    attach: null,
+    attackAnim: 'attack_1h_chop',
+    swing: 0.55,
+    impactAt: 0.50,
+    range: 2.0,
+    arc: Math.PI * 0.7,    // ~125°
+    cooldown: 0.45,
+    damageMult: 1.0,
+  },
+  // Heavy two-hander — wider arc, more reach, more wind-up.
+  sword_2h: {
+    label: 'Greatsword',
+    showNodes: ['2H_Sword'],
+    attach: null,
+    attackAnim: 'attack_2h_slice',
+    swing: 0.70,
+    impactAt: 0.55,
+    range: 2.5,
+    arc: Math.PI * 0.9,    // ~160°
+    cooldown: 0.60,
+    damageMult: 1.6,
+  },
+  axe_1h: {
+    label: 'Axe',
+    showNodes: ['Round_Shield'],   // axe in main hand, shield offhand
+    attach: 'axe_1h',
+    attackAnim: 'attack_1h_chop',
+    swing: 0.55,
+    impactAt: 0.55,
+    range: 2.0,
+    arc: Math.PI * 0.6,
+    cooldown: 0.50,
+    damageMult: 1.2,
+  },
+  axe_2h: {
+    label: 'Battle Axe',
+    showNodes: [],
+    attach: 'axe_2h',
+    attackAnim: 'attack_2h_chop',
+    swing: 0.75,
+    impactAt: 0.55,
+    range: 2.4,
+    arc: Math.PI * 0.85,
+    cooldown: 0.65,
+    damageMult: 1.8,
+  },
+  staff: {
+    label: 'Staff',
+    showNodes: [],
+    attach: 'staff',
+    attackAnim: 'attack_2h_stab',
+    swing: 0.55,
+    impactAt: 0.5,
+    range: 2.3,
+    arc: Math.PI * 0.45,
+    cooldown: 0.50,
+    damageMult: 1.1,
+  },
+  wand: {
+    label: 'Wand',
+    showNodes: [],
+    attach: 'wand',
+    attackAnim: 'attack_spell',
+    swing: 0.50,
+    impactAt: 0.45,
+    range: 2.1,
+    arc: Math.PI * 0.5,
+    cooldown: 0.40,
+    damageMult: 0.9,
+  },
+};
+
+// All weapon meshes that need to be toggled or attached. Hiding everything in
+// this list first lets us pick exactly which subset to show without having to
+// know what the previous loadout was.
+const KNIGHT_TOGGLEABLE_NODES = [
+  '1H_Sword', '2H_Sword', '1H_Sword_Offhand',
+  'Round_Shield', 'Rectangle_Shield', 'Spike_Shield', 'Badge_Shield',
+];
+
+// Loads weapon GLBs that aren't baked into the character. Lazy: only fires
+// the first time someone actually equips an external weapon, so the initial
+// game load isn't blocked on weapons the player may never use.
+export function preloadWeapons() {
+  if (weaponLoaderPromise) return weaponLoaderPromise;
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+  const entries = Object.entries(WEAPON_MANIFEST);
+  const promises = entries.map(([key, { url }]) =>
+    new Promise((resolve, reject) => {
+      loader.load(url, (gltf) => {
+        // Toon-shade weapons so they match the rest of the cel-shaded world.
+        gltf.scene.traverse((obj) => {
+          if (obj.isMesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = false;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            const replaced = mats.map((m) => m ? toToonMaterial(m) : m);
+            obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
+          }
+        });
+        weaponCache[key] = gltf.scene;
+        resolve();
+      }, undefined, (err) => {
+        console.error('[models] failed to load weapon', url, err);
+        reject(err);
+      });
+    })
+  );
+  weaponLoaderPromise = Promise.all(promises).then(() => weaponCache);
+  return weaponLoaderPromise;
+}
+
+// Equip a weapon on the given character handle (the value returned by
+// `spawnCharacter`). Toggles built-in weapon/shield meshes and, if the
+// weapon profile has an `attach` external mesh, parents a clone of it to
+// the character's `handslot.r` bone.
+//
+// Designed to be safe to call repeatedly — each call removes any previously
+// attached external mesh and resets the visibility of all toggleable nodes.
+export function setEquippedWeapon(character, weaponKind) {
+  const profile = WEAPONS[weaponKind];
+  if (!profile) {
+    console.warn('[models] unknown weapon kind', weaponKind);
+    return null;
+  }
+  const root = character?.root;
+  if (!root) return null;
+
+  // 1) Toggle the built-in mesh nodes — hide everything first, then show
+  //    only the ones requested by the weapon profile.
+  const showSet = new Set(profile.showNodes || []);
+  root.traverse((obj) => {
+    if (KNIGHT_TOGGLEABLE_NODES.includes(obj.name)) {
+      obj.visible = showSet.has(obj.name);
+    }
+  });
+
+  // 2) Remove any previously-attached external mesh.
+  if (character._equippedAttachment) {
+    character._equippedAttachment.parent?.remove(character._equippedAttachment);
+    character._equippedAttachment = null;
+  }
+
+  // 3) Attach the new external mesh to handslot.r if requested.
+  //
+  // Three.js's GLTFLoader pipes node names through
+  // `PropertyBinding.sanitizeNodeName`, which *strips* reserved characters
+  // (`[`, `]`, `.`, `:`, `/`) instead of replacing them. So the bone the
+  // KayKit GLB calls `handslot.r` ends up named `handslotr` on the cloned
+  // skeleton. Keep both spellings as fallbacks so the helper works whether
+  // a future three.js version re-introduces the dot or not.
+  if (profile.attach) {
+    const src = weaponCache[profile.attach];
+    if (!src) {
+      console.warn('[models] weapon mesh not loaded yet:', profile.attach,
+        '— call preloadWeapons() before equipping external weapons');
+    } else {
+      const candidates = ['handslotr', 'handslot.r', 'handslot_r'];
+      let slot = null;
+      for (const n of candidates) {
+        slot = root.getObjectByName(n);
+        if (slot) break;
+      }
+      if (slot) {
+        const inst = src.clone(true);
+        // The KayKit weapon GLBs are authored to be parented in place of the
+        // built-in `1H_Sword` / `2H_Sword` nodes — not directly to
+        // `handslot.r`. Those built-in weapon nodes carry a small upward
+        // translation and a 180° Y rotation that orient the grip correctly
+        // in the hand. Mirror that transform here so external weapons sit in
+        // the same pose as the built-in swords.
+        inst.position.set(0, 0.033, 0);
+        inst.quaternion.set(0, -1, 0, 0);
+        slot.add(inst);
+        character._equippedAttachment = inst;
+      } else {
+        console.warn('[models] right-hand slot bone not found on character');
+      }
+    }
+  }
+
+  character._equippedWeapon = weaponKind;
+  return profile;
+}
+
+export function getEquippedWeapon(character) {
+  return character?._equippedWeapon || null;
 }
 
 // Cross-fade helper — fades from current playing animations to `target` over

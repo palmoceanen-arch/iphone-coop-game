@@ -1,8 +1,20 @@
 import * as THREE from 'three';
 import { clamp } from './utils.js';
-import { spawnCharacter, crossFadeTo } from './models.js';
+import {
+  spawnCharacter,
+  crossFadeTo,
+  setEquippedWeapon,
+  preloadWeapons,
+  WEAPONS,
+} from './models.js';
 import { runItemHook } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
+
+// Default starter loadout per player slot. The framework supports any weapon
+// in `WEAPONS`; an upgrade tree can call `Player.setWeapon(kind)` later to
+// swap to heavier / magic / dual-wield variants and the swing animation,
+// reach and cooldown all retune automatically.
+const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
 
 const COLORS = [
   { body: 0x6ad0ff, trim: 0x2a5d80, eye: 0xffffff },
@@ -35,15 +47,16 @@ export class Player {
     this.xp = 0;
     this.alive = true;
 
-    // Stats (modifiable by upgrades)
+    // Stats (modifiable by upgrades). The combat-window stats live in
+    // `weaponProfile` and are refreshed every time the player equips a new
+    // weapon; `attackSpeed` upgrades shorten cooldown via a multiplier so
+    // it stacks with whatever weapon is held.
     this.stats = {
       damage: 12,
       speed: 6.0,
-      attackCooldown: 0.45,
-      attackRange: 1.7,
-      attackArc: Math.PI * 0.7, // ~125°
       hpRegen: 0.4, // hp/sec
       goldFind: 1.0,
+      attackSpeedMult: 1.0,   // < 1 = faster
     };
     this.upgradeLevels = { damage: 0, hp: 0, speed: 0, attackSpeed: 0 };
 
@@ -94,8 +107,35 @@ export class Player {
 
     // Initial animation state
     this._animState = 'idle';
-    this._attackActionKey = 'attack_melee';
+
+    // Equip the starter weapon. For sword_1h this is a no-op visibility-wise
+    // (matches the Knight's default sword + shield loadout) but it also
+    // initialises `weaponProfile` so the swing logic below has range/arc
+    // values to use.
+    const startWeapon = DEFAULT_WEAPON_BY_INDEX[this.index] || 'sword_1h';
+    this.setWeapon(startWeapon);
+
     return grp;
+  }
+
+  // Equip a weapon by id (`'sword_1h'`, `'axe_2h'`, `'staff'`, ...). Updates
+  // the character mesh (toggles built-in sword/shield, attaches external
+  // mesh if needed) and caches the weapon's combat profile so swing logic
+  // picks it up next frame. External weapons are loaded lazily; the swap
+  // becomes visible as soon as the load resolves.
+  setWeapon(weaponKind) {
+    const profile = WEAPONS[weaponKind];
+    if (!profile) return;
+    this._weaponKind = weaponKind;
+    this.weaponProfile = profile;
+    this._attackActionKey = profile.attackAnim;
+    if (profile.attach) {
+      // Kick off the lazy weapon-mesh load and re-equip once it resolves so
+      // the visible mesh updates without blocking the equip call.
+      preloadWeapons().then(() => setEquippedWeapon(this._character, weaponKind));
+    } else {
+      setEquippedWeapon(this._character, weaponKind);
+    }
   }
 
   applyKnockback(dirX, dirZ, force) {
@@ -238,9 +278,10 @@ export class Player {
     }
 
     // Attack trigger
-    const attackCdMult = this._berserk ? (1 / this._berserk.atk) : 1;
+    const wp = this.weaponProfile;
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
     if (intent.attack && this.attackTimer <= 0) {
-      this.attackTimer = this.stats.attackCooldown * attackCdMult;
+      this.attackTimer = wp.cooldown * attackCdMult;
       this.attackAnim = 0;
       this.swingActive = true;
       this.swingProcessed = false;
@@ -248,7 +289,12 @@ export class Player {
       const action = this._character?.actions?.[this._attackActionKey];
       if (action) {
         action.reset();
-        action.timeScale = Math.max(1.2, 0.2 / Math.max(action.getClip().duration, 0.05));
+        // Scale source clip to land on `wp.swing` seconds end-to-end. The
+        // KayKit melee clips are authored at ~1s; matching the gameplay
+        // swing length is what keeps animation impact frame and the damage
+        // window in sync.
+        const srcDur = Math.max(action.getClip().duration, 0.05);
+        action.timeScale = srcDur / Math.max(wp.swing, 0.1);
         action.fadeIn(0.05).play();
       }
     }
@@ -291,12 +337,17 @@ export class Player {
 
     // Swing hit detection — animation playback is driven by AnimationMixer,
     // but the gameplay damage window is still timer-based for predictability.
+    // We tick `attackAnim` from 0..1 over `wp.swing` seconds and fire damage
+    // exactly once when it crosses `wp.impactAt` — this is what keeps the
+    // visual impact frame and the gameplay damage frame on the same tick,
+    // so heavier weapons feel like the hit lands on the follow-through and
+    // light weapons feel like they connect early.
     if (this.swingActive) {
-      this.attackAnim += dt / 0.25;
+      this.attackAnim += dt / Math.max(wp.swing, 0.1);
       if (this.attackAnim >= 1) {
         this.swingActive = false;
         this.attackAnim = 0;
-      } else if (!this.swingProcessed && this.attackAnim > 0.25) {
+      } else if (!this.swingProcessed && this.attackAnim >= wp.impactAt) {
         this.swingProcessed = true;
         this._processSwing(enemies, attackOnEnemyCallback);
       }
@@ -337,10 +388,11 @@ export class Player {
   }
 
   _processSwing(enemies, callback) {
+    const wp = this.weaponProfile;
     const cx = this.pos.x, cz = this.pos.z;
     const fx = this.facing.x, fz = this.facing.z;
-    const range = this.stats.attackRange;
-    const halfArc = this.stats.attackArc / 2;
+    const range = wp.range;
+    const halfArc = wp.arc / 2;
     let hits = 0;
     for (const e of enemies) {
       if (!e.alive) continue;
@@ -355,9 +407,13 @@ export class Player {
         hits++;
       }
     }
+    // Heavier weapons get more shake + a longer hit-stop — this is what makes
+    // a greatsword swing read as physically heavier than a dagger jab even
+    // when the underlying VFX/sound is identical.
     if (hits > 0) {
-      this.effects.shakeCamera(0.15);
-      this.effects.doHitStop(0.04);
+      const heft = Math.min(1, wp.damageMult / 2);
+      this.effects.shakeCamera(0.12 + 0.12 * heft);
+      this.effects.doHitStop(0.03 + 0.05 * heft);
     }
   }
 
@@ -401,6 +457,12 @@ export class Player {
       this.hp += (this.maxHP - before);
     }
     if (kind === 'speed') this.stats.speed = 6.0 + (lvl + 1) * 0.6;
-    if (kind === 'attackSpeed') this.stats.attackCooldown = Math.max(0.12, 0.45 - (lvl + 1) * 0.06);
+    if (kind === 'attackSpeed') {
+      // Cooldown lives on the weapon profile; we apply attack-speed upgrades
+      // as a multiplier so they stack with whatever weapon is held. Floor at
+      // 0.27 so even a maxed-out fast weapon doesn't outrun the swing
+      // animation it triggers.
+      this.stats.attackSpeedMult = Math.max(0.27, 1.0 - (lvl + 1) * 0.13);
+    }
   }
 }

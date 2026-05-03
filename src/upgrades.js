@@ -7,7 +7,7 @@ export const UPGRADES = [
   { id: 'damage', name: 'Sharper Blade', desc: '+6 damage', baseCost: 20, growth: 1.6 },
   { id: 'hp', name: 'Stout Heart', desc: '+30 max HP', baseCost: 25, growth: 1.55 },
   { id: 'speed', name: 'Light Boots', desc: '+0.6 move speed', baseCost: 22, growth: 1.6 },
-  { id: 'attackSpeed', name: 'Quick Hands', desc: '-0.06s attack cooldown', baseCost: 28, growth: 1.7 },
+  { id: 'attackSpeed', name: 'Quick Hands', desc: '-13% attack cooldown', baseCost: 28, growth: 1.7 },
 ];
 
 export function priceFor(player, upg) {
