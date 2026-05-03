@@ -286,16 +286,27 @@ export class Player {
       this.swingActive = true;
       this.swingProcessed = false;
       this.sound.swing();
-      const action = this._character?.actions?.[this._attackActionKey];
-      if (action) {
+      const actions = this._character?.actions;
+      const action = actions?.[this._attackActionKey];
+      if (action && actions) {
+        // Fade out everything else so the swing reads at full weight — if
+        // we just call play() while idle/run is still at weight 1, the two
+        // tracks blend and the swing looks like a half-hearted poke.
+        for (const [slot, a] of Object.entries(actions)) {
+          if (slot === this._attackActionKey || !a) continue;
+          if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.08);
+        }
         action.reset();
         // Scale source clip to land on `wp.swing` seconds end-to-end. The
         // KayKit melee clips are authored at ~1s; matching the gameplay
         // swing length is what keeps animation impact frame and the damage
-        // window in sync.
+        // window in sync. We deliberately don't compress under ~0.85× of
+        // the natural duration — past that the windup blurs out and the
+        // swing reads as a stab instead of a chop.
         const srcDur = Math.max(action.getClip().duration, 0.05);
         action.timeScale = srcDur / Math.max(wp.swing, 0.1);
         action.fadeIn(0.05).play();
+        this._animState = this._attackActionKey;
       }
     }
 
@@ -412,8 +423,8 @@ export class Player {
     // when the underlying VFX/sound is identical.
     if (hits > 0) {
       const heft = Math.min(1, wp.damageMult / 2);
-      this.effects.shakeCamera(0.12 + 0.12 * heft);
-      this.effects.doHitStop(0.03 + 0.05 * heft);
+      this.effects.shakeCamera(0.20 + 0.30 * heft);
+      this.effects.doHitStop(0.05 + 0.10 * heft);
     }
   }
 

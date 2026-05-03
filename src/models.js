@@ -436,7 +436,13 @@ function applyHueShift(material, shift) {
 // so the gameplay damage window (in `Player.update`) lands at the exact frame
 // the animation looks like it's hitting — this is what makes the swing feel
 // like it has weight, instead of registering as soon as the button is pressed.
-
+//
+// Tuning rule of thumb: KayKit attacks are baked at ~1.0–1.7s with a real
+// windup. We don't want to compress them under ~0.85× of their natural length
+// or the windup vanishes and the swing reads as a quick poke. `cooldown` can
+// (and should) be shorter than `swing` — the next press fades into the next
+// clip, so cooldown drives "how often you can swing" while swing drives
+// "how long the visible motion lasts".
 export const WEAPONS = {
   // Default: knight's built-in 1H sword + round shield. The swing is a
   // proper overhead chop with windup + follow-through, and the damage
@@ -446,12 +452,12 @@ export const WEAPONS = {
     label: 'Sword',
     showNodes: ['1H_Sword', 'Round_Shield'],
     attach: null,
-    attackAnim: 'attack_1h_chop',
-    swing: 0.55,
-    impactAt: 0.50,
-    range: 2.0,
+    attackAnim: 'attack_1h_chop',   // 1.07s baked
+    swing: 0.90,
+    impactAt: 0.55,
+    range: 2.1,
     arc: Math.PI * 0.7,    // ~125°
-    cooldown: 0.45,
+    cooldown: 0.55,
     damageMult: 1.0,
   },
   // Heavy two-hander — wider arc, more reach, more wind-up.
@@ -459,60 +465,60 @@ export const WEAPONS = {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_slice',
-    swing: 0.70,
+    attackAnim: 'attack_2h_slice',  // 1.10s baked
+    swing: 1.00,
     impactAt: 0.55,
-    range: 2.5,
+    range: 2.6,
     arc: Math.PI * 0.9,    // ~160°
-    cooldown: 0.60,
+    cooldown: 0.75,
     damageMult: 1.6,
   },
   axe_1h: {
     label: 'Axe',
     showNodes: ['Round_Shield'],   // axe in main hand, shield offhand
     attach: 'axe_1h',
-    attackAnim: 'attack_1h_chop',
-    swing: 0.55,
-    impactAt: 0.55,
-    range: 2.0,
+    attackAnim: 'attack_1h_chop',   // 1.07s baked
+    swing: 0.95,
+    impactAt: 0.58,
+    range: 2.1,
     arc: Math.PI * 0.6,
-    cooldown: 0.50,
+    cooldown: 0.65,
     damageMult: 1.2,
   },
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_chop',
-    swing: 0.75,
-    impactAt: 0.55,
-    range: 2.4,
+    attackAnim: 'attack_2h_chop',   // 1.63s baked — slow heavy chop
+    swing: 1.20,
+    impactAt: 0.58,
+    range: 2.5,
     arc: Math.PI * 0.85,
-    cooldown: 0.65,
+    cooldown: 0.85,
     damageMult: 1.8,
   },
   staff: {
     label: 'Staff',
     showNodes: [],
     attach: 'staff',
-    attackAnim: 'attack_2h_stab',
-    swing: 0.55,
-    impactAt: 0.5,
-    range: 2.3,
-    arc: Math.PI * 0.45,
-    cooldown: 0.50,
+    attackAnim: 'attack_2h_slice',  // 1.10s baked — wide horizontal sweep
+    swing: 0.95,
+    impactAt: 0.55,
+    range: 2.4,
+    arc: Math.PI * 0.55,
+    cooldown: 0.60,
     damageMult: 1.1,
   },
   wand: {
     label: 'Wand',
     showNodes: [],
     attach: 'wand',
-    attackAnim: 'attack_spell',
-    swing: 0.50,
-    impactAt: 0.45,
-    range: 2.1,
+    attackAnim: 'attack_spell',     // 0.93s baked — short cast + jab
+    swing: 0.75,
+    impactAt: 0.50,
+    range: 2.2,
     arc: Math.PI * 0.5,
-    cooldown: 0.40,
+    cooldown: 0.45,
     damageMult: 0.9,
   },
 };
