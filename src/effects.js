@@ -232,8 +232,10 @@ export class Effects {
   //     color     : hex tint (default 0xeaffff) — multiplied with the texture
   //     height    : vertical offset above the input y (default 1.0m)
   //     thickness : strip thickness as a fraction of range (default 0.55)
-  //     direction : +1 = leading edge sweeps left→right along the arc,
-  //                 -1 = right→left (default +1)
+  //     direction : -1 (default) sweeps the leading edge in the same
+  //                 direction the KayKit horizontal-slice clips swing the
+  //                 blade — flip to +1 for backhand-style clips that come
+  //                 the other way.
   //     trailLen  : tail decay length in UV units (default 0.40)
   slashArc(x, y, z, yaw, opts = {}) {
     if (this.particleScale <= 0) return;
@@ -244,7 +246,7 @@ export class Effects {
       color = 0xeaffff,
       height = 1.0,
       thickness = 0.55,
-      direction = 1,
+      direction = -1,
       trailLen = 0.40,
     } = opts;
     const outer = range * 1.05;
