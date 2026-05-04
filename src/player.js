@@ -7,7 +7,7 @@ import {
   preloadWeapons,
   WEAPONS,
 } from './models.js';
-import { runItemHook } from './items.js';
+import { runItemHook, ITEM_BY_ID, MAX_STACKS, healMultiplier } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
 
 // Default starter loadout per player slot. The framework supports any weapon
@@ -197,6 +197,10 @@ export class Player {
 
   heal(amount) {
     if (!this.alive) return;
+    // Lifebloom (legendary heal-synergy item) scales every heal source so
+    // food, the Серебряное ожерелье regen item, leech and the regen aura
+    // all benefit at higher stack tiers.
+    amount = amount * healMultiplier(this);
     const before = this.hp;
     this.hp = Math.min(this.maxHP, this.hp + amount);
     if (this.hp - before > 0.5) this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), this.hp - before, '#7aff8a');
@@ -258,7 +262,13 @@ export class Player {
     }
     if (this._healAura) {
       this._healAura.ttl -= dt;
-      this.heal(this._healAura.rate * dt);
+      // _healAura supports either a flat HP/s rate (legacy) or a percent
+      // of max HP per second (`pct`). RegenAura uses the percent form so
+      // it scales sensibly across runs (30% of maxHP over the buff).
+      const rate = this._healAura.pct
+        ? this.maxHP * this._healAura.pct
+        : (this._healAura.rate || 0);
+      this.heal(rate * dt);
       if (this._healAura.ttl <= 0) this._healAura = null;
       else if (this._buffVfxT % 0.7 < dt) {
         this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x7aff8a, 1.0, 0.2);
@@ -527,9 +537,35 @@ export class Player {
     }
   }
 
-  // Stack a passive item on this player.
+  // True if this player can still take another stack of `id`. Item runes
+  // consult this before magneting/picking up so a maxed-out player doesn't
+  // silently swallow the rune.
+  canAcceptItem(id) {
+    const def = ITEM_BY_ID[id];
+    const cap = def?.maxStacks ?? MAX_STACKS;
+    return (this.items[id] || 0) < cap;
+  }
+
+  // Stack a passive item on this player. Returns true if it was added,
+  // false if the player is already at the per-item cap.
   addItem(id) {
-    this.items[id] = (this.items[id] || 0) + 1;
+    const def = ITEM_BY_ID[id];
+    const cap = def?.maxStacks ?? MAX_STACKS;
+    const cur = this.items[id] || 0;
+    if (cur >= cap) return false;
+    this.items[id] = cur + 1;
+    return true;
+  }
+
+  // Drop one stack of `id` (used by the altar's sacrifice/fuse/reroll).
+  // Returns true on success.
+  removeItem(id, count = 1) {
+    const cur = this.items[id] || 0;
+    if (cur < count) return false;
+    const next = cur - count;
+    if (next <= 0) delete this.items[id];
+    else this.items[id] = next;
+    return true;
   }
 
   // Replace the active ability slot. Returns the previous ability id (or null).

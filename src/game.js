@@ -12,11 +12,20 @@ import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString } from './utils.js';
 import { getSettings } from './settings.js';
 import { PauseMenu } from './pause.js';
-import { runItemHook, ITEM_BY_ID, pickRandomItemId } from './items.js';
+import {
+  runItemHook,
+  ITEM_BY_ID,
+  pickRandomItemId,
+  pickRandomItemIdInRarityExcept,
+  rarityAbove,
+  RARITY,
+} from './items.js';
 import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
+import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
+import { AltarUI } from './altarUI.js';
 import { iconHTML } from './icons.js';
 
 const LEASH_WARN = 14;
@@ -125,10 +134,15 @@ export class Game {
     this.runes = [];   // item / ability rune drops in the world
     this.chests = []; // procedurally placed treasure chests
     this.breakables = []; // pots / crates scattered through chunks
+    this.altars = []; // rare item-management altars
+
+    this.altarUI = new AltarUI();
+    this.altarOpen = false;
 
     this._spawnInitialEnemies();
     this._drainChestSpawns();
     this._drainBreakableSpawns();
+    this._drainAltarSpawns();
     this._spawnStarterChest();
 
     this.totalKills = 0;
@@ -179,6 +193,9 @@ export class Game {
       if (e.code === 'KeyP') this.paused = !this.paused;
       if (e.code === 'Escape') {
         e.preventDefault();
+        // Esc closes the altar UI before falling through to the pause menu
+        // so it works as the universal "back" key.
+        if (this.altarOpen) { this.altarUI.close(); return; }
         this._togglePauseMenu();
       }
       if (e.code === 'KeyG') this._tryCastAbility(0);
@@ -202,7 +219,7 @@ export class Game {
   }
 
   _tryCastAbility(slot) {
-    if (this._waitingForStart || this.paused || this.menuPaused || this.shopOpen || this.dead) return;
+    if (this._waitingForStart || this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this.dead) return;
     const player = this.players[slot];
     if (!player) return;
     const partner = this.players[1 - slot];
@@ -384,7 +401,10 @@ export class Game {
     for (const r of this.runes) { r._destroy?.(); }
     for (const c of this.chests) { c._destroy?.(); }
     for (const b of this.breakables) { b.destroyMesh?.(); }
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = [];
+    for (const a of this.altars) { a.destroyMesh?.(); }
+    if (this.altarUI?.isOpen) this.altarUI.close();
+    this.altarOpen = false;
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = [];
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
@@ -448,6 +468,120 @@ export class Game {
       const b = new Breakable(this.scene, s.x, s.z, s.kind);
       this.breakables.push(b);
     }
+  }
+
+  _drainAltarSpawns() {
+    if (!this.world.altarSpawns) return;
+    while (this.world.altarSpawns.length > 0) {
+      const s = this.world.altarSpawns.shift();
+      const a = new Altar(this.scene, s.x, s.z);
+      this.altars.push(a);
+    }
+  }
+
+  // ---- Altar interaction ------------------------------------------
+  _tryOpenAltar(player) {
+    if (!player || !player.alive) return false;
+    if (this.altarOpen) return false;
+    let target = null, bestD = ALTAR_USE_RADIUS;
+    for (const a of this.altars) {
+      if (!a.alive || !a.isActive) continue;
+      const d = Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z);
+      if (d <= bestD) { bestD = d; target = a; }
+    }
+    if (!target) return false;
+    this.altarOpen = true;
+    this.altarUI.open(player, target, {
+      onReroll: (id) => this._altarReroll(player, target, id),
+      onSacrifice: (id) => this._altarSacrifice(player, target, id),
+      onFuse: (id) => this._altarFuse(player, target, id),
+      onClose: () => { this.altarOpen = false; },
+    });
+    this.sound.bell?.();
+    return true;
+  }
+
+  _altarReroll(player, altar, itemId) {
+    if (!altar.isActive) return false;
+    if (player.gold < REROLL_COST) {
+      this.effects.toast?.('Не хватает золота для перековки.', '#ff7a7a');
+      return false;
+    }
+    const def = ITEM_BY_ID[itemId];
+    if (!def) return false;
+    const cur = player.items?.[itemId] || 0;
+    if (cur < 1) return false;
+    const newId = pickRandomItemIdInRarityExcept(def.rarity, itemId);
+    if (!newId) return false;
+    const newDef = ITEM_BY_ID[newId];
+    // The replacement also respects the per-item cap so we can't dodge it
+    // by rerolling into something the player already has maxed.
+    if (!player.canAcceptItem(newId)) {
+      this.effects.toast?.(`У тебя уже максимум стаков «${newDef?.name}». Попробуй другой.`, '#ffd166');
+      return false;
+    }
+    player.gold -= REROLL_COST;
+    player.removeItem(itemId, 1);
+    player.addItem(newId);
+    altar.spendCharge();
+    this.effects.toast?.(`Перековал «${def.name}» в «${newDef.name}».`, '#ffd166');
+    this.effects.ring(altar.pos.x, 0.05, altar.pos.z, RARITY[newDef.rarity].color, 1.6, 0.4);
+    this.effects.burst(altar.pos.x, 1.0, altar.pos.z, RARITY[newDef.rarity].color, 12, 4, 0.4);
+    this.sound.pickupGold?.();
+    if (altar.charges <= 0) this._closeAltarSoon();
+    return true;
+  }
+
+  _altarSacrifice(player, altar, itemId) {
+    if (!altar.isActive) return false;
+    const def = ITEM_BY_ID[itemId];
+    if (!def) return false;
+    const cur = player.items?.[itemId] || 0;
+    if (cur < 1) return false;
+    const reward = RARITY[def.rarity]?.sacrificeGold || 0;
+    player.removeItem(itemId, 1);
+    player.gold += reward;
+    altar.spendCharge();
+    this.effects.toast?.(`Сжёг «${def.name}» — +${reward} золота.`, '#ffd166');
+    this.effects.burst(altar.pos.x, 1.0, altar.pos.z, 0xffb84d, 12, 4, 0.4);
+    this.sound.pickupGold?.();
+    if (altar.charges <= 0) this._closeAltarSoon();
+    return true;
+  }
+
+  _altarFuse(player, altar, itemId) {
+    if (!altar.isActive) return false;
+    const def = ITEM_BY_ID[itemId];
+    if (!def) return false;
+    const cur = player.items?.[itemId] || 0;
+    if (cur < 3) return false;
+    const next = rarityAbove(def.rarity);
+    if (!next) {
+      this.effects.toast?.('Легендарные нельзя слить — нет редкости выше.', '#ff7a7a');
+      return false;
+    }
+    const newId = pickRandomItemIdInRarityExcept(next, null);
+    if (!newId) return false;
+    const newDef = ITEM_BY_ID[newId];
+    if (!player.canAcceptItem(newId)) {
+      this.effects.toast?.(`У тебя уже максимум стаков «${newDef?.name}». Попробуй сначала освободить место.`, '#ffd166');
+      return false;
+    }
+    player.removeItem(itemId, 3);
+    player.addItem(newId);
+    altar.spendCharge();
+    this.effects.toast?.(`Сплавил 3× «${def.name}» в «${newDef.name}»!`, '#' + RARITY[newDef.rarity].color.toString(16).padStart(6, '0'));
+    this.effects.ring(altar.pos.x, 0.05, altar.pos.z, RARITY[newDef.rarity].color, 1.8, 0.5);
+    this.effects.burst(altar.pos.x, 1.2, altar.pos.z, RARITY[newDef.rarity].color, 16, 5, 0.5);
+    this.sound.bell?.();
+    if (altar.charges <= 0) this._closeAltarSoon();
+    return true;
+  }
+
+  _closeAltarSoon() {
+    setTimeout(() => {
+      if (this.altarOpen) this.altarUI.close();
+    }, 400);
   }
 
   // Called when a breakable's `alive` flips to false (any damage source).
@@ -600,7 +734,7 @@ export class Game {
     const dt0 = Math.min(0.05, (t - this._lastT) / 1000) || 0;
     this._lastT = t;
     let dt = dt0;
-    if (this.paused || this.menuPaused || this.shopOpen || this._waitingForStart || this.dead) dt = 0;
+    if (this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this._waitingForStart || this.dead) dt = 0;
     else if (this.effects.hitStop > 0) dt *= 0.15;
     this.update(dt, dt0);
     this.render();
@@ -694,6 +828,19 @@ export class Game {
     // Update players
     this.players[0].update(dt, i1, this.players[1], damageables, swingHit);
     this.players[1].update(dt, i2, this.players[0], damageables, swingHit);
+
+    // Altar interaction — if a player just pressed interact next to an
+    // altar, open the altar UI and consume the press so a nearby chest
+    // doesn't also open. World generation keeps altars >=4m from chests
+    // so the proximity radii (1.6m / 1.2m) shouldn't normally overlap.
+    if (!this.altarOpen) {
+      for (const p of this.players) {
+        if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
+        if (this._tryOpenAltar(p)) p._lastIntent.interact = false;
+      }
+    }
+    // Altar idle update (proximity prompt, crystal bob, halo).
+    for (const a of this.altars) a.update(dt, this.players, this.sound, this.effects);
 
     // Update enemies
     const ctx = {

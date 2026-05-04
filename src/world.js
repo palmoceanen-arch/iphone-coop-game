@@ -127,6 +127,7 @@ export class World {
     this.enemySpawns = [];            // queue read by Game on first frame after a chunk loads
     this.chestSpawns = [];            // same idea but for procedural chests
     this.breakableSpawns = [];        // ditto for clay pots / wooden crates
+    this.altarSpawns = [];            // ditto for altars (rare item-management nodes)
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     // Pre-allocated colour temporaries for the per-frame sky tint blend.
@@ -255,6 +256,9 @@ export class World {
         if (chunk.breakableSpawns) {
           for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
         }
+        if (chunk.altarSpawns) {
+          for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
+        }
       }
     }
   }
@@ -333,6 +337,7 @@ export class World {
     const enemySpawns = [];
     const chestSpawns = [];
     const breakableSpawns = [];
+    const altarSpawns = [];
 
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
@@ -550,7 +555,28 @@ export class World {
       }
     }
 
-    return { group, colliders, enemySpawns, chestSpawns, breakableSpawns, cx, cz };
+    // 9. Altar of the Ancients — rare item-management node. ~3% chance per
+    // non-origin chunk, far enough from any other point of interest so it
+    // reads as a discrete location worth detouring for. Spent altars dim
+    // visually so players can spot fresh ones from a distance.
+    if (!isOrigin && r.chance(0.03)) {
+      for (let i = 0; i < 16; i++) {
+        const x = minX + r.range(5, CHUNK_SIZE - 5);
+        const z = minZ + r.range(5, CHUNK_SIZE - 5);
+        if (isOnWater(x, z)) continue;
+        if (!this._spotClear(x, z, 1.6, colliders)) continue;
+        // Don't place an altar right on top of a chest cluster.
+        let nearChest = false;
+        for (const c of chestSpawns) {
+          if (Math.hypot(c.x - x, c.z - z) < 4) { nearChest = true; break; }
+        }
+        if (nearChest) continue;
+        altarSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+        break;
+      }
+    }
+
+    return { group, colliders, enemySpawns, chestSpawns, breakableSpawns, altarSpawns, cx, cz };
   }
 
   // True if the world position (x, z) is currently under water. Sampled

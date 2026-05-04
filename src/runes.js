@@ -74,15 +74,36 @@ export class Rune {
     if (this._ring) this._ring.rotation.z += dt * 0.6;
     if (this.life <= 0) { this._destroy(); return; }
 
-    let near = null, nd = Infinity;
-    for (const p of players) {
-      if (!p.alive) continue;
-      const d = vdist(this.pos, p.pos);
-      if (d < nd) { nd = d; near = p; }
-    }
-    if (!near) return;
-
     if (this.kind === 'item') {
+      // Pick the nearest player who can still take another stack of this
+      // item. If both are maxed, the rune just sits in the world (and we
+      // show a one-off toast so the players know to drop a stack at an
+      // altar to free a slot).
+      let near = null, nd = Infinity;
+      for (const p of players) {
+        if (!p.alive) continue;
+        if (p.canAcceptItem && !p.canAcceptItem(this.payloadId)) continue;
+        const d = vdist(this.pos, p.pos);
+        if (d < nd) { nd = d; near = p; }
+      }
+      if (!near) {
+        if (!this._maxStackPromptShown) {
+          // Only fire when at least one player is actually close enough to
+          // notice — avoids spamming toasts for runes far off-screen.
+          let anyNear = false;
+          for (const p of players) {
+            if (!p.alive) continue;
+            if (vdist(this.pos, p.pos) < 4.0) { anyNear = true; break; }
+          }
+          if (anyNear) {
+            const def = ITEM_BY_ID[this.payloadId];
+            const name = def?.name || 'предмет';
+            effects.toast?.(`У вас максимум стаков «${name}». Сожги или переплавь на алтаре.`, '#ffd166');
+            this._maxStackPromptShown = true;
+          }
+        }
+        return;
+      }
       // Magnet then auto-pickup.
       if (nd < ITEM_MAGNET_RADIUS) {
         const dx = near.pos.x - this.pos.x, dz = near.pos.z - this.pos.z;
@@ -93,7 +114,8 @@ export class Rune {
         this.mesh.position.z = this.pos.z;
       }
       if (nd < ITEM_PICKUP_RADIUS) {
-        near.addItem?.(this.payloadId);
+        const ok = near.addItem?.(this.payloadId);
+        if (ok === false) return; // no-op (capacity raced — just leave the rune)
         const def = ITEM_BY_ID[this.payloadId];
         if (def) effects.toast?.(`+ ${def.name}: ${def.desc || ''}`, '#' + this.color.toString(16).padStart(6, '0'));
         sound.pickupGold?.();
@@ -103,6 +125,15 @@ export class Rune {
       }
       return;
     }
+
+    // For ability runes, fall through to the original nearest-player logic.
+    let near = null, nd = Infinity;
+    for (const p of players) {
+      if (!p.alive) continue;
+      const d = vdist(this.pos, p.pos);
+      if (d < nd) { nd = d; near = p; }
+    }
+    if (!near) return;
 
     if (this.kind === 'ability') {
       const promptEl = (near.index === 0 ? this._prompt1 : this._prompt2);

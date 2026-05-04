@@ -18,6 +18,12 @@
 // state beyond their effects (damage, buffs, projectiles).
 
 import * as THREE from 'three';
+import {
+  elementDamageMult,
+  freezeDurationBonus,
+  chainBonusJumps,
+  healMultiplier,
+} from './items.js';
 
 function vdist2(a, b) {
   const dx = a.pos.x - b.pos.x, dz = a.pos.z - b.pos.z;
@@ -168,23 +174,28 @@ export class AbilityProjectile {
 export const ABILITIES = [
   {
     id: 'fireball', name: 'Фаербол', icon: 'flame', color: 0xff8a30, cd: 6,
+    element: 'fire',
     desc: 'Огненный снаряд, летящий вперёд. Взрывается при попадании, 45 AoE-урона в 2.5м.',
     cast(player, ctx) {
+      const fireMult = elementDamageMult(player, 'fire');
       ctx.spawnAbilityProjectile({
         x: player.pos.x + player.facing.x * 0.8,
         z: player.pos.z + player.facing.z * 0.8,
         dirX: player.facing.x, dirZ: player.facing.z,
         speed: 16, life: 0.65, radius: 0.35,
         color: 0xff8a30, trailColor: 0xff5500,
-        damage: 0, aoeRadius: 2.5, aoeDamage: 45, aoeKnockback: 6,
+        damage: 0, aoeRadius: 2.5, aoeDamage: 45 * fireMult, aoeKnockback: 6,
         source: player,
       });
     },
   },
   {
     id: 'icebolt', name: 'Ледяная стрела', icon: 'snowflake', color: 0x9dfcff, cd: 5,
+    element: 'ice',
     desc: 'Ледяной снаряд в ближайшего врага. 30 урона и заморозка на 2с в радиусе 2.5м.',
     cast(player, ctx) {
+      const iceMult = elementDamageMult(player, 'ice');
+      const freezeT = 2.0 + freezeDurationBonus(player);
       let dx = player.facing.x, dz = player.facing.z;
       const list = ctx.enemyList.filter(e => e.alive && vdist2(player, e) < 144);
       if (list.length > 0) {
@@ -201,16 +212,16 @@ export const ABILITIES = [
         dirX: dx, dirZ: dz,
         speed: 20, life: 0.55, radius: 0.25,
         color: 0x9dfcff, trailColor: 0x60d0ff,
-        damage: 30, knockback: 4,
+        damage: 30 * iceMult, knockback: 4,
         aoeRadius: 2.5, aoeDamage: 0, aoeKnockback: 0,
         source: player,
-        onHitEnemy(e) { e._frozen = Math.max(e._frozen || 0, 2.0); },
+        onHitEnemy(e) { e._frozen = Math.max(e._frozen || 0, freezeT); },
         _customAoe(pos) {
           for (const e of enemies) {
             if (!e.alive) continue;
             const ex = e.pos.x - pos.x, ez = e.pos.z - pos.z;
             if (Math.hypot(ex, ez) <= 2.5 + e.radius) {
-              e._frozen = Math.max(e._frozen || 0, 2.0);
+              e._frozen = Math.max(e._frozen || 0, freezeT);
             }
           }
         },
@@ -220,12 +231,15 @@ export const ABILITIES = [
   },
   {
     id: 'chainLightning', name: 'Цепная молния', icon: 'bolt', color: 0xfff7a0, cd: 7,
+    element: 'lightning',
     desc: 'Прыгает по 4 целям, 30 урона за прыжок (-15% за каждый).',
     cast(player, ctx) {
+      const lightMult = elementDamageMult(player, 'lightning');
+      const jumps = 4 + chainBonusJumps(player);
       let from = { x: player.pos.x, z: player.pos.z };
-      let dmg = 30;
+      let dmg = 30 * lightMult;
       const used = new Set();
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < jumps; i++) {
         let best = null, bestD = 7;
         for (const e of ctx.enemyList) {
           if (!e.alive || used.has(e)) continue;
@@ -255,9 +269,11 @@ export const ABILITIES = [
   },
   {
     id: 'shield', name: 'Орб-щит', icon: 'shield', color: 0x6aa6ff, cd: 12,
+    element: 'heal',
     desc: 'Поглощает следующие 80 урона в течение 5с.',
     cast(player, ctx) {
-      player._shield = { hp: 80, ttl: 5 };
+      const shieldHp = 80 * healMultiplier(player);
+      player._shield = { hp: shieldHp, ttl: 5 };
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0x6aa6ff, 1.4, 0.4);
       ctx.effects.flashSphere(player.pos.x, 1.0, player.pos.z, 0x6aa6ff, 1.2, 0.25);
       ctx.sound.tone?.({ freq: 520, type: 'sine', dur: 0.4, gain: 0.3 });
@@ -265,11 +281,15 @@ export const ABILITIES = [
   },
   {
     id: 'regenAura', name: 'Аура регенерации', icon: 'heart', color: 0x7aff8a, cd: 16,
-    desc: 'Лечит обоих игроков по 15 HP/с в течение 5с.',
+    element: 'heal',
+    desc: 'Лечит обоих игроков на 30% от макс. HP в течение 5с.',
     cast(player, ctx) {
+      // 6% maxHP per second × 5s = 30% maxHP total. Stored as a percent
+      // so it scales with each player's own max HP and re-evaluates if
+      // maxHP changes during the buff (e.g. on level-up).
       const apply = (p) => {
         if (!p || !p.alive) return;
-        p._healAura = { rate: 15, ttl: 5 };
+        p._healAura = { pct: 0.06, ttl: 5 };
       };
       apply(player);
       apply(ctx.partner);
@@ -280,10 +300,12 @@ export const ABILITIES = [
   },
   {
     id: 'slowtime', name: 'Замедление времени', icon: 'clock', color: 0xc9a3ff, cd: 14,
+    element: 'ice',
     desc: 'Замедляет всех врагов в 6м до ×0.35 на 3с.',
     cast(player, ctx) {
+      const slowDur = 3.0 + freezeDurationBonus(player);
       const list = enemiesInRadius(player, ctx.enemyList, 6);
-      for (const { e } of list) e._slow = Math.max(e._slow || 0, 3.0);
+      for (const { e } of list) e._slow = Math.max(e._slow || 0, slowDur);
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xc9a3ff, 6, 0.5);
       ctx.effects.flashSphere(player.pos.x, 0.5, player.pos.z, 0xc9a3ff, 3, 0.25);
       ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xc9a3ff, 6, 3, 0.25);
@@ -292,11 +314,13 @@ export const ABILITIES = [
   },
   {
     id: 'windpush', name: 'Ветер удар', icon: 'wind', color: 0xa0e8ff, cd: 8,
+    element: 'lightning',
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
+      const lightMult = elementDamageMult(player, 'lightning');
       const list = enemiesInRadius(player, ctx.enemyList, 4);
       for (const { e } of list) {
-        e.takeDamage(20, player.pos.x, player.pos.z, 14);
+        e.takeDamage(20 * lightMult, player.pos.x, player.pos.z, 14);
         if (!e.alive) e._deathCredit = player;
       }
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xa0e8ff, 4, 0.35);
@@ -307,9 +331,15 @@ export const ABILITIES = [
   },
   {
     id: 'berserk', name: 'Берсерк', icon: 'skull', color: 0xff5050, cd: 14,
+    element: 'fire',
     desc: 'Урон ×1.4 и атака ×1.3 быстрее на 5с.',
     cast(player, ctx) {
-      player._berserk = { ttl: 5, dmg: 1.4, atk: 1.3 };
+      // Pyromancer scales the bonus damage portion of berserk (the "+0.4"
+      // over 1.0): at higher tiers the buff hits harder. The base attack
+      // speed bonus is unchanged so the tempo stays the same.
+      const fireMult = elementDamageMult(player, 'fire');
+      const dmgBonus = 0.4 * fireMult;
+      player._berserk = { ttl: 5, dmg: 1.0 + dmgBonus, atk: 1.3 };
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xff5050, 1.6, 0.4);
       ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xff5050, 10, 4, 0.3);
       ctx.sound.tone?.({ freq: 140, type: 'sawtooth', dur: 0.4, gain: 0.4 });
