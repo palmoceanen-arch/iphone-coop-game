@@ -1,0 +1,92 @@
+import { ABILITY_BY_ID } from './abilities.js';
+import { Game } from './game.js';
+import { ITEMS } from './items.js';
+import { Lobby } from './lobby.js';
+import { preloadModels } from './models.js';
+
+window.addEventListener('DOMContentLoaded', async () => {
+  window.addEventListener('error', (e) => {
+    console.error('[fatal]', e.error || e.message);
+  });
+
+  // The host page renders a 3D world and is intended for the desktop/laptop
+  // running the game. On iPhone/Android, redirect to the controller page so
+  // players don't accidentally hit the WebGL canvas (which struggles on
+  // mobile Safari memory).
+  const ua = (navigator.userAgent || '').toLowerCase();
+  const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
+  const params = new URLSearchParams(window.location.search);
+  if (isMobile && !params.has('host')) {
+    const url = new URL('controller', window.location.href);
+    // forward seed code if present so /controller?code=... still works
+    for (const [k, v] of params.entries()) url.searchParams.set(k, v);
+    window.location.replace(url.toString());
+    return;
+  }
+
+  const loadingEl = document.getElementById('loading');
+  const fillEl = document.getElementById('loading-fill');
+  const statEl = document.getElementById('loading-stat');
+
+  let game;
+  let lobby;
+  try {
+    await preloadModels((done, total, key) => {
+      if (fillEl) fillEl.style.width = `${Math.round(100 * done / total)}%`;
+      if (statEl) statEl.textContent = `${done} / ${total} · ${key}`;
+    });
+    if (loadingEl) {
+      loadingEl.classList.add('hidden');
+      setTimeout(() => loadingEl.remove(), 250);
+    }
+
+    game = new Game();
+    window.__game = game;
+    if (params.get('testInventory') === '1') {
+      for (const player of game.players) {
+        for (let i = 0; i < ITEMS.length; i++) {
+          const item = ITEMS[i];
+          player.items[item.id] = (i % 3) + 1;
+        }
+      }
+      game.players[0].setAbility(Object.keys(ABILITY_BY_ID)[0]);
+      game.players[1].setAbility(Object.keys(ABILITY_BY_ID)[1] || Object.keys(ABILITY_BY_ID)[0]);
+    }
+
+    lobby = new Lobby();
+    lobby.connect();
+    window.__lobby = lobby;
+    game.lobby = lobby;
+
+    // Mobile controllers feed remote state straight into the game's Input.
+    lobby.onInputState = (slot, state) => {
+      if (game && game.input) game.input.setRemoteState(slot, state);
+    };
+    // Edge events (attack/dash/shop/buy) routed through Game so it can also
+    // handle gamepad-driven shop & purchases.
+    lobby.onInputEvent = (slot, event) => {
+      if (game) game.handleRemoteEvent(slot, event);
+    };
+    lobby.onControllerJoined = (slot) => {
+      if (game) game._pushPlayerState(slot);
+    };
+
+    const startBtn = document.getElementById('lobby-start');
+    if (startBtn) startBtn.addEventListener('click', () => {
+      lobby.startGame();
+      game._startGame();
+    });
+    const kbBtn = document.getElementById('start-keyboard');
+    if (kbBtn) kbBtn.addEventListener('click', () => {
+      lobby.startGame();
+      game._startGame();
+    });
+  } catch (err) {
+    console.error(err);
+    if (loadingEl) loadingEl.remove();
+    const intro = document.getElementById('intro');
+    if (intro) {
+      intro.innerHTML = `<div class="panel"><h1>Failed to start</h1><pre style="white-space:pre-wrap;text-align:left;">${String(err && err.stack || err)}</pre></div>`;
+    }
+  }
+});
