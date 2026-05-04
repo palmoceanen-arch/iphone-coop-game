@@ -70,32 +70,36 @@ export class Enemy {
     switch (this.kind) {
       case 'slime':
         this.radius = 0.55; this.maxHP = 22 + L * 8; this.hp = this.maxHP; this.speed = 2.6;
-        this.touchDamage = 8 + L * 2; this.gold = [2, 5]; this.xp = 5 + L * 2;
+        this.touchDamage = 5 + L * 2; this.gold = [2, 5]; this.xp = 5 + L * 2;
         this.attackRange = 0.9; this.attackCooldown = 0.8;
         this.aggroRange = 7; this.disengageRange = 14; this.leashRange = 14;
         break;
       case 'archer':
         this.radius = 0.5; this.maxHP = 16 + L * 6; this.hp = this.maxHP; this.speed = 3.2;
         this.touchDamage = 0; this.gold = [3, 7]; this.xp = 8 + L * 2;
-        this.attackRange = 12; this.attackCooldown = 1.6; this.preferredDist = 8.5; this.projectileDmg = 8 + L * 2;
+        this.attackRange = 12; this.attackCooldown = 1.6; this.preferredDist = 8.5; this.projectileDmg = 5 + L * 2;
         this.aggroRange = 11; this.disengageRange = 18; this.leashRange = 16;
         break;
       case 'bomber':
         this.radius = 0.55; this.maxHP = 18 + L * 6; this.hp = this.maxHP; this.speed = 3.6;
         this.touchDamage = 0; this.gold = [3, 6]; this.xp = 8 + L * 2;
-        this.fuse = 1.0; this.boomRadius = 2.6; this.boomDamage = 24 + L * 4;
+        this.fuse = 1.0; this.boomRadius = 2.6; this.boomDamage = 16 + L * 4;
         this.aggroRange = 7; this.disengageRange = 13; this.leashRange = 14;
         break;
       case 'wisp':
-        this.radius = 0.45; this.maxHP = 14 + L * 5; this.hp = this.maxHP; this.speed = 4.2;
+        // Wisps were too punishing — fast dash + low telegraph + high damage
+        // even at level 1. Bumped windup so the dash is more readable, slowed
+        // the dash itself, dropped damage and HP, and made the cooldown
+        // longer so they don't spam-jump on the player.
+        this.radius = 0.45; this.maxHP = 10 + L * 4; this.hp = this.maxHP; this.speed = 4.0;
         this.touchDamage = 0; this.gold = [2, 6]; this.xp = 7 + L * 2;
-        this.dashWindup = 0.4; this.dashSpeed = 22; this.dashDmg = 10 + L * 3; this.dashCooldown = 2.4;
+        this.dashWindup = 0.7; this.dashSpeed = 16; this.dashDmg = 5 + L * 2; this.dashCooldown = 3.5;
         this.aggroRange = 8; this.disengageRange = 16; this.leashRange = 16;
         break;
       case 'ogre':
         this.radius = 0.95; this.maxHP = 60 + L * 18; this.hp = this.maxHP; this.speed = 1.7;
         this.touchDamage = 0; this.gold = [10, 18]; this.xp = 18 + L * 4;
-        this.attackRange = 2.4; this.attackCooldown = 1.8; this.swingDmg = 18 + L * 4;
+        this.attackRange = 2.4; this.attackCooldown = 1.8; this.swingDmg = 12 + L * 4;
         this.aggroRange = 6; this.disengageRange = 14; this.leashRange = 12;
         break;
     }
