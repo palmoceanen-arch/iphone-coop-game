@@ -101,18 +101,29 @@ const ANIM_MAP = {
 // locomotion (idle/run) is active underneath, instead of snapping to whatever
 // pose the attack clip authors for the legs.
 //
-// Hierarchy (from public/models/Knight.glb):
+// Hierarchy (from public/models/Knight.glb, raw glTF node names):
 //   root → Rig → hips → upperleg.{l,r} → lowerleg → foot → toes
 //                     → spine → chest → upperarm.{l,r} → lowerarm → wrist → hand → handslot
 //                                     → head
 // IK helpers (kneeIK, heelIK, handIK, elbowIK, control-*-roll) are direct
 // children of root and we route arm IK to upper, leg IK to lower.
+//
+// IMPORTANT: GLTFLoader runs every node name through
+// `PropertyBinding.sanitizeNodeName`, which *strips* reserved characters
+// `[].:/` (it does not replace them). So at runtime the bone formerly known
+// as `upperarm.l` is `upperarml`, and the matching track name is
+// `upperarml.quaternion`. We sanitize each canonical name once at module
+// load and match against the sanitized form when filtering tracks.
+const _SANITIZE_RESERVED_RE = /[[\].:/]/g;
+function _sanitizeBoneName(name) {
+  return name.replace(/\s/g, '_').replace(_SANITIZE_RESERVED_RE, '');
+}
 const UPPER_BODY_BONES = new Set([
   'spine', 'chest', 'head',
   'upperarm.l', 'lowerarm.l', 'wrist.l', 'hand.l', 'handslot.l',
   'upperarm.r', 'lowerarm.r', 'wrist.r', 'hand.r', 'handslot.r',
   'elbowIK.l', 'elbowIK.r', 'handIK.l', 'handIK.r',
-]);
+].map(_sanitizeBoneName));
 
 // Slots whose clips should be filtered to upper-body-only at bind time.
 // Spell-cast / throw / ranged are mostly arm gestures too, so the filter
@@ -121,16 +132,15 @@ const UPPER_BODY_BONES = new Set([
 const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
 
 // Build a copy of `clip` that only contains tracks whose bone is in
-// `UPPER_BODY_BONES`. Track names are formatted as
-// `<boneName>.<property>[component]` — for KayKit bones with dots in their
-// names (e.g. `upperarm.l`) the boneName is everything before the LAST
-// `.<property>` segment, where property is one of position/quaternion/scale.
+// `UPPER_BODY_BONES`. Track names look like `<sanitizedBoneName>.<property>`
+// or `<sanitizedBoneName>.<property>[index]` — sanitized names cannot
+// contain `.`, so the bone name is just the substring before the FIRST `.`.
 function buildUpperBodyClip(clip) {
-  const PROP_RE = /^(.+)\.(position|quaternion|scale|morphTargetInfluences)(\[\d+\])?$/;
   const tracks = clip.tracks.filter((t) => {
-    const m = PROP_RE.exec(t.name);
-    if (!m) return false;
-    return UPPER_BODY_BONES.has(m[1]);
+    const dot = t.name.indexOf('.');
+    if (dot < 0) return false;
+    const bone = t.name.slice(0, dot);
+    return UPPER_BODY_BONES.has(bone);
   });
   if (tracks.length === 0 || tracks.length === clip.tracks.length) {
     // Nothing to strip (clip already only animates upper body) or no tracks
