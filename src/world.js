@@ -555,17 +555,16 @@ export class World {
       }
     }
 
-    // 9. Altar of the Ancients — sampled from a low-frequency "altar
-    // suitability" noise field so spawning is fully deterministic from
-    // the world seed (same seed → same altar locations). The threshold
-    // gives roughly one altar every 4-5 non-origin chunks once you
-    // wander out of the start area, with natural clustering from the
-    // smoothed noise. Spent altars visually dim so players can tell
-    // active from depleted at a glance.
+    // 9. Altar of the Ancients — fully deterministic per-chunk roll. We
+    // hash (worldSeed, cx, cz) with a salt so altar locations are stable
+    // for a given seed (same seed → same altars) and independent from
+    // the value-noise field (which is too smooth at chunk scale to give
+    // a reliable spawn distribution near the origin). ~15% of non-origin
+    // chunks roll an altar candidate; the inner loop then makes sure the
+    // exact spot is clear of water/colliders/chests.
     if (!isOrigin) {
-      // Offset coordinates so altar field doesn't align with water/biome noise.
-      const altarN = this.noise(cx * 1.31 + 7.13, cz * 1.31 + 3.71);
-      if (altarN > 0.78) {
+      const altarRoll = chunkSeed(this.seed ^ 0xA17A8B, cx, cz) % 100;
+      if (altarRoll < 15) {
         for (let i = 0; i < 24; i++) {
           const x = minX + r.range(4, CHUNK_SIZE - 4);
           const z = minZ + r.range(4, CHUNK_SIZE - 4);
