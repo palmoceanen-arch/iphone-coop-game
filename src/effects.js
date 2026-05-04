@@ -65,10 +65,10 @@ export class Effects {
   }
 
   // Lazy-built slash texture used by `slashArc`. 256×64 grayscale alpha:
-  // a sharp horizontal blade core with a soft glow above and below, plus a
-  // symmetric bell envelope along U so the highlight tapers to a point at
-  // both ends of the arc. Color comes from the material `color` field at
-  // call time so a single texture can serve every weapon.
+  // a sharp horizontal blade core with a soft glow above and below, uniform
+  // along U. The arc-aligned envelope (leading edge, trailing fade) is
+  // produced at runtime by the slash shader, not baked into the texture, so
+  // a single texture can serve every weapon and every swing direction.
   _buildSlashTexture() {
     if (this._slashTex) return this._slashTex;
     const w = 256, h = 64;
@@ -84,23 +84,14 @@ export class Effects {
       const core = Math.exp(-dy * dy * 38);
       // Soft outer glow falling off either side of the core.
       const glow = Math.exp(-dy * dy * 4.5);
-      const baseAlpha = Math.max(core, glow * 0.45);
+      const a = Math.max(core, glow * 0.5);
+      const alphaByte = Math.round(Math.min(1, a) * 255);
       for (let x = 0; x < w; x++) {
-        const u = x / (w - 1);
-        const du = (u - 0.5) * 2;     // -1..1 along arc
-        // Symmetric bell along the arc — brightest in the middle, tapering
-        // to sharp points at both ends. Reads as a slash regardless of
-        // whether the blade swings left-to-right or right-to-left.
-        const envU = Math.exp(-du * du * 3.6);
-        // Extra inner-blade highlight that's even sharper to give the slash
-        // a hot "reflection" streak in the middle.
-        const innerStreak = core * Math.exp(-du * du * 1.6) * 0.6;
-        const a = Math.min(1, baseAlpha * envU + innerStreak);
         const idx = (y * w + x) * 4;
         data[idx]     = 255;
         data[idx + 1] = 255;
         data[idx + 2] = 255;
-        data[idx + 3] = Math.round(a * 255);
+        data[idx + 3] = alphaByte;
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -111,6 +102,60 @@ export class Effects {
     tex.needsUpdate = true;
     this._slashTex = tex;
     return tex;
+  }
+
+  // ShaderMaterial that draws a sword-trail-style slash: the leading edge
+  // sweeps along the arc as `uProgress` advances 0→1, leaving a bright hot
+  // peak at the leading edge and an exponentially-fading tail behind it.
+  // Pixels ahead of the leading edge are transparent (no "all-at-once"
+  // crescent). `uDir` flips the U axis so we can drive the same shader for
+  // either swing direction without rebuilding the geometry.
+  _buildSlashMaterial(tex, color, direction, trailLen) {
+    return new THREE.ShaderMaterial({
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      uniforms: {
+        uTex: { value: tex },
+        uColor: { value: new THREE.Color(color) },
+        uOpacity: { value: 0 },
+        uProgress: { value: 0 },
+        uDir: { value: direction > 0 ? 1.0 : 0.0 },
+        uTrailLen: { value: trailLen },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        uniform float uDir;
+        void main() {
+          vUv = vec2(uDir > 0.5 ? uv.x : 1.0 - uv.x, uv.y);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uTex;
+        uniform vec3 uColor;
+        uniform float uOpacity;
+        uniform float uProgress;
+        uniform float uTrailLen;
+        void main() {
+          float lead = uProgress;
+          // Hide pixels ahead of the leading edge; smoothstep gives ~1px AA.
+          float reveal = 1.0 - smoothstep(lead, lead + 0.012, vUv.x);
+          // Comet-tail: brightness decays exponentially with distance behind
+          // the leading edge (in UV units along the arc).
+          float behind = max(0.0, lead - vUv.x);
+          float trail = exp(-behind / max(0.0001, uTrailLen));
+          // Hot peak right at the leading edge so the blade tip reads sharp.
+          float head = exp(-pow((vUv.x - lead) / 0.045, 2.0));
+          vec4 t = texture2D(uTex, vUv);
+          float a = t.a * (trail + head * 0.45) * reveal * uOpacity;
+          gl_FragColor = vec4(uColor, a);
+        }
+      `,
+    });
   }
 
   // Build a curved strip that follows a swing arc, with UVs ready for the
@@ -161,21 +206,25 @@ export class Effects {
     return g;
   }
 
-  // Texture-mapped slash crescent with a layered "echo" trail behind the
-  // main arc to fake motion blur. Both layers fade out via the flash update
-  // loop and dispose their geometry/material on expiry; the slash texture
-  // is shared and lives for the page lifetime.
+  // Sword-trail slash. The arc paints itself along its length as the swing
+  // progresses (uniform `uProgress` 0→1 driven from the flash update loop)
+  // — bright hot leading edge with an exponentially-fading tail behind it,
+  // nothing visible ahead of it. Single layer; geometry/material disposed
+  // on expiry; the slash texture is shared and lives for the page lifetime.
   //
   // Args:
   //   x,y,z  — world position of the swinging character (y typically near 0)
   //   yaw    — facing yaw (radians); same convention as Player.yaw
-  //   opts   — { range, arc, duration, color, height, thickness }
+  //   opts   — { range, arc, duration, color, height, thickness, direction, trailLen }
   //     range     : outer radius of the arc (default 2.0m)
   //     arc       : total angular width of the wedge in radians (default ~120°)
   //     duration  : seconds before the arc fully fades (default 0.32)
   //     color     : hex tint (default 0xeaffff) — multiplied with the texture
   //     height    : vertical offset above the input y (default 1.0m)
   //     thickness : strip thickness as a fraction of range (default 0.55)
+  //     direction : +1 = leading edge sweeps left→right along the arc,
+  //                 -1 = right→left (default +1)
+  //     trailLen  : tail decay length in UV units (default 0.40)
   slashArc(x, y, z, yaw, opts = {}) {
     if (this.particleScale <= 0) return;
     const {
@@ -185,52 +234,29 @@ export class Effects {
       color = 0xeaffff,
       height = 1.0,
       thickness = 0.55,
+      direction = 1,
+      trailLen = 0.40,
     } = opts;
     const outer = range * 1.05;
     const inner = Math.max(0.15, outer * (1 - thickness));
     const segments = Math.max(28, Math.ceil(arc * 22));
     const tex = this._buildSlashTexture();
 
-    // Spawn a single slash-strip layer with its own size / alpha / lifetime
-    // / yaw offset. Used twice below (main + echo) for a layered look.
-    const spawnLayer = (rIn, rOut, alphaScale, ttl, yawOffset) => {
-      const geo = this._buildArcStripGeometry(arc, rIn, rOut, segments);
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        color,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y + height, z);
-      m.rotation.y = yaw + yawOffset;
-      m.renderOrder = 5;
-      this.scene.add(m);
-      this.flashes.push({
-        mesh: m,
-        ttl,
-        life: 0,
-        _kind: 'arc',
-        _yaw: yaw + yawOffset,
-        _alphaScale: alphaScale,
-      });
-    };
-
-    // Main slash — full thickness, full alpha, full duration.
-    spawnLayer(inner, outer, 1.0, duration, 0);
-    // Echo / motion-blur ghost — slightly larger, dimmer, shorter, rotated
-    // back a few degrees so it reads as the trailing edge of the swing.
-    spawnLayer(inner * 0.92, outer * 1.06, 0.40, duration * 0.85, -0.10);
-
-    // Hot leading-edge highlight at the front of the arc — a small additive
-    // sphere parked at the outer-radius midpoint of the swing. Reuses the
-    // existing `flashSphere` so it auto-cleans through the flash pipeline.
-    const fwdX = x + Math.sin(yaw) * outer * 0.85;
-    const fwdZ = z + Math.cos(yaw) * outer * 0.85;
-    this.flashSphere(fwdX, y + height, fwdZ, color, range * 0.18, duration * 0.55);
+    const geo = this._buildArcStripGeometry(arc, inner, outer, segments);
+    const mat = this._buildSlashMaterial(tex, color, direction, trailLen);
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y + height, z);
+    m.rotation.y = yaw;
+    m.renderOrder = 5;
+    this.scene.add(m);
+    this.flashes.push({
+      mesh: m,
+      ttl: duration,
+      life: 0,
+      _kind: 'arc',
+      _yaw: yaw,
+      _alphaScale: 1.0,
+    });
   }
 
   shakeCamera(amt) { this.shakeMax = Math.max(this.shakeMax, amt); }
@@ -290,19 +316,34 @@ export class Effects {
         continue;
       }
       if (f._kind === 'arc') {
-        // Sharp attack (~10% of life) then ease-out cubic fade so the slash
-        // lingers visually while the next swing's animation begins.
-        const attack = 0.10;
-        const inT = Math.min(1, t / attack);
-        const outT = Math.max(0, (t - attack) / (1 - attack));
-        const fade = 1 - outT * outT * outT;
-        const peak = 1.15;             // additive overdrive at the peak
-        f.mesh.material.opacity = inT * fade * peak * (f._alphaScale || 1.0);
-        // Sqrt-eased outward blow-out: 0.55 → ~1.20 with a fast initial punch.
-        const s = 0.55 + Math.sqrt(t) * 0.65;
+        // The slash paints itself along its length: progress 0→1 over the
+        // first 70% of life (ease-in-out cubic so the swing accelerates and
+        // settles like a real arm motion), then holds while the trailing
+        // brightness fades to zero over the remaining 30%.
+        const sweep = 0.70;
+        let progress;
+        if (t < sweep) {
+          const p = t / sweep;
+          progress = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+        } else {
+          progress = 1;
+        }
+        // Quick attack to full alpha, then ease-out fade once the sweep is
+        // complete so the painted arc dissipates cleanly.
+        let opacity;
+        if (t < sweep) {
+          opacity = Math.min(1, t / 0.05);
+        } else {
+          const fade = (t - sweep) / (1 - sweep);
+          opacity = 1 - fade * fade;
+        }
+        const u = f.mesh.material.uniforms;
+        u.uProgress.value = progress;
+        u.uOpacity.value = opacity * 1.15 * (f._alphaScale || 1.0);
+        // Sqrt-eased outward blow-out + slight follow-through rotation.
+        const s = 0.60 + Math.sqrt(t) * 0.55;
         f.mesh.scale.setScalar(s);
-        // Follow-through rotation: ~14° over the lifetime.
-        f.mesh.rotation.y = f._yaw + t * 0.24;
+        f.mesh.rotation.y = f._yaw + t * 0.20;
       } else {
         f.mesh.material.opacity = 0.85 * (1 - t);
         const s = 1 + t * (f.growTo - 1);
