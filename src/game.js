@@ -389,7 +389,13 @@ export class Game {
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
       p.vel = { x: 0, z: 0 }; p.knockback = { x: 0, z: 0 };
-      // Wipe item / ability progress on restart — fresh roguelike run.
+      // Wipe gold + found items + ability + item-buff state on restart.
+      // Shop-purchased upgrades persist across deaths (`upgradeLevels`,
+      // `stats`, `maxHP` are intentionally NOT touched here) so the
+      // upgrade tree behaves like a meta-progression — dying clears
+      // your in-run loot but you keep the permanent stat boosts you
+      // bought between waves.
+      p.gold = 0;
       p.items = {};
       p.ability = null;
       p.abilityCd = 0;
@@ -811,6 +817,8 @@ export class Game {
     const setW = (id, w) => { const el = document.getElementById(id); if (el) el.style.width = `${w}%`; };
     setW('hp1', Math.max(0, (p1.hp / p1.maxHP) * 100));
     setW('hp2', Math.max(0, (p2.hp / p2.maxHP) * 100));
+    set('hpval1', `${Math.max(0, Math.round(p1.hp))} / ${Math.round(p1.maxHP)}`);
+    set('hpval2', `${Math.max(0, Math.round(p2.hp))} / ${Math.round(p2.maxHP)}`);
     set('gold1', p1.gold);
     set('gold2', p2.gold);
     set('lvl1', p1.level);
@@ -821,15 +829,12 @@ export class Game {
     this._renderItemBar(p2, 'items2');
     this._renderAbilitySlot(p1, 'ability1', 'G');
     this._renderAbilitySlot(p2, 'ability2', 'H');
-    const d = vdist(p1.pos, p2.pos);
-    set('dist', `${d.toFixed(1)}m apart`);
     // clock
     const total = this.world.dayTime * 24;
     const hh = Math.floor(total).toString().padStart(2, '0');
     const mm = Math.floor((total % 1) * 60).toString().padStart(2, '0');
     const phase = this.world.isNight() ? 'Night' : 'Day';
     set('clock', `${phase} · ${hh}:${mm}`);
-    set('seedlabel', this.seedDisplay);
     const dot = document.getElementById('clockdot');
     if (dot) dot.style.background = this.world.isNight() ? '#7aa6ff' : '#ffd166';
     // leash overlay
@@ -844,7 +849,14 @@ export class Game {
     if (!el) return;
     const ids = Object.keys(player.items).filter(k => (player.items[k] || 0) > 0);
     if (ids.length === 0) {
-      if (el.childElementCount > 0) el.innerHTML = '';
+      if (el.childElementCount > 0) {
+        el.innerHTML = '';
+        // Drop the cached signature alongside the DOM — otherwise after a
+        // death+restart (which clears `player.items`) re-acquiring the
+        // same item would compute the same sig as before death and the
+        // diff-friendly rebuild would skip emitting the icon back.
+        delete el.dataset.sig;
+      }
       return;
     }
     // Diff-friendly rebuild: only rewrite when the set/counts changed.

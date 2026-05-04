@@ -15,15 +15,19 @@
         position: absolute; top: 12px; padding: 10px 12px;
         background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
         border-radius: 12px; backdrop-filter: blur(4px);
-        min-width: 180px; user-select: none;
+        /* Locked to a fixed width so the HP bar (and everything else inside
+           the HUD) doesn't widen as items accumulate. The item bar inside
+           wraps onto multiple rows once it exceeds this. */
+        width: 240px; box-sizing: border-box; user-select: none;
       }
       .hud.left { left: 12px; }
       .hud.right { right: 12px; text-align: right; }
       .hud .name { font-weight: 700; letter-spacing: 0.5px; font-size: 13px; }
       .hud.left .name { color: #6ad0ff; }
       .hud.right .name { color: #ff8a8a; }
-      .hpbar { position: relative; height: 12px; background: #1a1f28; border-radius: 6px; overflow: hidden; margin-top: 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+      .hpbar { position: relative; height: 16px; background: #1a1f28; border-radius: 6px; overflow: hidden; margin-top: 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
       .hpbar > .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg,#52e07a,#2bb14a); transition: width 120ms linear; }
+      .hpbar > .text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85); pointer-events: none; letter-spacing: 0.3px; }
       .meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; opacity: 0.9; }
       .hud.right .meta { justify-content: flex-end; }
       .item-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; min-height: 24px; }
@@ -87,8 +91,6 @@
       .inv-item.open .inv-desc, .inv-ability.open .inv-desc { display: block; }
       .inv-empty { opacity: 0.4; font-size: 11px; font-style: italic; padding: 4px 0; }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
-      #help { position: absolute; left: 12px; bottom: 12px; font-size: 12px; opacity: 0.85; background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 12px; max-width: 360px; line-height: 1.55; }
-      #help .row { display: flex; gap: 8px; align-items: center; }
       #help .row + .row { margin-top: 4px; }
       #help .who.p1 { color: #6ad0ff; font-weight: 700; }
       #help .who.p2 { color: #ff8a8a; font-weight: 700; }
@@ -215,12 +217,10 @@
         <div id="topbar">
           <span id="clock">Day · 06:00</span>
           <span class="dot" id="clockdot"></span>
-          <span id="dist">0m apart</span>
-          <span id="seedwrap" style="opacity:0.6;">· seed <code id="seedlabel">····</code></span>
         </div>
         <div class="hud left">
           <div class="name">P1 · Cyan</div>
-          <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div></div>
+          <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div><span class="text" id="hpval1">100 / 100</span></div>
           <div class="meta">
             <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold1">0</span></span>
             <span>LV <span id="lvl1">1</span></span>
@@ -235,7 +235,7 @@
         </div>
         <div class="hud right">
           <div class="name">P2 · Coral</div>
-          <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div></div>
+          <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div><span class="text" id="hpval2">100 / 100</span></div>
           <div class="meta">
             <span>DMG <span id="dmg2">10</span></span>
             <span>LV <span id="lvl2">1</span></span>
@@ -247,11 +247,6 @@
             <span class="ab-name">пусто</span>
             <span class="keyhint">H</span>
           </div>
-        </div>
-        <div id="help">
-          <div class="row"><span class="who p1">P1</span> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>F</kbd> attack · <kbd>R</kbd> dash · <kbd>G</kbd> ability · <kbd>E</kbd> взять</div>
-          <div class="row"><span class="who p2">P2</span> <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> move · <kbd>L</kbd> attack · <kbd>K</kbd> dash · <kbd>H</kbd> ability · <kbd>J</kbd> взять</div>
-          <div class="row"><kbd>Tab</kbd> upgrade shop · <kbd>1</kbd>‥<kbd>4</kbd> P1 buy · <kbd>7</kbd>‥<kbd>0</kbd> P2 buy · <kbd>P</kbd> pause · <kbd>Esc</kbd> menu</div>
         </div>
         <div id="toast"></div>
         <div id="shop">
