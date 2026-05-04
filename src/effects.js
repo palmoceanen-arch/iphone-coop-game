@@ -142,16 +142,26 @@ export class Effects {
         uniform float uTrailLen;
         void main() {
           float lead = uProgress;
-          // Hide pixels ahead of the leading edge; smoothstep gives ~1px AA.
-          float reveal = 1.0 - smoothstep(lead, lead + 0.012, vUv.x);
+          // Soft front-of-blade window: the head gaussian is allowed to
+          // bleed slightly ahead of the leading edge before the strip fades
+          // to zero further forward. Without this, the natural glow tip
+          // gets sliced off at the reveal boundary and reads as a hard
+          // pencil-line cutoff.
+          float reveal = 1.0 - smoothstep(lead + 0.02, lead + 0.09, vUv.x);
+          // Soft fade at the very start of the arc so the trail tail
+          // never terminates with a visible vertical seam.
+          float tailFade = smoothstep(0.0, 0.05, vUv.x);
+          // Soften strip silhouette across thickness (in case the texture
+          // edges still carry residual alpha at v = 0 / v = 1).
+          float vFade = smoothstep(0.0, 0.08, vUv.y) * smoothstep(1.0, 0.92, vUv.y);
           // Comet-tail: brightness decays exponentially with distance behind
           // the leading edge (in UV units along the arc).
           float behind = max(0.0, lead - vUv.x);
           float trail = exp(-behind / max(0.0001, uTrailLen));
-          // Hot peak right at the leading edge so the blade tip reads sharp.
-          float head = exp(-pow((vUv.x - lead) / 0.045, 2.0));
+          // Hot peak at the leading edge so the blade tip reads sharp.
+          float head = exp(-pow((vUv.x - lead) / 0.055, 2.0));
           vec4 t = texture2D(uTex, vUv);
-          float a = t.a * (trail + head * 0.45) * reveal * uOpacity;
+          float a = t.a * (trail + head * 0.6) * reveal * tailFade * vFade * uOpacity;
           gl_FragColor = vec4(uColor, a);
         }
       `,
@@ -340,10 +350,12 @@ export class Effects {
         const u = f.mesh.material.uniforms;
         u.uProgress.value = progress;
         u.uOpacity.value = opacity * 1.15 * (f._alphaScale || 1.0);
-        // Sqrt-eased outward blow-out + slight follow-through rotation.
-        const s = 0.60 + Math.sqrt(t) * 0.55;
-        f.mesh.scale.setScalar(s);
-        f.mesh.rotation.y = f._yaw + t * 0.20;
+        // Spawned at the impact frame, so the strip starts at full reach
+        // and only blooms a few percent for energy expansion. A bigger
+        // blow-out here would look like the arc is *growing* after the
+        // strike, which fights the impact read.
+        f.mesh.scale.setScalar(1.0 + t * 0.06);
+        f.mesh.rotation.y = f._yaw + t * 0.18;
       } else {
         f.mesh.material.opacity = 0.85 * (1 - t);
         const s = 1 + t * (f.growTo - 1);

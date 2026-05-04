@@ -285,25 +285,9 @@ export class Player {
       this.attackAnim = 0;
       this.swingActive = true;
       this.swingProcessed = false;
-      this.sound.swing();
-      // Spawn the swing-arc VFX in front of the player. Uses the smoothed
-      // render pose (smoothPos / yaw) so the arc tracks the visible
-      // character instead of jittering with raw input. Weapons without a
-      // `slash` profile (e.g. wand, which jabs) skip this.
-      if (wp.slash) {
-        this.effects.slashArc(
-          this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
-          {
-            range: wp.range,
-            arc: wp.arc,
-            // Duration is tied to the swing so heavier weapons leave a
-            // longer trail; clamp so it never outlives the cooldown.
-            duration: Math.min(wp.swing * 0.7, wp.cooldown * 0.9),
-            color: wp.slash.color,
-            height: wp.slash.height,
-          }
-        );
-      }
+      // Both the whoosh sound and the slash VFX are deferred to the impact
+      // frame (see swingActive branch below) so audio + visual line up with
+      // the animation's strike pose instead of firing at the windup.
       const actions = this._character?.actions;
       const action = actions?.[this._attackActionKey];
       if (action && actions) {
@@ -378,6 +362,25 @@ export class Player {
         this.attackAnim = 0;
       } else if (!this.swingProcessed && this.attackAnim >= wp.impactAt) {
         this.swingProcessed = true;
+        // Whoosh + arc VFX fire here — the visible blade is just reaching
+        // its strike pose, so the trail paints itself across the screen at
+        // the same beat the damage lands.
+        this.sound.swing();
+        if (wp.slash) {
+          this.effects.slashArc(
+            this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
+            {
+              range: wp.range,
+              arc: wp.arc,
+              // Snappy: the trail must fully paint and fade well inside the
+              // followthrough window (1 - impactAt) so it never overlaps the
+              // next swing.
+              duration: Math.min(wp.swing * (1 - wp.impactAt) * 0.85, 0.28),
+              color: wp.slash.color,
+              height: wp.slash.height,
+            }
+          );
+        }
         this._processSwing(enemies, attackOnEnemyCallback);
       }
     }
