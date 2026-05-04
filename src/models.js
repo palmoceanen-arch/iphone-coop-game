@@ -96,6 +96,51 @@ const ANIM_MAP = {
   death:  'Death_A',
 };
 
+// Bones that drive the *upper* half of the KayKit Rig_Medium skeleton. Used to
+// strip lower-body tracks from attack clips so the legs keep playing whatever
+// locomotion (idle/run) is active underneath, instead of snapping to whatever
+// pose the attack clip authors for the legs.
+//
+// Hierarchy (from public/models/Knight.glb):
+//   root → Rig → hips → upperleg.{l,r} → lowerleg → foot → toes
+//                     → spine → chest → upperarm.{l,r} → lowerarm → wrist → hand → handslot
+//                                     → head
+// IK helpers (kneeIK, heelIK, handIK, elbowIK, control-*-roll) are direct
+// children of root and we route arm IK to upper, leg IK to lower.
+const UPPER_BODY_BONES = new Set([
+  'spine', 'chest', 'head',
+  'upperarm.l', 'lowerarm.l', 'wrist.l', 'hand.l', 'handslot.l',
+  'upperarm.r', 'lowerarm.r', 'wrist.r', 'hand.r', 'handslot.r',
+  'elbowIK.l', 'elbowIK.r', 'handIK.l', 'handIK.r',
+]);
+
+// Slots whose clips should be filtered to upper-body-only at bind time.
+// Spell-cast / throw / ranged are mostly arm gestures too, so the filter
+// applies the same way; the legs reading idle/run underneath only ever
+// looks better than a static pose.
+const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
+
+// Build a copy of `clip` that only contains tracks whose bone is in
+// `UPPER_BODY_BONES`. Track names are formatted as
+// `<boneName>.<property>[component]` — for KayKit bones with dots in their
+// names (e.g. `upperarm.l`) the boneName is everything before the LAST
+// `.<property>` segment, where property is one of position/quaternion/scale.
+function buildUpperBodyClip(clip) {
+  const PROP_RE = /^(.+)\.(position|quaternion|scale|morphTargetInfluences)(\[\d+\])?$/;
+  const tracks = clip.tracks.filter((t) => {
+    const m = PROP_RE.exec(t.name);
+    if (!m) return false;
+    return UPPER_BODY_BONES.has(m[1]);
+  });
+  if (tracks.length === 0 || tracks.length === clip.tracks.length) {
+    // Nothing to strip (clip already only animates upper body) or no tracks
+    // matched at all — fall back to the original so we never end up with an
+    // empty clip that does nothing.
+    return clip;
+  }
+  return new THREE.AnimationClip(clip.name + '_upper', clip.duration, tracks, clip.blendMode);
+}
+
 // Stand-alone weapon meshes that get parented to the character's `handslot.r`
 // bone at runtime. Only weapons that aren't already baked into a character GLB
 // live here (the Knight already includes 1H_Sword / 2H_Sword as named child
@@ -351,8 +396,10 @@ export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = 
   const mixer = new THREE.AnimationMixer(root);
   const actions = {};
   for (const [slot, animName] of Object.entries(ANIM_MAP)) {
-    const clip = entry.animations.find(c => c.name === animName);
-    if (!clip) continue;
+    const sourceClip = entry.animations.find(c => c.name === animName);
+    if (!sourceClip) continue;
+    const isUpperOnly = UPPER_BODY_SLOT_PREFIXES.some(p => slot.startsWith(p));
+    const clip = isUpperOnly ? buildUpperBodyClip(sourceClip) : sourceClip;
     const action = mixer.clipAction(clip);
     actions[slot] = action;
   }

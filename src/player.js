@@ -285,19 +285,17 @@ export class Player {
       this.attackAnim = 0;
       this.swingActive = true;
       this.swingProcessed = false;
-      // Both the whoosh sound and the slash VFX are deferred to the impact
-      // frame (see swingActive branch below) so audio + visual line up with
-      // the animation's strike pose instead of firing at the windup.
+      this.swingFxFired = false;
+      // Whoosh sound + slash VFX both fire just before the impact frame
+      // (see swingActive branch below) so the trail is mid-paint when the
+      // visible blade reaches its strike pose. We deliberately do *not*
+      // fade out idle/run here — attack clips are pre-filtered to upper
+      // body bones only (see models.js), so the legs keep stepping
+      // through whatever locomotion state was active when the attack
+      // started.
       const actions = this._character?.actions;
       const action = actions?.[this._attackActionKey];
-      if (action && actions) {
-        // Fade out everything else so the swing reads at full weight — if
-        // we just call play() while idle/run is still at weight 1, the two
-        // tracks blend and the swing looks like a half-hearted poke.
-        for (const [slot, a] of Object.entries(actions)) {
-          if (slot === this._attackActionKey || !a) continue;
-          if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.08);
-        }
+      if (action) {
         action.reset();
         // Scale source clip to land on `wp.swing` seconds end-to-end. The
         // KayKit melee clips are authored at ~1s; matching the gameplay
@@ -307,8 +305,15 @@ export class Player {
         // swing reads as a stab instead of a chop.
         const srcDur = Math.max(action.getClip().duration, 0.05);
         action.timeScale = srcDur / Math.max(wp.swing, 0.1);
+        // Boost the attack weight far above locomotion so that on shared
+        // upper-body bones (spine/chest/head/arms) the attack clearly
+        // wins. Three.js mixer blends overlapping tracks as
+        // result = lerp(other, attack, attackWeight / (attackWeight + otherWeight))
+        // — at weight 10 vs 1 the attack reads ~91% which dominates the
+        // pose while letting a tiny bit of run/idle bleed through (looks
+        // natural, not robotic).
+        action.setEffectiveWeight(10.0);
         action.fadeIn(0.05).play();
-        this._animState = this._attackActionKey;
       }
     }
 
@@ -357,14 +362,13 @@ export class Player {
     // light weapons feel like they connect early.
     if (this.swingActive) {
       this.attackAnim += dt / Math.max(wp.swing, 0.1);
-      if (this.attackAnim >= 1) {
-        this.swingActive = false;
-        this.attackAnim = 0;
-      } else if (!this.swingProcessed && this.attackAnim >= wp.impactAt) {
-        this.swingProcessed = true;
-        // Whoosh + arc VFX fire here — the visible blade is just reaching
-        // its strike pose, so the trail paints itself across the screen at
-        // the same beat the damage lands.
+      // FX trigger fires partway between windup and impact so the slash
+      // is mid-paint when the blade reaches its strike pose. The damage
+      // window is still gated by `wp.impactAt`, but audio + visual lead
+      // it slightly to feel responsive instead of late.
+      const fxAt = Math.max(0.10, wp.impactAt - 0.25);
+      if (!this.swingFxFired && this.attackAnim >= fxAt) {
+        this.swingFxFired = true;
         this.sound.swing();
         if (wp.slash) {
           this.effects.slashArc(
@@ -372,15 +376,25 @@ export class Player {
             {
               range: wp.range,
               arc: wp.arc,
-              // Snappy: the trail must fully paint and fade well inside the
-              // followthrough window (1 - impactAt) so it never overlaps the
-              // next swing.
-              duration: Math.min(wp.swing * (1 - wp.impactAt) * 0.85, 0.28),
+              // Trail completes well inside the followthrough window
+              // (1 - impactAt) so it never overlaps the next swing.
+              duration: Math.min(wp.swing * (1 - fxAt) * 0.55, 0.28),
               color: wp.slash.color,
               height: wp.slash.height,
             }
           );
         }
+      }
+      if (this.attackAnim >= 1) {
+        this.swingActive = false;
+        this.attackAnim = 0;
+        // Hand the upper body back to whatever locomotion is playing.
+        // Without this fade-out the LoopOnce action would clamp on its
+        // last frame and freeze the arms in the followthrough pose.
+        const a = this._character?.actions?.[this._attackActionKey];
+        if (a) a.fadeOut(0.18);
+      } else if (!this.swingProcessed && this.attackAnim >= wp.impactAt) {
+        this.swingProcessed = true;
         this._processSwing(enemies, attackOnEnemyCallback);
       }
     }
@@ -398,11 +412,27 @@ export class Player {
     this.yaw += dy * (1 - Math.exp(-18 * dt));
     this.mesh.rotation.y = this.yaw + MODEL_YAW_OFFSET;
 
-    // Drive locomotion animation (idle <-> run)
+    // Drive locomotion animation (idle <-> run). Locomotion runs on the
+    // *full* skeleton; attack clips are filtered to upper-body bones only
+    // so the legs continue stepping through this state machine even while
+    // a swing is in flight. Crucially we only fade between locomotion
+    // slots here — using crossFadeTo would also fade out the attack
+    // action mid-swing.
     const moving = Math.hypot(m.x, m.z) > 0.05;
     const desiredAnim = moving ? 'run' : 'idle';
-    if (desiredAnim !== this._animState && !this.swingActive) {
-      crossFadeTo(this._character.actions, desiredAnim, 0.18);
+    if (desiredAnim !== this._animState) {
+      const acts = this._character?.actions;
+      if (acts) {
+        for (const slot of ['idle', 'run', 'walk']) {
+          const a = acts[slot];
+          if (!a || slot === desiredAnim) continue;
+          if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.18);
+        }
+        const next = acts[desiredAnim];
+        if (next) {
+          next.reset().setEffectiveWeight(1.0).fadeIn(0.18).play();
+        }
+      }
       this._animState = desiredAnim;
     }
     // Speed up run animation slightly when dashing for visual punch.
