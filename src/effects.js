@@ -18,6 +18,18 @@ export class Effects {
     // 1.0 = full particle density. Lowered by the Settings module when the
     // player picks a lower-quality preset; 0 disables bursts entirely.
     this.particleScale = 1.0;
+    // Shared 0.12m-radius sphere geometry for `burst` particles. Every burst
+    // used to allocate a fresh SphereGeometry (uploaded as a new GPU buffer)
+    // and dispose it once the last particle expired — with combat firing
+    // 5–10 bursts/second this churned the WebGL buffer pool nonstop. The
+    // shape is identical for every burst, so a single buffer that lives for
+    // the page lifetime is strictly cheaper.
+    this._burstGeo = new THREE.SphereGeometry(0.12, 6, 6);
+    // Reusable Vector3 for screen-space projection of floating damage
+    // numbers. The previous code did `world.clone().project(camera)` every
+    // frame for every active number, allocating a Vector3 per number per
+    // frame.
+    this._tmpProj = new THREE.Vector3();
   }
 
   setParticleScale(s) { this.particleScale = Math.max(0, Math.min(2, Number(s) || 0)); }
@@ -25,24 +37,21 @@ export class Effects {
   burst(x, y, z, color = 0xffe28a, count = 12, speed = 6, life = 0.45) {
     count = Math.max(0, Math.round(count * this.particleScale));
     if (count === 0) return;
-    // Share geometry across particles in this burst; clone the material per
-    // particle so each fades independently.
-    const geo = new THREE.SphereGeometry(0.12, 6, 6);
+    // Geometry is shared globally (`_burstGeo`); the material is still
+    // per-particle so each particle can fade its opacity independently.
     const baseMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
-    const refs = { count: 0, geo };
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(geo, baseMat.clone());
+      const m = new THREE.Mesh(this._burstGeo, baseMat.clone());
       m.position.set(x, y, z);
       this.scene.add(m);
       const a = Math.random() * Math.PI * 2;
       const s = rand(speed * 0.4, speed);
       this.particles.push({
-        mesh: m, refs,
+        mesh: m,
         vx: Math.cos(a) * s, vy: rand(2, 5), vz: Math.sin(a) * s,
         life: 0, ttl: life * (0.7 + Math.random() * 0.6),
         scale: 1.0,
       });
-      refs.count++;
     }
     baseMat.dispose();
   }
@@ -324,11 +333,9 @@ export class Effects {
       const t = p.life / p.ttl;
       if (t >= 1) {
         this.scene.remove(p.mesh);
+        // Geometry is shared (this._burstGeo) so we only dispose the
+        // per-particle material; the geometry lives for the page lifetime.
         p.mesh.material.dispose();
-        if (p.refs) {
-          p.refs.count--;
-          if (p.refs.count <= 0) p.refs.geo.dispose();
-        }
         this.particles.splice(i, 1);
         continue;
       }
@@ -403,9 +410,12 @@ export class Effects {
         continue;
       }
       f.world.y += dt * 1.6;
-      const proj = f.world.clone().project(this.camera);
-      const sx = (proj.x * 0.5 + 0.5) * window.innerWidth;
-      const sy = (-proj.y * 0.5 + 0.5) * window.innerHeight;
+      // Project into the shared scratch Vector3 instead of cloning each
+      // frame; project() mutates in place so the original world position
+      // would be destroyed if we passed `f.world` directly.
+      this._tmpProj.copy(f.world).project(this.camera);
+      const sx = (this._tmpProj.x * 0.5 + 0.5) * window.innerWidth;
+      const sy = (-this._tmpProj.y * 0.5 + 0.5) * window.innerHeight;
       f.el.style.left = sx + 'px';
       f.el.style.top = sy + 'px';
       f.el.style.opacity = String(1 - f.life / f.ttl);

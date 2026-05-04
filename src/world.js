@@ -129,6 +129,14 @@ export class World {
     this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this._lastGroundCx = null;
     this._lastGroundCz = null;
+    // Pre-allocated colour temporaries for the per-frame sky tint blend.
+    // Reusing them avoids spawning ~5 THREE.Color objects every frame for
+    // the entire session (60fps × 5 colours × 600s ≈ 1.8M throwaway
+    // allocations over a 10-min match).
+    this._dayCol = new THREE.Color(0x6cb6ff);
+    this._nightCol = new THREE.Color(0x070b15);
+    this._sunsetCol = new THREE.Color(0xff9a55);
+    this._tmpSkyCol = new THREE.Color();
     this._buildSky();
     this._buildLights();
     this._buildGround();
@@ -793,9 +801,6 @@ export class World {
     const offsetZ = snap(25);
     this.sun.position.set(cx + offsetX, offsetY, cz + offsetZ);
 
-    const dayCol = new THREE.Color(0x6cb6ff);
-    const nightCol = new THREE.Color(0x070b15); // deeper navy for darker midnight
-    const sunset = new THREE.Color(0xff9a55);
     // Cosine-bell sunset/sunrise tint window centred on the actual horizon
     // crossings. Half-width 1h so the orange glow swells from ~05:00→07:00
     // and ~20:00→22:00.
@@ -804,7 +809,12 @@ export class World {
     // sunY band so sky / ambient / moon all fade gradually over several
     // in-game hours either side of the horizon.
     const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
-    const skyCol = new THREE.Color().copy(nightCol).lerp(dayCol, dayWeight).lerp(sunset, Math.min(0.5, sunsetMix * 0.5));
+    // Reuse the pre-allocated colour temporaries (see constructor) instead
+    // of `new THREE.Color()` per frame; the resulting blend is copied into
+    // scene.background which itself is a single persistent Color.
+    const skyCol = this._tmpSkyCol.copy(this._nightCol)
+      .lerp(this._dayCol, dayWeight)
+      .lerp(this._sunsetCol, Math.min(0.5, sunsetMix * 0.5));
     this.scene.background.copy(skyCol);
     if (this.scene.fog) this.scene.fog.color.copy(skyCol);
     // Lower ambient + moon floors so midnight is visibly darker than noon

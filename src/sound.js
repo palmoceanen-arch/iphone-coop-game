@@ -59,6 +59,13 @@ export class Sound {
     o.connect(g).connect(this.sfx);
     o.start(t);
     o.stop(t + dur + release + 0.02);
+    // Disconnect the whole chain when the oscillator finishes so the
+    // WebAudio graph doesn't accumulate stopped nodes. Without this the
+    // graph grows unbounded over a session (each swing/hit/pickup adds
+    // a couple of nodes that stay forever) and the audio thread spends
+    // measurably more time per buffer the longer you play — a
+    // significant contributor to the slow FPS decay over 10+ minutes.
+    o.onended = () => { try { o.disconnect(); g.disconnect(); } catch { /* already detached */ } };
   }
 
   // White noise burst
@@ -80,6 +87,14 @@ export class Sound {
     src.connect(hpf).connect(lpf).connect(g).connect(this.sfx);
     src.start(t);
     src.stop(t + dur + 0.02);
+    // Same teardown story as `tone` — release the buffer source AND every
+    // filter/gain node in the chain, otherwise the graph keeps the buffer
+    // alive and the audio thread keeps walking 5 dead nodes per played
+    // sound for the rest of the session.
+    src.onended = () => {
+      try { src.disconnect(); hpf.disconnect(); lpf.disconnect(); g.disconnect(); }
+      catch { /* already detached */ }
+    };
   }
 
   swing() { this.tone({ freq: 720, type: 'triangle', dur: 0.07, gain: 0.18, slide: -350 }); }
