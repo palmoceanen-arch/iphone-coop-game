@@ -371,9 +371,16 @@ export class Player {
         this.swingFxFired = true;
         this.sound.swing();
         if (wp.slash) {
+          // Parent the slash mesh to the character group so the strip
+          // tracks the player if they keep moving / rotating during the
+          // followthrough — the model can pivot 90°+ between fxAt and
+          // arc-end on a strafing swing, and a world-anchored strip
+          // would visibly lag behind. World position/yaw args are kept
+          // as fallbacks but aren't used while a parent is present.
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
+              parent: this.mesh,
               range: wp.range,
               arc: wp.arc,
               // Trail completes well inside the followthrough window

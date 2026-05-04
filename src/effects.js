@@ -223,9 +223,19 @@ export class Effects {
   // on expiry; the slash texture is shared and lives for the page lifetime.
   //
   // Args:
-  //   x,y,z  — world position of the swinging character (y typically near 0)
-  //   yaw    — facing yaw (radians); same convention as Player.yaw
-  //   opts   — { range, arc, duration, color, height, thickness, direction, trailLen }
+  //   x,y,z  — fallback world position when `parent` is not provided. When a
+  //            parent is supplied the slash is added to it as a local-space
+  //            child and these coordinates are ignored.
+  //   yaw    — facing yaw (radians); same convention as Player.yaw. Likewise
+  //            ignored when a parent is supplied (the parent's own rotation
+  //            already orients the strip).
+  //   opts   — { parent, range, arc, duration, color, height, thickness, direction, trailLen }
+  //     parent    : optional Object3D to attach the slash mesh to. When set,
+  //                 the slash inherits the parent's position + rotation each
+  //                 frame, so a character that turns or moves mid-swing
+  //                 carries the in-flight slash with them. Pass `null`
+  //                 (default) to spawn the slash at world (x,y,z) facing
+  //                 `yaw`, frozen in place.
   //     range     : outer radius of the arc (default 2.0m)
   //     arc       : total angular width of the wedge in radians (default ~120°)
   //     duration  : seconds before the arc fully fades (default 0.32)
@@ -240,6 +250,7 @@ export class Effects {
   slashArc(x, y, z, yaw, opts = {}) {
     if (this.particleScale <= 0) return;
     const {
+      parent = null,
       range = 2.0,
       arc = Math.PI * 0.7,
       duration = 0.32,
@@ -257,16 +268,31 @@ export class Effects {
     const geo = this._buildArcStripGeometry(arc, inner, outer, segments);
     const mat = this._buildSlashMaterial(tex, color, direction, trailLen);
     const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y + height, z);
-    m.rotation.y = yaw;
+    if (parent) {
+      // Local-space spawn: parent already carries the character's position
+      // and facing, so we only set the height offset and leave rotation
+      // at zero. The follow-through twist applied per-frame in update()
+      // is added on top as a local-space delta.
+      m.position.set(0, height, 0);
+      m.rotation.y = 0;
+      parent.add(m);
+    } else {
+      // World-space spawn: freeze the strip in place at the location/yaw
+      // that was current at impact time.
+      m.position.set(x, y + height, z);
+      m.rotation.y = yaw;
+      this.scene.add(m);
+    }
     m.renderOrder = 5;
-    this.scene.add(m);
     this.flashes.push({
       mesh: m,
       ttl: duration,
       life: 0,
       _kind: 'arc',
-      _yaw: yaw,
+      // For attached strips the per-frame `mesh.rotation.y` is the local
+      // twist on top of the parent. For free strips it's the world yaw at
+      // impact time.
+      _yaw: parent ? 0 : yaw,
       _alphaScale: 1.0,
     });
   }
@@ -321,7 +347,10 @@ export class Effects {
       f.life += dt;
       const t = f.life / f.ttl;
       if (t >= 1) {
-        this.scene.remove(f.mesh);
+        // Slash arcs may be attached to a character mesh instead of the
+        // effects scene; detach from whichever ancestor they actually live
+        // under so we don't leak when the parent goes away.
+        if (f.mesh.parent) f.mesh.parent.remove(f.mesh);
         f.mesh.material.dispose();
         f.mesh.geometry.dispose();
         this.flashes.splice(i, 1);
