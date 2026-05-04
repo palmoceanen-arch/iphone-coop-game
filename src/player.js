@@ -63,7 +63,13 @@ export class Player {
     this.attackTimer = 0;
     this.attackAnim = 0; // 0..1 swing anim progress
     this.swingActive = false;
-    this.swingProcessed = false;
+    // Damage window now spans `fxAt`…`impactAt` instead of firing on a
+    // single tick at `impactAt`. We track which enemies have already been
+    // hit this swing so each one takes damage at most once per swing even
+    // though `_processSwing` may run for several frames.
+    this._swingHitSet = new Set();
+    this._swingShookCam = false;
+    this.swingFxFired = false;
     this.invuln = 0; // i-frames
     this.dashTimer = 0;
     this.dashCooldown = 0;
@@ -293,7 +299,8 @@ export class Player {
       this.attackTimer = wp.cooldown * attackCdMult;
       this.attackAnim = 0;
       this.swingActive = true;
-      this.swingProcessed = false;
+      this._swingHitSet.clear();
+      this._swingShookCam = false;
       this.swingFxFired = false;
       // Whoosh sound + slash VFX both fire just before the impact frame
       // (see swingActive branch below) so the trail is mid-paint when the
@@ -373,9 +380,13 @@ export class Player {
       this.attackAnim += dt / Math.max(wp.swing, 0.1);
       // FX trigger fires partway between windup and impact so the slash
       // is mid-paint when the blade reaches its strike pose. The damage
-      // window is still gated by `wp.impactAt`, but audio + visual lead
-      // it slightly to feel responsive instead of late.
-      const fxAt = Math.max(0.10, wp.impactAt - 0.25);
+      // window opens on the same tick (see below) and closes at
+      // `wp.impactAt`. `min()` guards against weapons whose impactAt is
+      // smaller than 0.25 — in that edge case fxAt collapses onto
+      // impactAt and the window becomes a single tick (the previous
+      // behaviour), so nothing can ever fire FX after the damage window
+      // is supposed to close.
+      const fxAt = Math.min(wp.impactAt, Math.max(0.10, wp.impactAt - 0.25));
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
@@ -409,8 +420,13 @@ export class Player {
         // last frame and freeze the arms in the followthrough pose.
         const a = this._character?.actions?.[this._attackActionKey];
         if (a) a.fadeOut(0.18);
-      } else if (!this.swingProcessed && this.attackAnim >= wp.impactAt) {
-        this.swingProcessed = true;
+      } else if (this.swingFxFired && this.attackAnim <= wp.impactAt) {
+        // Damage window is open: from the FX trigger up to (and
+        // including) the canonical impact tick. Re-running every frame
+        // means an enemy that walks into the arc mid-swing still gets
+        // hit, and the player doesn't have to predict where the impact
+        // tick will land relative to the actual blade pose. Per-enemy
+        // de-dupe lives in `_processSwing` via `_swingHitSet`.
         this._processSwing(enemies, attackOnEnemyCallback);
       }
     }
@@ -467,13 +483,22 @@ export class Player {
 
   _processSwing(enemies, callback) {
     const wp = this.weaponProfile;
+    // Sweep is performed against the player's *current* position and
+    // facing, not the position/facing at the start of the swing. Combined
+    // with the multi-tick damage window, this means the hitbox follows
+    // the player if they're moving or turning during the swing — same
+    // semantics as the slash VFX, which is parented to the character
+    // group.
     const cx = this.pos.x, cz = this.pos.z;
     const fx = this.facing.x, fz = this.facing.z;
     const range = wp.range;
     const halfArc = wp.arc / 2;
-    let hits = 0;
+    let newHits = 0;
     for (const e of enemies) {
       if (!e.alive) continue;
+      // De-dupe: each enemy can only be hit once per swing, even if the
+      // damage window overlaps the enemy for several frames.
+      if (this._swingHitSet.has(e)) continue;
       const dx = e.pos.x - cx, dz = e.pos.z - cz;
       const d = Math.hypot(dx, dz);
       if (d > range + e.radius) continue;
@@ -482,7 +507,8 @@ export class Player {
       const ang = Math.acos(clamp(dot, -1, 1));
       if (ang <= halfArc) {
         callback(this, e);
-        hits++;
+        this._swingHitSet.add(e);
+        newHits++;
       }
     }
     // Heavier weapons still get more screen-shake — this is what makes a
@@ -491,7 +517,11 @@ export class Player {
     // attack-speed builds and made every connect feel like the game was
     // hitching. Kills still trigger a freeze (in enemy.die / player.die)
     // so the satisfying weight is there for the moments that matter.
-    if (hits > 0) {
+    // Only fire the camera shake on the *first* connecting frame of the
+    // swing, otherwise multi-frame windows would re-trigger it as more
+    // enemies enter the arc.
+    if (newHits > 0 && !this._swingShookCam) {
+      this._swingShookCam = true;
       const heft = Math.min(1, wp.damageMult / 2);
       this.effects.shakeCamera(0.20 + 0.30 * heft);
     }
