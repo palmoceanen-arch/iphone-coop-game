@@ -151,6 +151,9 @@ export class Player {
     const tdCtx = { amount, attacker, dodged: false };
     runItemHook(this, 'onTakeDamage', tdCtx);
     if (tdCtx.dodged) {
+      // Dodge is an active mechanic so it still grants a brief recovery
+      // window — without it, a back-to-back hit on the same frame
+      // would cancel the dodge entirely.
       this.invuln = 0.3;
       this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), 'miss', '#9dfcff');
       return false;
@@ -166,16 +169,19 @@ export class Player {
     }
 
     if (amt <= 0) {
-      this.invuln = 0.3;
+      // Shield ate the whole hit — no HP change, no i-frame either,
+      // because the user wants attack-speed pressure to keep mattering.
       return true;
     }
     this.hp = Math.max(0, this.hp - amt);
-    this.invuln = 0.6;
+    // No post-hit i-frames: enemies are already cooldown-gated per
+    // attack, and granting 0.6s of invuln per damage event made fast
+    // weapons / multi-shot abilities feel pointless. Shake + knockback
+    // is the feedback; hit-stop is reserved for kills now.
     const dx = this.pos.x - fromX, dz = this.pos.z - fromZ;
     const len = Math.hypot(dx, dz) || 1;
     this.applyKnockback(dx / len, dz / len, 9);
     this.effects.shakeCamera(0.18);
-    this.effects.doHitStop(0.04);
     this.effects.burst(this.pos.x, 1.2, this.pos.z, 0xff5050, 8, 4, 0.35);
     this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), amt, '#ff7a7a');
     this.sound.hurt();
@@ -193,6 +199,9 @@ export class Player {
   die() {
     this.alive = false;
     this.invuln = 999;
+    // Player death is the heaviest event in the loop — a chunky freeze
+    // sells the moment without messing with the regular hit feel.
+    this.effects.doHitStop(0.12);
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xff8080, 24, 6, 0.7);
     this.sound.death();
     const death = this._character?.actions?.death;
@@ -476,13 +485,15 @@ export class Player {
         hits++;
       }
     }
-    // Heavier weapons get more shake + a longer hit-stop — this is what makes
-    // a greatsword swing read as physically heavier than a dagger jab even
-    // when the underlying VFX/sound is identical.
+    // Heavier weapons still get more screen-shake — this is what makes a
+    // greatsword swing read as physically heavier than a dagger jab.
+    // Hit-stop on regular landings was removed: it stacked with high
+    // attack-speed builds and made every connect feel like the game was
+    // hitching. Kills still trigger a freeze (in enemy.die / player.die)
+    // so the satisfying weight is there for the moments that matter.
     if (hits > 0) {
       const heft = Math.min(1, wp.damageMult / 2);
       this.effects.shakeCamera(0.20 + 0.30 * heft);
-      this.effects.doHitStop(0.05 + 0.10 * heft);
     }
   }
 

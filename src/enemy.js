@@ -180,9 +180,13 @@ export class Enemy {
   }
 
   takeDamage(amount, fromX, fromZ, knockback) {
-    if (!this.alive || this.invuln > 0) return false;
+    if (!this.alive) return false;
     this.hp -= amount;
-    this.invuln = 0.08;
+    // No post-hit i-frame on enemies: a 0.08s window was enough to make
+    // multi-projectile abilities and high attack-speed weapons drop most
+    // of their hits in the same frame and feel useless. The hit visual
+    // (`flashTimer`) still tells the player something connected even if
+    // multiple sources land simultaneously.
     this.flashTimer = 0.12;
     // Aggro on hit
     if (this.state !== 'chase') { this.state = 'chase'; this.stateTimer = 0; }
@@ -200,6 +204,11 @@ export class Enemy {
   die() {
     if (!this.alive) return;
     this.alive = false;
+    // Kills are the only place we still pay the freeze tax — a short
+    // 0.10s pause makes the moment land without choking high-DPS play
+    // (it's the natural rhythm break between targets, not added
+    // friction inside a single fight).
+    this.effects.doHitStop(0.10);
     this.effects.burst(this.pos.x, 0.7, this.pos.z, this._dieColor(), 18, 7, 0.6);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xffffff, 1.4, 0.35);
     this.sound.enemyDie();
