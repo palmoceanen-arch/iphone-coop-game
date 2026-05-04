@@ -85,15 +85,29 @@ export class Altar {
     this._crystal = crystal;
 
     // Floor halo — same idea as runes/chests, makes the altar visible from a
-    // distance even when partly occluded by trees.
+    // distance even when partly occluded by trees. Bigger / more opaque than
+    // a chest halo because altars are rare and you should be able to spot
+    // one from across a clearing.
     const halo = new THREE.Mesh(
-      new THREE.RingGeometry(1.4, 1.9, 28),
-      new THREE.MeshBasicMaterial({ color: ringColor, transparent: true, opacity: 0.25, side: THREE.DoubleSide })
+      new THREE.RingGeometry(1.8, 2.6, 28),
+      new THREE.MeshBasicMaterial({ color: ringColor, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
     );
     halo.rotation.x = -Math.PI / 2;
     halo.position.y = 0.02;
     grp.add(halo);
     this._halo = halo;
+
+    // Vertical light beam shooting up from the bowl. A semi-transparent thin
+    // cylinder scaled tall — same trick used for puzzle markers in plenty of
+    // arcade-style games. Helps players spot altars from far away even when
+    // trees occlude the ground halo.
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.05, 6.0, 10, 1, true),
+      new THREE.MeshBasicMaterial({ color: ringColor, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide })
+    );
+    beam.position.y = 4.0;
+    grp.add(beam);
+    this._beam = beam;
 
     grp.position.set(this.pos.x, 0, this.pos.z);
     return grp;
@@ -113,7 +127,11 @@ export class Altar {
     }
     if (this._halo) {
       this._halo.material.color.setHex(color);
-      this._halo.material.opacity = active ? 0.25 : 0.10;
+      this._halo.material.opacity = active ? 0.4 : 0.12;
+    }
+    if (this._beam) {
+      this._beam.material.color.setHex(color);
+      this._beam.material.opacity = active ? 0.18 : 0.04;
     }
   }
 

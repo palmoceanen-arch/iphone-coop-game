@@ -555,24 +555,31 @@ export class World {
       }
     }
 
-    // 9. Altar of the Ancients — rare item-management node. ~3% chance per
-    // non-origin chunk, far enough from any other point of interest so it
-    // reads as a discrete location worth detouring for. Spent altars dim
-    // visually so players can spot fresh ones from a distance.
-    if (!isOrigin && r.chance(0.03)) {
-      for (let i = 0; i < 16; i++) {
-        const x = minX + r.range(5, CHUNK_SIZE - 5);
-        const z = minZ + r.range(5, CHUNK_SIZE - 5);
-        if (isOnWater(x, z)) continue;
-        if (!this._spotClear(x, z, 1.6, colliders)) continue;
-        // Don't place an altar right on top of a chest cluster.
-        let nearChest = false;
-        for (const c of chestSpawns) {
-          if (Math.hypot(c.x - x, c.z - z) < 4) { nearChest = true; break; }
+    // 9. Altar of the Ancients — sampled from a low-frequency "altar
+    // suitability" noise field so spawning is fully deterministic from
+    // the world seed (same seed → same altar locations). The threshold
+    // gives roughly one altar every 4-5 non-origin chunks once you
+    // wander out of the start area, with natural clustering from the
+    // smoothed noise. Spent altars visually dim so players can tell
+    // active from depleted at a glance.
+    if (!isOrigin) {
+      // Offset coordinates so altar field doesn't align with water/biome noise.
+      const altarN = this.noise(cx * 1.31 + 7.13, cz * 1.31 + 3.71);
+      if (altarN > 0.78) {
+        for (let i = 0; i < 24; i++) {
+          const x = minX + r.range(4, CHUNK_SIZE - 4);
+          const z = minZ + r.range(4, CHUNK_SIZE - 4);
+          if (isOnWater(x, z)) continue;
+          if (!this._spotClear(x, z, 1.6, colliders)) continue;
+          // Don't place an altar right on top of a chest cluster.
+          let nearChest = false;
+          for (const c of chestSpawns) {
+            if (Math.hypot(c.x - x, c.z - z) < 3) { nearChest = true; break; }
+          }
+          if (nearChest) continue;
+          altarSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+          break;
         }
-        if (nearChest) continue;
-        altarSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
-        break;
       }
     }
 
