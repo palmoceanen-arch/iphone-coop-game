@@ -641,6 +641,7 @@ export class Game {
     this._drainPendingEnemySpawns();
     this._drainChestSpawns();
     this._drainBreakableSpawns();
+    this._drainAltarSpawns();
   }
 
   // Lazy-build and update a small billboarded HP-style bar above a downed
