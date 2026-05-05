@@ -19,7 +19,7 @@
 
 import * as THREE from 'three';
 import { TOON_GRADIENT } from './shading.js';
-import { vdist } from './utils.js';
+import { vdist, defaultRandom } from './utils.js';
 
 export const ALTAR_PROMPT_RADIUS = 2.4;
 export const ALTAR_USE_RADIUS = 1.6;
@@ -32,7 +32,7 @@ export class Altar {
     this.pos = { x, z };
     this.alive = true;
     this.charges = MAX_CHARGES;
-    this.bobT = Math.random() * Math.PI * 2;
+    this.bobT = defaultRandom() * Math.PI * 2;
     this._promptShown = false;
     this.mesh = this._buildMesh();
     scene.add(this.mesh);

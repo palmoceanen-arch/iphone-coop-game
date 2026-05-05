@@ -44,6 +44,27 @@ function sunsetBell(dayTime, centre, halfWidth = 1 / 6) {
 export const CHUNK_SIZE = 32;
 export const ACTIVE_RADIUS = 3;     // chunks generated/visible around each player (7×7)
 export const SIM_RADIUS    = 2;     // chunks within which enemies actively simulate (5×5)
+// Beyond ACTIVE_RADIUS we keep an extra ring of chunks loaded so the
+// player can wobble across a chunk border without immediately re-paying
+// the generation cost. Anything outside KEEP_RADIUS is unloaded — its
+// THREE.Group is removed from the scene, owned BufferGeometries are
+// disposed and the chunk record is dropped from the Map. Re-entering an
+// unloaded chunk regenerates it deterministically from the world seed
+// (chunkSeed(worldSeed, cx, cz)) so geometry / props / enemy camps
+// reproduce identically.
+export const KEEP_RADIUS = ACTIVE_RADIUS + 2;
+// Cap on synchronous chunk generations per `ensureChunksAround` call.
+// The first call (constructor) loads the immediate ring around the
+// origin so the player doesn't spawn into the void; everything else is
+// queued and amortised across subsequent frames in `processChunkQueue`.
+const SYNC_LOAD_RADIUS = 1;
+// How many queued chunks to materialise per `processChunkQueue` call.
+// Each chunk gen runs the marching-squares water mesh + dozens of
+// model clones, costing roughly 1-3ms on a low-end laptop, so 1 per
+// frame keeps the worst case under ~3ms while still draining the queue
+// fast enough that the visible 7×7 ring fills in within ~1s of walking
+// into a fresh region.
+const CHUNKS_PER_FRAME = 1;
 
 // Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
 // (WATER_GRID+1) grid of corners, then build a marching-squares mesh:
@@ -120,7 +141,7 @@ export class World {
     this.scene = scene;
     this.seed = seed >>> 0;
     this.noise = makeNoise(this.seed);
-    this.chunks = new Map();          // key="cx,cz" → { group, colliders, enemySpawns }
+    this.chunks = new Map();          // key="cx,cz" → { group, colliders, enemySpawns, _ownedGeos }
     this.activeKeys = new Set();      // chunk keys currently visible / receiving collision queries
     this.simKeys = new Set();         // chunk keys whose enemies actively simulate
     this.colliders = [];              // aggregated from active chunks only
@@ -128,6 +149,30 @@ export class World {
     this.chestSpawns = [];            // same idea but for procedural chests
     this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this.altarSpawns = [];            // ditto for altars (rare item-management nodes)
+    // ---- Chunk streaming (async load + safe unload) -------------------
+    // Async load queue. ensureChunksAround() pushes "needed but not yet
+    // generated" chunks here; processChunkQueue() drains a small budget
+    // per RAF tick to amortise the generation cost so a single frame
+    // never has to pay for the full 7×7 ring at once.
+    this._pendingLoads = [];
+    this._pendingSet = new Set();
+    // Persistent per-chunk consumption registry. When a player opens a
+    // chest / smashes a pot / depletes an altar the *position* of that
+    // spawn is recorded here, keyed by chunkKey. If the same chunk is
+    // unloaded and later regenerated (player wandering far and coming
+    // back), `_generateChunk` consults these sets and skips the
+    // already-consumed spawns. Enemies are intentionally NOT tracked
+    // here — they respawn fresh on chunk reload so re-entering an old
+    // region feels populated again. The save/load feature can persist
+    // these three sets to disk and the rest of the world rebuilds from
+    // the seed.
+    this._consumedChests = new Set();
+    this._consumedBreakables = new Set();
+    this._consumedAltars = new Set();
+    // Callback invoked when a chunk is unloaded; Game wires this up to
+    // despawn entities tied to that chunk (enemies, chests, etc.) so
+    // their THREE meshes are released alongside the chunk's group.
+    this._onChunkUnload = null;
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     // Pre-allocated colour temporaries for the per-frame sky tint blend.
@@ -235,9 +280,13 @@ export class World {
     this.campfire = ring;
   }
 
-  // Ensure every chunk within ACTIVE_RADIUS of (worldX, worldZ) has been
-  // generated. New chunks are added to scene immediately; their enemy spawn
-  // descriptors are queued for Game to instantiate.
+  // Ensure every chunk within ACTIVE_RADIUS of (worldX, worldZ) is at
+  // least *queued* for generation. The immediate ring around the
+  // requested position (Chebyshev distance ≤ SYNC_LOAD_RADIUS) is
+  // generated synchronously so the caller can stand on it without
+  // falling through; everything further out is enqueued and drained by
+  // `processChunkQueue` over subsequent frames. Already-loaded chunks
+  // are skipped, already-queued chunks are not duplicated.
   ensureChunksAround(worldX, worldZ) {
     const cx0 = Math.floor(worldX / CHUNK_SIZE);
     const cz0 = Math.floor(worldZ / CHUNK_SIZE);
@@ -246,35 +295,146 @@ export class World {
         const cx = cx0 + dx, cz = cz0 + dz;
         const key = `${cx},${cz}`;
         if (this.chunks.has(key)) continue;
-        const chunk = this._generateChunk(cx, cz);
-        this.chunks.set(key, chunk);
-        this.scene.add(chunk.group);
-        for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
-        if (chunk.chestSpawns) {
-          for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
-        }
-        if (chunk.breakableSpawns) {
-          for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
-        }
-        if (chunk.altarSpawns) {
-          for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
+        const cheb = Math.max(Math.abs(dx), Math.abs(dz));
+        if (cheb <= SYNC_LOAD_RADIUS) {
+          this._loadChunkSync(cx, cz);
+        } else {
+          this._enqueueChunk(cx, cz, cheb);
         }
       }
     }
   }
 
+  // Append (cx,cz) to the async load queue (sorted nearest-first so
+  // visible-but-not-yet-loaded chunks fill in toward the player). Cheap
+  // O(n) insertion — the queue is bounded by the number of pending
+  // chunks (≤ 49 per active player), so the linear scan is fine and
+  // avoids pulling in a heap dep.
+  _enqueueChunk(cx, cz, priority) {
+    const key = `${cx},${cz}`;
+    if (this.chunks.has(key) || this._pendingSet.has(key)) return;
+    this._pendingSet.add(key);
+    const entry = { cx, cz, key, priority };
+    let i = 0;
+    while (i < this._pendingLoads.length && this._pendingLoads[i].priority <= priority) i++;
+    this._pendingLoads.splice(i, 0, entry);
+  }
+
+  // Synchronously materialise the chunk, push its spawn descriptors
+  // onto the world-level queues and add the group to the scene.
+  _loadChunkSync(cx, cz) {
+    const key = `${cx},${cz}`;
+    if (this.chunks.has(key)) return;
+    this._pendingSet.delete(key);
+    const chunk = this._generateChunk(cx, cz);
+    this.chunks.set(key, chunk);
+    this.scene.add(chunk.group);
+    if (chunk.enemySpawns) for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
+    if (chunk.chestSpawns) for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
+    if (chunk.breakableSpawns) for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
+    if (chunk.altarSpawns) for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
+  }
+
+  // Drain up to `budget` queued chunks. Called once per game tick;
+  // `CHUNKS_PER_FRAME` keeps per-frame cost bounded so async streaming
+  // doesn't itself become a freeze source.
+  processChunkQueue(budget = CHUNKS_PER_FRAME) {
+    let loaded = 0;
+    while (loaded < budget && this._pendingLoads.length > 0) {
+      const next = this._pendingLoads.shift();
+      this._pendingSet.delete(next.key);
+      // Skip stale queue entries: a chunk may have been re-queued
+      // after the player walked away from it; if it's already loaded
+      // (another path), we just continue to the next pending entry
+      // without consuming budget.
+      if (this.chunks.has(next.key)) continue;
+      this._loadChunkSync(next.cx, next.cz);
+      loaded += 1;
+    }
+    return loaded;
+  }
+
+  // Remove a chunk from the world and dispose its owned GPU resources.
+  // Shared geometries / materials (cloned via `spawnProp` from the
+  // models cache) are NOT touched — only the per-chunk water mesh
+  // BufferGeometry, which is the one resource we allocate fresh per
+  // chunk. The chunk's THREE.Group is removed from the scene; its
+  // child Object3D nodes are eligible for GC once the group reference
+  // drops with `this.chunks.delete(key)`.
+  _disposeChunk(chunk) {
+    if (!chunk) return;
+    if (chunk.group) this.scene.remove(chunk.group);
+    if (chunk._ownedGeos) {
+      for (const g of chunk._ownedGeos) {
+        if (g && typeof g.dispose === 'function') g.dispose();
+      }
+      chunk._ownedGeos.length = 0;
+    }
+  }
+
+  // Walk every loaded chunk and unload anything outside KEEP_RADIUS of
+  // every player. Called from refreshActiveChunks() once per tick. The
+  // unload callback fires before the chunk record is dropped so Game
+  // can despawn the chunk's entities in lockstep.
+  _unloadFarChunks(playerCells) {
+    if (this.chunks.size === 0) return;
+    const toUnload = [];
+    for (const [key, chunk] of this.chunks) {
+      const cx = chunk.cx;
+      const cz = chunk.cz;
+      let minCheb = Infinity;
+      for (const cell of playerCells) {
+        const cheb = Math.max(Math.abs(cx - cell.cx), Math.abs(cz - cell.cz));
+        if (cheb < minCheb) minCheb = cheb;
+      }
+      if (minCheb > KEEP_RADIUS) toUnload.push(key);
+    }
+    for (const key of toUnload) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+      if (typeof this._onChunkUnload === 'function') {
+        try { this._onChunkUnload(key); } catch { /* ignore listener errors */ }
+      }
+      this._disposeChunk(chunk);
+      this.chunks.delete(key);
+    }
+  }
+
+  // Stable string key for a per-chunk spawn position. The world rounds
+  // (x, z) to one decimal so floating-point noise from the chunk RNG
+  // can't accidentally produce two different keys for what is logically
+  // the same spawn (the noise is deterministic but the rounded display
+  // is what we serialize for save/load).
+  spawnKey(chunkKey, x, z) {
+    return `${chunkKey}@${x.toFixed(1)},${z.toFixed(1)}`;
+  }
+
+  markChestConsumed(chunkKey, x, z) {
+    this._consumedChests.add(this.spawnKey(chunkKey, x, z));
+  }
+  markBreakableConsumed(chunkKey, x, z) {
+    this._consumedBreakables.add(this.spawnKey(chunkKey, x, z));
+  }
+  markAltarConsumed(chunkKey, x, z) {
+    this._consumedAltars.add(this.spawnKey(chunkKey, x, z));
+  }
+
   // Recompute which chunks are active (visible) and which actively simulate
   // their enemies, based on the centroid of all alive players. Cheap: just
-  // walks the existing chunks Map and toggles group.visible.
+  // walks the existing chunks Map and toggles group.visible. Also unloads
+  // any chunk that has wandered outside KEEP_RADIUS of every player so
+  // the chunks Map doesn't grow without bound.
   refreshActiveChunks(playerPositions) {
     if (!playerPositions || playerPositions.length === 0) return;
     // Union of active rectangles around each player.
     const wantActive = new Set();
     const wantSim = new Set();
+    const playerCells = [];
     let cxSum = 0, czSum = 0, n = 0;
     for (const p of playerPositions) {
       const pcx = Math.floor(p.x / CHUNK_SIZE);
       const pcz = Math.floor(p.z / CHUNK_SIZE);
+      playerCells.push({ cx: pcx, cz: pcz });
       cxSum += p.x; czSum += p.z; n++;
       for (let dz = -ACTIVE_RADIUS; dz <= ACTIVE_RADIUS; dz++) {
         for (let dx = -ACTIVE_RADIUS; dx <= ACTIVE_RADIUS; dx++) {
@@ -289,6 +449,10 @@ export class World {
     }
     this.activeKeys = wantActive;
     this.simKeys = wantSim;
+    // Drop chunks the players have left far behind. Done before the
+    // visibility flip / collider rebuild so we don't waste a tick
+    // touching about-to-be-deleted records.
+    this._unloadFarChunks(playerCells);
     // Toggle visibility of every loaded chunk (cheap: bool flip).
     for (const [key, chunk] of this.chunks) {
       const vis = wantActive.has(key);
@@ -329,6 +493,7 @@ export class World {
 
   _generateChunk(cx, cz) {
     const r = makeRng(chunkSeed(this.seed, cx, cz));
+    const chunkKey = `${cx},${cz}`;
     const minX = cx * CHUNK_SIZE;
     const minZ = cz * CHUNK_SIZE;
     const group = new THREE.Group();
@@ -338,6 +503,11 @@ export class World {
     const chestSpawns = [];
     const breakableSpawns = [];
     const altarSpawns = [];
+    // BufferGeometries we own (fresh-allocated for this chunk and not
+    // returned to a shared cache). Currently just the marching-squares
+    // water mesh, but the array is generic so future per-chunk meshes
+    // can hook in. `_disposeChunk` walks this list on unload.
+    const ownedGeos = [];
 
     const isOrigin = (cx === 0 && cz === 0);
     const clearingR = isOrigin ? 9 : 0;
@@ -351,7 +521,13 @@ export class World {
     // each cell edge. The origin chunk stays water-free so the campfire /
     // starting area is always usable on land.
     const waterMesh = isOrigin ? null : this._buildSmoothWaterMesh(minX, minZ);
-    if (waterMesh) group.add(waterMesh);
+    if (waterMesh) {
+      group.add(waterMesh);
+      // The water BufferGeometry is uniquely allocated for this chunk
+      // (the material is shared in `this._waterMaterial`), so register
+      // it for disposal when the chunk unloads.
+      if (waterMesh.geometry) ownedGeos.push(waterMesh.geometry);
+    }
     const isOnWater = (x, z) => {
       if (isOrigin && Math.hypot(x, z) < 12) return false; // protect spawn
       return this.isWaterAt(x, z);
@@ -482,10 +658,17 @@ export class World {
         if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
         if (isOnWater(x, z)) continue;
         if (!this._spotClear(x, z, radius, colliders)) continue;
+        // Skip spawn if the player previously consumed this point
+        // (chest opened, pot smashed). The chunk's RNG still advances
+        // identically — we just don't push the descriptor — so all
+        // later random rolls in this chunk stay deterministic.
+        const sk = this.spawnKey(chunkKey, x, z);
         if (kind === 'chest') {
-          out.push({ x, z, chunkKey: `${cx},${cz}` });
+          if (this._consumedChests.has(sk)) return true;
+          out.push({ x, z, chunkKey });
         } else {
-          out.push({ x, z, kind, chunkKey: `${cx},${cz}` });
+          if (this._consumedBreakables.has(sk)) return true;
+          out.push({ x, z, kind, chunkKey });
         }
         return true;
       }
@@ -509,7 +692,9 @@ export class World {
           const z = minZ + r.range(4, CHUNK_SIZE - 4);
           if (isOnWater(x, z)) continue;
           if (!this._spotClear(x, z, 1.0, colliders)) continue;
-          chestSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+          if (!this._consumedChests.has(this.spawnKey(chunkKey, x, z))) {
+            chestSpawns.push({ x, z, chunkKey });
+          }
           break;
         }
       }
@@ -541,7 +726,8 @@ export class World {
         if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
         if (isOnWater(x, z)) continue;
         if (!this._spotClear(x, z, 0.7, colliders)) continue;
-        breakableSpawns.push({ x, z, kind: 'pot', chunkKey: `${cx},${cz}` });
+        if (this._consumedBreakables.has(this.spawnKey(chunkKey, x, z))) continue;
+        breakableSpawns.push({ x, z, kind: 'pot', chunkKey });
       }
       const freeCrateAttempts = 1;
       for (let i = 0; i < freeCrateAttempts; i++) {
@@ -551,7 +737,8 @@ export class World {
         if (clearingR > 0 && localCenter(x, z) < clearingR) continue;
         if (isOnWater(x, z)) continue;
         if (!this._spotClear(x, z, 0.85, colliders)) continue;
-        breakableSpawns.push({ x, z, kind: 'crate', chunkKey: `${cx},${cz}` });
+        if (this._consumedBreakables.has(this.spawnKey(chunkKey, x, z))) continue;
+        breakableSpawns.push({ x, z, kind: 'crate', chunkKey });
       }
     }
 
@@ -577,13 +764,25 @@ export class World {
             if (Math.hypot(c.x - x, c.z - z) < 3) { nearChest = true; break; }
           }
           if (nearChest) continue;
-          altarSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
+          if (!this._consumedAltars.has(this.spawnKey(chunkKey, x, z))) {
+            altarSpawns.push({ x, z, chunkKey });
+          }
           break;
         }
       }
     }
 
-    return { group, colliders, enemySpawns, chestSpawns, breakableSpawns, altarSpawns, cx, cz };
+    return {
+      group,
+      colliders,
+      enemySpawns,
+      chestSpawns,
+      breakableSpawns,
+      altarSpawns,
+      cx,
+      cz,
+      _ownedGeos: ownedGeos,
+    };
   }
 
   // True if the world position (x, z) is currently under water. Sampled

@@ -18,6 +18,7 @@
 // state beyond their effects (damage, buffs, projectiles).
 
 import * as THREE from 'three';
+import { defaultRandom } from './utils.js';
 import {
   elementDamageMult,
   freezeDurationBonus,
@@ -255,9 +256,9 @@ export const ABILITIES = [
         const steps = Math.max(3, Math.ceil(bestD * 2));
         for (let s = 0; s < steps; s++) {
           const t = s / steps;
-          const bx = from.x + (best.pos.x - from.x) * t + (Math.random() - 0.5) * 0.4;
-          const bz = from.z + (best.pos.z - from.z) * t + (Math.random() - 0.5) * 0.4;
-          ctx.effects.burst(bx, 1.0 + Math.random() * 0.5, bz, 0xfff7a0, 1, 2, 0.2);
+          const bx = from.x + (best.pos.x - from.x) * t + (defaultRandom() - 0.5) * 0.4;
+          const bz = from.z + (best.pos.z - from.z) * t + (defaultRandom() - 0.5) * 0.4;
+          ctx.effects.burst(bx, 1.0 + defaultRandom() * 0.5, bz, 0xfff7a0, 1, 2, 0.2);
         }
         ctx.effects.flashSphere(best.pos.x, 1.0, best.pos.z, 0xfff7a0, 0.6, 0.2);
         ctx.effects.ring(best.pos.x, 0.05, best.pos.z, 0xfff7a0, 1.2, 0.25);
@@ -350,5 +351,5 @@ export const ABILITIES = [
 export const ABILITY_BY_ID = Object.fromEntries(ABILITIES.map(a => [a.id, a]));
 
 export function pickRandomAbilityId() {
-  return ABILITIES[Math.floor(Math.random() * ABILITIES.length)].id;
+  return ABILITIES[Math.floor(defaultRandom() * ABILITIES.length)].id;
 }

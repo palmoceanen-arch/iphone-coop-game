@@ -1,3 +1,5 @@
+import { defaultRandom } from './utils.js';
+
 // Stacking passive items (Risk of Rain style).
 //
 // Каждый предмет имеет набор хуков — onAttack / onHit / onTakeDamage /
@@ -23,9 +25,11 @@ export const RARITY = {
 export const RARITY_ORDER = ['common', 'uncommon', 'rare', 'legendary'];
 export const MAX_STACKS = 5;
 
-// Lightweight RNG using Math.random; a seeded variant could be added later.
-function rng() { return Math.random(); }
-function chance(p) { return Math.random() < p; }
+// Lightweight RNG bound to the world-seeded default RNG (utils.defaultRandom).
+// Routing item rolls through it makes loot tables reproducible for a given
+// world seed, which is required for the upcoming save/load feature.
+function rng() { return defaultRandom(); }
+function chance(p) { return defaultRandom() < p; }
 
 // Helper: distance between two players (used by coop items).
 function partnerDist(player, ctx) {
@@ -397,9 +401,9 @@ export function pickRandomItemIdInRarityExcept(rarity, excludeId) {
   if (pool.length === 0) {
     const fallback = ITEMS.filter(it => it.rarity === rarity);
     if (fallback.length === 0) return null;
-    return fallback[Math.floor(Math.random() * fallback.length)].id;
+    return fallback[Math.floor(defaultRandom() * fallback.length)].id;
   }
-  return pool[Math.floor(Math.random() * pool.length)].id;
+  return pool[Math.floor(defaultRandom() * pool.length)].id;
 }
 
 // Next-rarity-up id used by altar fuse. Returns null if `rarity` has no upgrade.

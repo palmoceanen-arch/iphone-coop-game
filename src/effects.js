@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { rand } from './utils.js';
+import { rand, defaultRandom } from './utils.js';
 
 // Pool of small particle bursts and a few helpers for hit feedback.
 export class Effects {
@@ -25,6 +25,14 @@ export class Effects {
     // shape is identical for every burst, so a single buffer that lives for
     // the page lifetime is strictly cheaper.
     this._burstGeo = new THREE.SphereGeometry(0.12, 6, 6);
+    // Per-colour pool of MeshBasicMaterial instances reused across
+    // bursts. Each particle still owns its own material so its
+    // opacity can fade independently, but recycling them avoids the
+    // ~120 mat allocations / second that combat used to churn through
+    // (each one schedules a GPU upload + a dispose). Keyed by colour
+    // because opacity / transparency settings are uniform across
+    // particles.
+    this._matPool = new Map();
     // Reusable Vector3 for screen-space projection of floating damage
     // numbers. The previous code did `world.clone().project(camera)` every
     // frame for every active number, allocating a Vector3 per number per
@@ -34,26 +42,47 @@ export class Effects {
 
   setParticleScale(s) { this.particleScale = Math.max(0, Math.min(2, Number(s) || 0)); }
 
+  // Acquire a particle material from the pool (or create one if empty).
+  // Reset opacity so a recycled mat starts the fade at 1.
+  _acquireParticleMat(color) {
+    const free = this._matPool.get(color);
+    if (free && free.length > 0) {
+      const m = free.pop();
+      m.opacity = 1;
+      return m;
+    }
+    return new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
+  }
+
+  _releaseParticleMat(mat) {
+    // Cap the per-colour pool so a long combat session doesn't grow
+    // it unbounded (~64 mats per colour is enough to cover any
+    // realistic single-frame burst).
+    let free = this._matPool.get(mat.color.getHex());
+    if (!free) {
+      free = [];
+      this._matPool.set(mat.color.getHex(), free);
+    }
+    if (free.length < 64) free.push(mat);
+    else mat.dispose();
+  }
+
   burst(x, y, z, color = 0xffe28a, count = 12, speed = 6, life = 0.45) {
     count = Math.max(0, Math.round(count * this.particleScale));
     if (count === 0) return;
-    // Geometry is shared globally (`_burstGeo`); the material is still
-    // per-particle so each particle can fade its opacity independently.
-    const baseMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
     for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(this._burstGeo, baseMat.clone());
+      const m = new THREE.Mesh(this._burstGeo, this._acquireParticleMat(color));
       m.position.set(x, y, z);
       this.scene.add(m);
-      const a = Math.random() * Math.PI * 2;
+      const a = defaultRandom() * Math.PI * 2;
       const s = rand(speed * 0.4, speed);
       this.particles.push({
         mesh: m,
         vx: Math.cos(a) * s, vy: rand(2, 5), vz: Math.sin(a) * s,
-        life: 0, ttl: life * (0.7 + Math.random() * 0.6),
+        life: 0, ttl: life * (0.7 + defaultRandom() * 0.6),
         scale: 1.0,
       });
     }
-    baseMat.dispose();
   }
 
   ring(x, y, z, color = 0xffffff, radius = 1.5, life = 0.35) {
@@ -338,9 +367,10 @@ export class Effects {
       const t = p.life / p.ttl;
       if (t >= 1) {
         this.scene.remove(p.mesh);
-        // Geometry is shared (this._burstGeo) so we only dispose the
-        // per-particle material; the geometry lives for the page lifetime.
-        p.mesh.material.dispose();
+        // Geometry is shared (this._burstGeo); the material is
+        // returned to the per-colour pool for the next burst to
+        // reuse instead of disposed and re-allocated.
+        this._releaseParticleMat(p.mesh.material);
         this.particles.splice(i, 1);
         continue;
       }

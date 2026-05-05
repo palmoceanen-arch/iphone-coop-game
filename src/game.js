@@ -9,7 +9,7 @@ import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
 import { Input } from './input.js';
 import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
-import { vdist, clamp, hashString } from './utils.js';
+import { vdist, clamp, hashString, setDefaultSeed, defaultRandom, compactInPlace } from './utils.js';
 import { getSettings } from './settings.js';
 import { PauseMenu } from './pause.js';
 import {
@@ -34,6 +34,18 @@ const LEASH_DRAIN = 14;
 const REVIVE_RANGE = 2.5;        // metres
 const REVIVE_HOLD = 2.0;         // seconds of dashHeld required
 const REVIVE_HP = 0.5;           // fraction of maxHP after revive
+
+// Fixed simulation timestep used by Game._loop. 1/60s mirrors the
+// historical RAF cadence so balance / feel doesn't shift, while still
+// giving us a deterministic step size that's independent of monitor
+// refresh rate (60/120/144 Hz panels all advance the simulation at the
+// same rate).
+const FIXED_DT = 1 / 60;
+// Cap how many fixed-steps we may catch up in a single RAF callback.
+// A long stall (e.g. 1s freeze on tab restore) would otherwise queue 60
+// steps and freeze the page further; instead we discard the surplus and
+// move on.
+const MAX_STEPS_PER_FRAME = 5;
 
 // Heuristic to detect mobile / integrated GPUs that may struggle with
 // shadow mapping or aggressive WebGL options.
@@ -113,6 +125,11 @@ export class Game {
     this.scene = new THREE.Scene();
     const seedInfo = opts.seed ? { display: String(opts.seed), value: hashString(String(opts.seed)) } : getSeedFromUrl();
     this.seedDisplay = seedInfo.display;
+    // Seed the runtime RNG (utils.defaultRandom / rand / chance / pick) from
+    // the world seed so gameplay rolls (drop chance, damage variance, AI
+    // wander, particle directions for gameplay effects, etc.) replay
+    // identically when a save with the same seed is loaded.
+    setDefaultSeed(seedInfo.value ^ 0xC0FFEE);
     this.world = new World(this.scene, seedInfo.value);
     this.followCam = new FollowCamera(this.canvas);
 
@@ -144,6 +161,14 @@ export class Game {
 
     this.altarUI = new AltarUI();
     this.altarOpen = false;
+
+    // When the world streams a chunk out we need to despawn any
+    // entities that lived inside it so their THREE meshes are
+    // released alongside the chunk's group. Living-but-unloaded
+    // entities are dropped (they'll respawn when the chunk reloads
+    // because they aren't in the consumed sets); destroyed entities
+    // were already marked consumed during their normal cleanup pass.
+    this.world._onChunkUnload = (key) => this._despawnChunkEntities(key);
 
     this._spawnInitialEnemies();
     this._drainChestSpawns();
@@ -195,6 +220,13 @@ export class Game {
     // start screen
     this._waitingForStart = true;
     this._lastT = performance.now();
+    // Fixed-timestep accumulator. Game logic always advances in slices of
+    // exactly FIXED_DT seconds so simulation is reproducible from a seed
+    // independent of frame rate. Rendering still happens once per RAF
+    // tick; only `update(dt)` runs at the fixed rate, with up to
+    // MAX_STEPS_PER_FRAME steps per frame to absorb hitches without
+    // letting the queue spiral unbounded.
+    this._fixedAccum = 0;
     requestAnimationFrame((t) => this._loop(t));
   }
 
@@ -467,6 +499,9 @@ export class Game {
     while (this.world.chestSpawns.length > 0) {
       const s = this.world.chestSpawns.shift();
       const c = new Chest(this.scene, s.x, s.z);
+      // chunkKey is stamped onto the entity so chunk-unload streaming
+      // can despawn it without rebuilding a spatial index.
+      c.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
       this.chests.push(c);
     }
   }
@@ -476,6 +511,7 @@ export class Game {
     while (this.world.breakableSpawns.length > 0) {
       const s = this.world.breakableSpawns.shift();
       const b = new Breakable(this.scene, s.x, s.z, s.kind);
+      b.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
       this.breakables.push(b);
     }
   }
@@ -485,8 +521,45 @@ export class Game {
     while (this.world.altarSpawns.length > 0) {
       const s = this.world.altarSpawns.shift();
       const a = new Altar(this.scene, s.x, s.z);
+      a.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
       this.altars.push(a);
     }
+  }
+
+  // Despawn every entity tied to `chunkKey`. Invoked by World when a
+  // far chunk is unloaded; living entities just disappear (their
+  // chunkKey is recomputed from current position so a wandering enemy
+  // moves with the chunk grid) and dead-but-not-yet-cleaned entities
+  // are released so their meshes drop out of the scene at the same
+  // time as the rest of the chunk's geometry.
+  _despawnChunkEntities(chunkKey) {
+    // Enemies: chunkKey is recomputed in enemy.update() as they walk,
+    // so the only enemies still tagged with `chunkKey` are ones that
+    // were inside the chunk's footprint at the time of unload.
+    compactInPlace(
+      this.enemies,
+      e => e.chunkKey !== chunkKey,
+      e => { try { this.world.scene.remove(e.mesh); } catch { /* ignore */ } },
+    );
+    // Chests / breakables / altars don't move, so the chunkKey set at
+    // spawn time is authoritative. Living-but-unloaded chests &
+    // breakables aren't marked consumed — they'll respawn fresh on
+    // chunk reload.
+    compactInPlace(
+      this.chests,
+      c => c.chunkKey !== chunkKey,
+      c => { c._destroy?.(); },
+    );
+    compactInPlace(
+      this.breakables,
+      b => b.chunkKey !== chunkKey,
+      b => { b.destroyMesh?.(); },
+    );
+    compactInPlace(
+      this.altars,
+      a => a.chunkKey !== chunkKey,
+      a => { a.destroyMesh?.(); },
+    );
   }
 
   // ---- Altar interaction ------------------------------------------
@@ -599,10 +672,10 @@ export class Game {
   // item rune. Plays a small particle burst + ring + bomb sfx so the
   // destruction reads visually and audibly.
   _onBreakableDestroyed(b) {
-    const dropFood = Math.random() < b.foodChance;
+    const dropFood = defaultRandom() < b.foodChance;
     const drops = spawnDrops(this.scene, b.pos.x, b.pos.z, b.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
-    if (b.itemDropChance > 0 && Math.random() < b.itemDropChance) {
+    if (b.itemDropChance > 0 && defaultRandom() < b.itemDropChance) {
       const id = pickRandomItemId();
       if (id) {
         const r = new Rune(this.scene, b.pos.x, b.pos.z, 'item', id);
@@ -629,6 +702,12 @@ export class Game {
   // Walk every loaded player position and ask the world to materialise any
   // missing chunks around them; then update the active chunk set so far-off
   // chunks are hidden + their entities frozen. Cheap.
+  //
+  // ensureChunksAround() now only synchronously generates the immediate
+  // ring around each player and queues the rest; processChunkQueue()
+  // drains a small budget per frame so a fresh region streams in
+  // without a multi-frame freeze, and refreshActiveChunks() handles
+  // unloading anything outside KEEP_RADIUS.
   _streamChunks() {
     if (!this.players) return;
     const positions = [];
@@ -637,6 +716,7 @@ export class Game {
       this.world.ensureChunksAround(p.pos.x, p.pos.z);
       positions.push({ x: p.pos.x, z: p.pos.z });
     }
+    this.world.processChunkQueue();
     this.world.refreshActiveChunks(positions);
     this._drainPendingEnemySpawns();
     this._drainChestSpawns();
@@ -699,7 +779,7 @@ export class Game {
     const weaponMult = player._activeSwing?.damageMult
       ?? player.weaponProfile?.damageMult
       ?? 1.0;
-    let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult * weaponMult;
+    let dmg = player.stats.damage * (1 + defaultRandom() * 0.05) * ctx.dmgMult * weaponMult;
     if (player._berserk) dmg *= player._berserk.dmg;
     ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
@@ -715,7 +795,7 @@ export class Game {
 
   _onEnemyDies(killer, enemy) {
     this.totalKills += 1;
-    const dropFood = Math.random() < 0.18;
+    const dropFood = defaultRandom() < 0.18;
     const drops = spawnDrops(this.scene, enemy.pos.x, enemy.pos.z, enemy.gold, dropFood);
     for (const d of drops) this.pickups.push(d);
     // Elites guarantee an item rune drop. Random rarity weighted by the
@@ -746,12 +826,35 @@ export class Game {
   }
 
   _loop(t) {
-    const dt0 = Math.min(0.05, (t - this._lastT) / 1000) || 0;
+    // Wall-clock delta — clamped so a tab-resume freeze doesn't queue
+    // dozens of fixed steps at once.
+    const dt0 = Math.min(0.25, (t - this._lastT) / 1000) || 0;
     this._lastT = t;
-    let dt = dt0;
-    if (this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this._waitingForStart || this.dead) dt = 0;
-    else if (this.effects.hitStop > 0) dt *= 0.15;
-    this.update(dt, dt0);
+
+    // Run zero-dt update once each RAF so UI / FX timers (camera shake
+    // decay, FPS counter, FX pulses, input event drain, shop UI) tick
+    // even when the simulation is paused. Inside Game.update() the
+    // dt<=0 branch handles this case explicitly.
+    const sleeping = this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this._waitingForStart || this.dead;
+    if (sleeping) {
+      this._fixedAccum = 0;
+      this.update(0, dt0);
+    } else {
+      // Fixed-step simulation. Hit-stop scales the consumption rate of
+      // the accumulator instead of the dt fed into update() so the
+      // physics step itself stays a constant size — only the apparent
+      // game speed slows.
+      const consumeRate = this.effects.hitStop > 0 ? 0.15 : 1;
+      this._fixedAccum += dt0 * consumeRate;
+      let steps = 0;
+      while (this._fixedAccum >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+        this.update(FIXED_DT, dt0);
+        this._fixedAccum -= FIXED_DT;
+        steps += 1;
+      }
+      // If we hit the budget cap, drop the carry so we don't spiral.
+      if (steps >= MAX_STEPS_PER_FRAME) this._fixedAccum = 0;
+    }
     this.render();
     this._updateFps(dt0);
     requestAnimationFrame((tt) => this._loop(tt));
@@ -873,16 +976,17 @@ export class Game {
         e._deathCredit = null;
       }
     }
-    // Cleanup dead enemies
-    this.enemies = this.enemies.filter(e => e.alive);
+    // Cleanup dead enemies (in-place compaction; the filter() variant
+    // allocated a fresh array every tick at 60fps).
+    compactInPlace(this.enemies, e => e.alive);
 
     // Projectiles
     for (const pr of this.projectiles) pr.update(dt, this.players, this.world);
-    this.projectiles = this.projectiles.filter(pr => pr.alive);
+    compactInPlace(this.projectiles, pr => pr.alive);
 
     // Ability projectiles (hit enemies AND breakables, not players)
     for (const ap of this.abilityProjectiles) ap.update(dt, damageables, this.effects, this.sound, this.world);
-    this.abilityProjectiles = this.abilityProjectiles.filter(ap => ap.alive);
+    compactInPlace(this.abilityProjectiles, ap => ap.alive);
 
     // Credit kills from ability projectiles and instant-damage abilities
     for (const e of this.enemies) {
@@ -891,29 +995,36 @@ export class Game {
         e._deathCredit = null;
       }
     }
-    this.enemies = this.enemies.filter(e => e.alive);
+    compactInPlace(this.enemies, e => e.alive);
 
     // Pickups
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
-    this.pickups = this.pickups.filter(pk => pk.alive);
+    compactInPlace(this.pickups, pk => pk.alive);
 
-    // Chests + runes
+    // Chests + runes. When a chest finishes its open animation and
+    // self-destroys we record its position in the world's consumed-set
+    // so a later regeneration of the same chunk doesn't spawn a fresh
+    // chest in the same spot.
     for (const c of this.chests) c.update(dt, this.players, this.sound, this.effects, (rune) => this.runes.push(rune));
-    this.chests = this.chests.filter(c => c.alive);
+    compactInPlace(this.chests, c => c.alive, c => {
+      if (c.chunkKey) this.world.markChestConsumed(c.chunkKey, c.pos.x, c.pos.z);
+    });
     for (const r of this.runes) r.update(dt, this.players, this.sound, this.effects);
-    this.runes = this.runes.filter(r => r.alive);
+    compactInPlace(this.runes, r => r.alive);
 
     // Breakables: idle wobble, then drain anything destroyed this frame and
-    // emit its drops + sfx + visual burst. Iterating from the end lets us
-    // splice without skipping.
+    // emit its drops + sfx + visual burst. Compact in-place and mark
+    // each destroyed breakable's spawn point consumed so chunk reload
+    // doesn't respawn a freshly-smashed pot.
     for (const b of this.breakables) b.update(dt);
-    for (let i = this.breakables.length - 1; i >= 0; i--) {
-      const b = this.breakables[i];
-      if (!b.alive) {
+    compactInPlace(
+      this.breakables,
+      b => b.alive,
+      b => {
         this._onBreakableDestroyed(b);
-        this.breakables.splice(i, 1);
-      }
-    }
+        if (b.chunkKey) this.world.markBreakableConsumed(b.chunkKey, b.pos.x, b.pos.z);
+      },
+    );
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
@@ -928,7 +1039,7 @@ export class Game {
         }
       }
       // subtle warn sound at intervals
-      if (Math.floor(this.elapsed * 2) % 2 === 0 && Math.random() < 0.05) {
+      if (Math.floor(this.elapsed * 2) % 2 === 0 && defaultRandom() < 0.05) {
         this.sound.tone({ freq: 240, type: 'sawtooth', dur: 0.2, gain: 0.15, slide: -50 });
       }
     }

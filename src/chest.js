@@ -10,7 +10,7 @@ import { TOON_GRADIENT } from './shading.js';
 import { Rune } from './runes.js';
 import { pickRandomItemId } from './items.js';
 import { pickRandomAbilityId } from './abilities.js';
-import { vdist } from './utils.js';
+import { vdist, defaultRandom } from './utils.js';
 
 const PROMPT_RADIUS = 2.2;
 const OPEN_RADIUS = 1.2;
@@ -21,7 +21,7 @@ export class Chest {
     this.pos = { x, z };
     this.alive = true;
     this.opened = false;
-    this.bobT = Math.random() * Math.PI * 2;
+    this.bobT = defaultRandom() * Math.PI * 2;
     this.mesh = this._buildMesh();
     scene.add(this.mesh);
     this._promptShown = false;
@@ -91,7 +91,7 @@ export class Chest {
       this._lid.position.z = -0.18;
     }
     // 70% item, 30% ability
-    const isAbility = Math.random() < 0.3;
+    const isAbility = defaultRandom() < 0.3;
     const id = isAbility ? pickRandomAbilityId() : pickRandomItemId();
     const rune = new Rune(this.scene, this.pos.x + 0.8, this.pos.z + 0.2, isAbility ? 'ability' : 'item', id);
     onSpawnRune?.(rune);

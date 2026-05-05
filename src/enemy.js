@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { vdist } from './utils.js';
+import { vdist, defaultRandom } from './utils.js';
 import { spawnCharacter, crossFadeTo } from './models.js';
 
 // Map each enemy archetype to a CC0 character model + per-kind tint, scale,
@@ -339,11 +339,11 @@ export class Enemy {
             this.stateTimer = 0;
           }
         } else {
-          const ang = Math.random() * Math.PI * 2;
-          const rad = 1.5 + Math.random() * 3.5;
+          const ang = defaultRandom() * Math.PI * 2;
+          const rad = 1.5 + defaultRandom() * 3.5;
           this.wanderTarget.x = this.home.x + Math.cos(ang) * rad;
           this.wanderTarget.z = this.home.z + Math.sin(ang) * rad;
-          this.wanderTimer = 2 + Math.random() * 3;
+          this.wanderTimer = 2 + defaultRandom() * 3;
         }
       }
       if (dw > 0.05) {

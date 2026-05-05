@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { ITEM_BY_ID, RARITY } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
-import { vdist } from './utils.js';
+import { vdist, defaultRandom } from './utils.js';
 
 const ITEM_MAGNET_RADIUS = 2.4;
 const ITEM_PICKUP_RADIUS = 0.8;
@@ -26,7 +26,7 @@ export class Rune {
     this.alive = true;
     this.life = 60;            // seconds before despawn (long, since rare)
     this._pickupCooldown = 0.5; // prevents instant pickup on same frame as chest open
-    this.bobT = Math.random() * Math.PI * 2;
+    this.bobT = defaultRandom() * Math.PI * 2;
     this.color = this._pickColor();
     this.mesh = this._buildMesh();
     scene.add(this.mesh);

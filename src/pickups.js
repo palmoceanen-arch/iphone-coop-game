@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { vdist, rand } from './utils.js';
+import { vdist, rand, defaultRandom } from './utils.js';
 import { TOON_GRADIENT } from './shading.js';
 
 const FOOD_TYPES = [
@@ -17,7 +17,7 @@ export class Pickup {
     this.value = value;
     this.life = 18; // seconds before despawn
     this.alive = true;
-    this.bobT = Math.random() * Math.PI * 2;
+    this.bobT = defaultRandom() * Math.PI * 2;
     this.mesh = this._buildMesh();
     scene.add(this.mesh);
   }
@@ -30,7 +30,7 @@ export class Pickup {
       grp.position.set(this.pos.x, 0.7, this.pos.z);
       return grp;
     } else {
-      const food = this.foodType || (this.foodType = FOOD_TYPES[Math.floor(Math.random() * FOOD_TYPES.length)]);
+      const food = this.foodType || (this.foodType = FOOD_TYPES[Math.floor(defaultRandom() * FOOD_TYPES.length)]);
       const grp = new THREE.Group();
       const m = new THREE.Mesh(new THREE.IcosahedronGeometry(food.scale, 0), new THREE.MeshToonMaterial({ color: food.color, gradientMap: TOON_GRADIENT }));
       m.castShadow = true;

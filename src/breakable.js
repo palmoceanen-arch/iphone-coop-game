@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import { TOON_GRADIENT } from './shading.js';
 import { spawnBreakable } from './models.js';
+import { defaultRandom } from './utils.js';
 
 const POT_GOLD = [2, 5];
 const CRATE_GOLD = [3, 7];
@@ -47,7 +48,7 @@ export class Breakable {
     this.itemDropChance = kind === 'pot' ? 0 : CRATE_ITEM_CHANCE;
     this.foodChance = kind === 'pot' ? 0.06 : 0.10;
     this.isBreakable = true;
-    this._wobbleT = Math.random() * Math.PI * 2;
+    this._wobbleT = defaultRandom() * Math.PI * 2;
     this.mesh = this._buildMesh();
     this.scene.add(this.mesh);
   }
