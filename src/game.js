@@ -3,7 +3,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Projectile } from './projectile.js';
-import { spawnDrops } from './pickups.js';
+import { spawnDrops, spawnHarvestDrops } from './pickups.js';
 import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
@@ -24,6 +24,9 @@ import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
+import { Resource, harvestYield } from './resource.js';
+import { Structure, RECIPES, buildStructureMesh } from './structure.js';
+import { BuildController } from './buildMode.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { iconHTML } from './icons.js';
@@ -134,6 +137,10 @@ export class Game {
     this.followCam = new FollowCamera(this.canvas);
 
     this.sound = new Sound();
+    // Hand the world to the audio layer so its `updateAmbient` can probe
+    // for nearby water and read the live day-weight without us threading
+    // the world through every call.
+    this.sound.setWorld(this.world);
     this.input = new Input();
     this.effects = new Effects(this.scene, this.followCam.cam);
 
@@ -158,6 +165,20 @@ export class Game {
     this.chests = []; // procedurally placed treasure chests
     this.breakables = []; // pots / crates scattered through chunks
     this.altars = []; // rare item-management altars
+    this.resources = []; // harvestable trees / rocks (damageable resource nodes)
+    this.structures = []; // player-placed structures (fences / walls / gates / planters)
+    // One BuildController per player, lazily activated when the player
+    // presses a recipe-select key. Stays alive across the session so the
+    // player's last-used recipe / yaw is preserved when they re-enter.
+    this.builders = [];
+    // Shared resource pool — wood / stone / seeds. Both players share this
+    // because building consumes from the world (unlike personal gold which
+    // each player spends on their own upgrades). Future M3 farming will
+    // populate `seeds` from chests; for now it stays at 0.
+    // The structure also lives on `this.world.resources` so other modules
+    // (e.g. pickups) and any future save-system entry point can reach it
+    // through a single canonical pointer.
+    this.world.resources = { wood: 0, stone: 0, seeds: 0 };
 
     this.altarUI = new AltarUI();
     this.altarOpen = false;
@@ -174,7 +195,16 @@ export class Game {
     this._drainChestSpawns();
     this._drainBreakableSpawns();
     this._drainAltarSpawns();
+    this._drainResourceSpawns();
+    this._drainStructureSpawns();
     this._spawnStarterChest();
+    // Build the per-player build controllers now that scene + world are
+    // ready. Construction is cheap; ghost meshes are spawned lazily on
+    // first recipe-select.
+    this.builders = [
+      new BuildController(this.scene, this.world, this.players[0]),
+      new BuildController(this.scene, this.world, this.players[1]),
+    ];
 
     this.totalKills = 0;
     this.elapsed = 0;
@@ -448,9 +478,26 @@ export class Game {
     for (const c of this.chests) { c._destroy?.(); }
     for (const b of this.breakables) { b.destroyMesh?.(); }
     for (const a of this.altars) { a.destroyMesh?.(); }
+    // Resources own no THREE meshes themselves (the chunk owns them); we
+    // only need to drop the references so on chunk reload they get
+    // re-wrapped fresh. The chunk-resident meshes will reappear naturally
+    // when the player walks back into the area.
     if (this.altarUI?.isOpen) this.altarUI.close();
     this.altarOpen = false;
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = [];
+    // Structures: detach their meshes from chunk groups so the rebuilt
+    // chunks don't carry stale wall geometry, and clear the persistent
+    // placedStructures map so a fresh run starts with no fortress.
+    for (const s of this.structures) { s.destroyMesh?.(); s.removeCollider?.(); }
+    if (this.world?.placedStructures) this.world.placedStructures.clear();
+    if (this.world?.structureSpawns) this.world.structureSpawns.length = 0;
+    // Exit any active build mode so ghost previews don't outlive the run.
+    for (const b of this.builders || []) { b?.exit?.(); }
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = []; this.structures = [];
+    if (this.world?.resources) {
+      this.world.resources.wood = 0;
+      this.world.resources.stone = 0;
+      this.world.resources.seeds = 0;
+    }
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
@@ -550,6 +597,60 @@ export class Game {
     }
   }
 
+  // Wrap each tree / rock the world generated this frame in a Resource
+  // entity so the damageables pipeline can hit them. The chunk already
+  // mounted the visual mesh inside its group; we just take a reference so
+  // we can hide the mesh on death without re-parenting.
+  //
+  // Trees and rocks are NOT marked consumed when chopped — chunk reload
+  // regenerates them naturally. _isSpawnLive(s) only returns false here for
+  // descriptors whose chunk was already unloaded, which can happen on a
+  // late drain if the player walked far enough to cycle the chunk between
+  // generation and drain.
+  _drainResourceSpawns() {
+    if (!this.world.resourceSpawns) return;
+    while (this.world.resourceSpawns.length > 0) {
+      const s = this.world.resourceSpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
+      const r = new Resource(s.x, s.z, s.kind, s.mesh, s.chunkKey, s.collider, s.colliderArray, s.group);
+      this.resources.push(r);
+    }
+  }
+
+  // Build a procedural mesh for the structure descriptor, parent it into
+  // the chunk's group at the right yaw, register a collider in the chunk's
+  // collider list (so movement is blocked by the new wall) and wrap the
+  // whole thing in a Structure entity. Called once per descriptor each
+  // time a chunk loads — both for newly-placed pieces and for pre-existing
+  // ones surviving a chunk reload.
+  _drainStructureSpawns() {
+    if (!this.world.structureSpawns) return;
+    while (this.world.structureSpawns.length > 0) {
+      const s = this.world.structureSpawns.shift();
+      // Re-fetch the chunk's group/colliders fresh in case the chunk was
+      // unloaded + re-loaded between place and drain (the descriptor's
+      // group/colliderArray references would point to a discarded chunk).
+      const chunk = this.world.chunks.get(s.chunkKey);
+      if (!chunk) continue;
+      const recipe = RECIPES[s.kind];
+      if (!recipe) continue;
+      const mesh = buildStructureMesh(s.kind);
+      mesh.position.set(s.x, 0, s.z);
+      mesh.rotation.y = s.yaw || 0;
+      chunk.group.add(mesh);
+      let collider = null;
+      if (recipe.radius > 0) {
+        collider = { x: s.x, z: s.z, r: recipe.radius };
+        chunk.colliders.push(collider);
+      }
+      const struct = new Structure(
+        this.scene, s.x, s.z, s.kind, s.yaw || 0, s.hp, mesh, s.chunkKey,
+        collider, chunk.colliders, chunk.group,
+      );
+      this.structures.push(struct);
+    }
+  }
+
   // Despawn every entity tied to `chunkKey`. Invoked by World when a
   // far chunk is unloaded; living entities just disappear (their
   // chunkKey is recomputed from current position so a wandering enemy
@@ -585,6 +686,22 @@ export class Game {
       this.altars,
       a => a.chunkKey !== chunkKey,
       a => { a.destroyMesh?.(); },
+    );
+    // Resources don't own meshes (the chunk's group does), so we just drop
+    // the references — the chunk's _disposeChunk has already removed the
+    // group from the scene. On chunk reload _drainResourceSpawns wraps the
+    // freshly-spawned trees / rocks in new Resource entities.
+    compactInPlace(
+      this.resources,
+      r => r.chunkKey !== chunkKey,
+    );
+    // Structures: drop the entity references; the chunk's group disposal
+    // already pulled the meshes out of the scene. On chunk reload, the
+    // world re-emits the persisted descriptors and _drainStructureSpawns
+    // rebuilds them — preserving HP via the descriptor's `hp` field.
+    compactInPlace(
+      this.structures,
+      s => s.chunkKey !== chunkKey,
     );
   }
 
@@ -711,8 +828,35 @@ export class Game {
     const color = b.burstColor();
     this.effects.burst(b.pos.x, 0.5, b.pos.z, color, 10, 4, 0.45);
     this.effects.ring(b.pos.x, 0.05, b.pos.z, 0xffd166, 0.8, 0.3);
-    this.sound.bomb?.();
+    // Pots shatter (glass-y crash), crates splinter (wood crack). Different
+    // samples make the two breakable kinds distinguishable from offscreen.
+    if (b.kind === 'pot') this.sound.potBreak?.();
+    else this.sound.woodBreak?.();
     b.destroyMesh();
+  }
+
+  // Fired when a Resource (tree / rock) drops to 0 HP. `weaponKind` is the
+  // string id of the weapon that landed the killing blow, used by
+  // harvestYield() to grant the +25% wood bonus to axe wielders. AoE /
+  // ability kills pass `weaponKind = null` and skip the bonus.
+  _onResourceGathered(r, weaponKind) {
+    const yld = harvestYield(r.kind, weaponKind);
+    if (yld && yld.amount > 0) {
+      const drops = spawnHarvestDrops(this.scene, r.pos.x, r.pos.z, yld.kind, yld.amount);
+      for (const d of drops) this.pickups.push(d);
+    }
+    // Visual + audio feedback that matches the resource. Trees lean over
+    // and emit a leafy burst; rocks crumble in a duster cloud.
+    const color = r.burstColor();
+    const burstY = r.burstY();
+    this.effects.burst(r.pos.x, burstY, r.pos.z, color, 12, 4, 0.55);
+    this.effects.ring(r.pos.x, 0.05, r.pos.z, color, 1.0, 0.32);
+    if (r.kind === 'tree') this.sound.treeFall?.();
+    else this.sound.rockBreak?.();
+    // Transition the resource: trees become walk-through stumps that regrow
+    // after ~10 game days; rocks vanish from the resources list and only
+    // come back via natural chunk regeneration.
+    r.enterDeathState();
   }
 
   // Always spawn one chest near origin on first load so players see the
@@ -754,6 +898,8 @@ export class Game {
     this._drainChestSpawns();
     this._drainBreakableSpawns();
     this._drainAltarSpawns();
+    this._drainResourceSpawns();
+    this._drainStructureSpawns();
     this.world.refreshActiveChunks(positions);
   }
 
@@ -898,9 +1044,28 @@ export class Game {
       // If we hit the budget cap, drop the carry so we don't spiral.
       if (steps >= MAX_STEPS_PER_FRAME) this._fixedAccum = 0;
     }
+    // Ambient soundscape: tick the procedural nature layers using the
+    // live midpoint between the players + the world's day weight. Runs
+    // even while paused / dead so the meadow keeps breathing in the
+    // background — it costs a few setTargetAtTime calls and doesn't
+    // care about simulation timestep.
+    this._updateAmbientSound(dt0);
     this.render();
     this._updateFps(dt0);
     requestAnimationFrame((tt) => this._loop(tt));
+  }
+
+  // Cheap wrapper around sound.updateAmbient — pulls the listener
+  // position from the camera's smoothed centroid (same point the
+  // FollowCamera tracks), so the soundscape follows what the player
+  // actually sees instead of either dead/alive sim positions.
+  _updateAmbientSound(dt0) {
+    if (!this.sound || !this.sound.updateAmbient) return;
+    const c = this.followCam?.smoothCenter;
+    const x = c ? c.x : (this.players[0]?.pos.x ?? 0);
+    const z = c ? c.z : (this.players[0]?.pos.z ?? 0);
+    const dayWeight = (typeof this.world?.dayWeight === 'number') ? this.world.dayWeight : 1.0;
+    this.sound.updateAmbient(dt0, { x, z, dayWeight, world: this.world });
   }
 
   _updateFps(dt0) {
@@ -978,17 +1143,55 @@ export class Game {
       }
     }
 
-    // Damageables = enemies + breakables. Sword swings, ability projectiles
-    // and AoE pulses all hit anything in this list. The swing callback below
-    // routes breakables to their loot path so item-on-kill hooks (xp, drops)
-    // don't fire for crates / pots.
-    const damageables = (this.breakables.length > 0)
-      ? [...this.enemies, ...this.breakables]
+    // Build mode: route the recipe-select edge first so a press of 1..4 /
+    // 7..0 enters build mode (or toggles off the same recipe). When the
+    // controller is active, its update() consumes attack/dash/interact for
+    // place/cancel/rotate; we then mute those fields on the intent so the
+    // player's normal swing / dash logic doesn't double-trigger.
+    for (let pi = 0; pi < this.players.length; pi++) {
+      const intent = intents[pi];
+      const builder = this.builders[pi];
+      if (!builder) continue;
+      if (intent.buildSelect >= 0) builder.selectRecipe(intent.buildSelect);
+      if (builder.active) {
+        builder.update(dt, intent);
+        intent.attack = false;
+        intent.attackHeld = false;
+        intent.dash = false;
+        intent.dashHeld = false;
+        intent.interact = false;
+      }
+    }
+
+    // Damageables = enemies + breakables + resources + structures. Sword
+    // swings, ability projectiles and AoE pulses all hit anything in this
+    // list. The swing callback below routes breakables to their loot path,
+    // resources to the harvest path and structures to friendly-damage so
+    // item-on-kill hooks (xp, drops) don't fire on world props.
+    const damageables = (this.breakables.length > 0 || this.resources.length > 0 || this.structures.length > 0)
+      ? [...this.enemies, ...this.breakables, ...this.resources, ...this.structures]
       : this.enemies;
     this._damageables = damageables;
     const swingHit = (player, target) => {
       if (target.isBreakable) {
         target.takeDamage(0, player.pos.x, player.pos.z, 0);
+      } else if (target.isResource) {
+        // Resources soak per-swing damage — players need several hits to
+        // chop a tree (HP=40 vs typical melee ~10 dmg = 4 swings) so the
+        // gathering loop has weight. Damage is the player's current melee
+        // damage so combat upgrades carry over.
+        const dmg = Math.max(1, Math.round(player.stats?.damage || 10));
+        target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
+        // Tag killer's weapon so the harvest yield can grant the axe bonus
+        // even though the alive→dead transition is processed below in the
+        // breakable-style compaction pass.
+        target._lastDmgWeapon = player._weaponKind || null;
+      } else if (target.isStructure) {
+        // Friendly damage — a player can chop down their own walls if
+        // they really want to. Reduced damage so a stray accidental swing
+        // doesn't immediately ruin a fortress.
+        const dmg = Math.max(1, Math.round((player.stats?.damage || 10) * 0.5));
+        target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
       } else {
         this._onPlayerHitsEnemy(player, target);
       }
@@ -1048,8 +1251,10 @@ export class Game {
     }
     compactInPlace(this.enemies, e => e.alive);
 
-    // Pickups
-    for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
+    // Pickups — pass the shared resource pool so wood / stone / seed
+    // pickups know where to deposit their value. Gold and food don't read
+    // it, so existing behaviour is unchanged.
+    for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects, this.world.resources);
     compactInPlace(this.pickups, pk => pk.alive);
 
     // Chests + runes. When a chest finishes its open animation and
@@ -1076,6 +1281,53 @@ export class Game {
         if (b.chunkKey) this.world.markBreakableConsumed(b.chunkKey, b.pos.x, b.pos.z);
       },
     );
+
+    // Structures: tick the hit-shake animation, drop any whose HP hit 0
+    // this frame (free their collider, detach their mesh, forget the
+    // descriptor so a chunk reload doesn't bring them back). Persist
+    // updated HP into the placedStructures map so a mid-damage wall
+    // survives chunk unload at its current health.
+    for (const s of this.structures) s.update(dt);
+    for (const s of this.structures) {
+      if (s.alive && s.chunkKey) {
+        // Cheap save-system stub: keep the persisted descriptor's HP in
+        // sync with the live entity. The Map lookup is O(n) per chunk; in
+        // typical play n stays under ~20 per chunk so this is fine.
+        this.world.updateStructureHP(s.chunkKey, s.pos.x, s.pos.z, s.hp);
+      }
+    }
+    compactInPlace(
+      this.structures,
+      s => s.alive,
+      s => {
+        const color = s.burstColor();
+        this.effects.burst(s.pos.x, 0.6, s.pos.z, color, 14, 4, 0.55);
+        this.effects.ring(s.pos.x, 0.05, s.pos.z, color, 1.0, 0.32);
+        this.sound.bomb?.();
+        s.removeCollider();
+        s.destroyMesh();
+        if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
+      },
+    );
+
+    // Resources: idle hit-shake / regrow timer, then catch newly-dead ones
+    // and route to the harvest path. Trees stay in the list as walk-through
+    // stumps (state==='stump') while their regrow timer ticks; rocks
+    // transition to state==='gone' and get compacted out below. Unlike
+    // breakables we don't mark either kind consumed — chunk reload
+    // regenerates them from the deterministic seed (the fast path), and
+    // the stump-regrow timer is the slow in-place path while the chunk
+    // stays loaded.
+    for (const r of this.resources) r.update(dt, this.world.dayLength);
+    for (const r of this.resources) {
+      if (!r.alive && r.state === 'alive') {
+        this._onResourceGathered(r, r._lastDmgWeapon || null);
+      }
+    }
+    // Compact only resources fully gone — trees in 'stump' state stay so
+    // their regrow timer can keep ticking (and so chunk-unload can drop
+    // them in lockstep with the rest of the chunk's entities).
+    compactInPlace(this.resources, r => r.state !== 'gone');
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
@@ -1165,6 +1417,44 @@ export class Game {
     set('clock', `${phase} · ${hh}:${mm}`);
     const dot = document.getElementById('clockdot');
     if (dot) dot.style.background = this.world.isNight() ? '#7aa6ff' : '#ffd166';
+    // Shared resource counters live on the world (wood / stone / seeds)
+    // so building consumes from a single pool. Both players see the same
+    // numbers, unlike per-player gold.
+    const res = this.world.resources;
+    if (res) {
+      set('wood', res.wood || 0);
+      set('stone', res.stone || 0);
+      set('seed', res.seeds || 0);
+    }
+    // Build-mode banner — one strip per active player. Hidden when not
+    // building. Shows recipe label, cost (red when unaffordable), and a
+    // small key-hint reminder so players don't need to memorise the
+    // F-place / R-cancel / E-rotate scheme.
+    for (let pi = 0; pi < this.builders.length; pi++) {
+      const b = this.builders[pi];
+      const slot = pi === 0 ? '1' : '2';
+      const bar = document.getElementById(`buildbar${slot}`);
+      if (!bar) continue;
+      if (!b || !b.active) {
+        bar.classList.remove('active');
+        bar.classList.remove('bad');
+        continue;
+      }
+      bar.classList.add('active');
+      bar.classList.toggle('bad', !b.ghostAffordable);
+      const recipe = RECIPES[b.currentRecipe()];
+      const nameEl = document.getElementById(`bb${slot}-name`);
+      const costEl = document.getElementById(`bb${slot}-cost`);
+      if (nameEl) nameEl.textContent = recipe?.name || b.currentRecipe();
+      if (costEl) {
+        const parts = [];
+        for (const [k, v] of Object.entries(recipe?.cost || {})) {
+          const label = k === 'wood' ? 'дерево' : (k === 'stone' ? 'камень' : (k === 'seeds' ? 'семена' : k));
+          parts.push(`${v} ${label}`);
+        }
+        costEl.textContent = parts.join(' · ');
+      }
+    }
     // leash overlay
     const leashEl = document.getElementById('leash');
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);

@@ -149,6 +149,16 @@ export class World {
     this.chestSpawns = [];            // same idea but for procedural chests
     this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this.altarSpawns = [];            // ditto for altars (rare item-management nodes)
+    this.resourceSpawns = [];         // ditto for harvestable trees / rocks
+    this.structureSpawns = [];        // ditto for player-placed structures
+    // Persistent map of player-placed structures, keyed by chunkKey. Each
+    // entry is an array of plain descriptors `{ x, z, kind, yaw, hp }` that
+    // survive chunk unload — when the chunk reloads, we re-emit them as
+    // structureSpawns so they get re-instantiated. This is what makes a
+    // built fortress "stick" when the player wanders away. Designed to be
+    // serialised wholesale by a future save-system (the descriptor shape
+    // is intentionally JSON-clean).
+    this.placedStructures = new Map();
     // ---- Chunk streaming (async load + safe unload) -------------------
     // Async load queue. ensureChunksAround() pushes "needed but not yet
     // generated" chunks here; processChunkQueue() drains a small budget
@@ -333,6 +343,22 @@ export class World {
     if (chunk.chestSpawns) for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
     if (chunk.breakableSpawns) for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
     if (chunk.altarSpawns) for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
+    if (chunk.resourceSpawns) for (const r of chunk.resourceSpawns) this.resourceSpawns.push(r);
+    // Re-emit any persisted player-placed structures for this chunk so the
+    // game-side drainer can re-instantiate them on top of the regenerated
+    // chunk geometry. Non-empty only after the player has built things in
+    // this region during the current session.
+    const persisted = this.placedStructures.get(key);
+    if (persisted && persisted.length > 0) {
+      for (const s of persisted) {
+        this.structureSpawns.push({
+          x: s.x, z: s.z, kind: s.kind, yaw: s.yaw, hp: s.hp,
+          chunkKey: key,
+          group: chunk.group,
+          colliderArray: chunk.colliders,
+        });
+      }
+    }
   }
 
   // Drain up to `budget` queued chunks. Called once per game tick;
@@ -419,6 +445,63 @@ export class World {
     this._consumedAltars.add(this.spawnKey(chunkKey, x, z));
   }
 
+  // Player just placed a structure at (x,z) with the given kind / yaw / hp.
+  // Records it in `placedStructures[chunkKey]` so chunk reload can rehydrate
+  // the structure, and (if the chunk is currently loaded) also queues a
+  // `structureSpawn` so Game._drainStructureSpawns can mount it this frame.
+  // Returns the descriptor object for caller convenience.
+  placeStructure(x, z, kind, yaw = 0, hp = null) {
+    const chunkKey = this.chunkKeyOf(x, z);
+    const desc = { x, z, kind, yaw, hp };
+    let arr = this.placedStructures.get(chunkKey);
+    if (!arr) { arr = []; this.placedStructures.set(chunkKey, arr); }
+    arr.push(desc);
+    const chunk = this.chunks.get(chunkKey);
+    if (chunk) {
+      this.structureSpawns.push({
+        x, z, kind, yaw, hp,
+        chunkKey,
+        group: chunk.group,
+        colliderArray: chunk.colliders,
+      });
+    }
+    return desc;
+  }
+
+  // Drop a destroyed structure from `placedStructures`, matched by approx
+  // position so we don't leak descriptors after a wall is broken. Uses the
+  // same 0.1m rounding as the consumed-set helpers so floating-point drift
+  // doesn't prevent the match.
+  forgetStructure(chunkKey, x, z) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const d = arr[i];
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        arr.splice(i, 1);
+        break;
+      }
+    }
+    if (arr.length === 0) this.placedStructures.delete(chunkKey);
+  }
+
+  // Update the persisted HP value for an in-place structure so a reload
+  // later in the session continues from mid-damage rather than full health.
+  // Caller passes the current chunkKey + position; we tolerate small float
+  // drift the same way as `forgetStructure`.
+  updateStructureHP(chunkKey, x, z, hp) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    for (const d of arr) {
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        d.hp = hp;
+        return;
+      }
+    }
+  }
+
   // Recompute which chunks are active (visible) and which actively simulate
   // their enemies, based on the centroid of all alive players. Cheap: just
   // walks the existing chunks Map and toggles group.visible. Also unloads
@@ -503,6 +586,12 @@ export class World {
     const chestSpawns = [];
     const breakableSpawns = [];
     const altarSpawns = [];
+    // Harvestable resource nodes (trees, rocks). Pushed alongside the visual
+    // mesh — the entity created by Game._drainResourceSpawns wraps the mesh
+    // for damage but doesn't reparent it, so the chunk group still owns the
+    // mesh's lifecycle. Only the *large* trees / rocks are harvestable; tiny
+    // ground-clutter rocks and bushes stay non-interactive.
+    const resourceSpawns = [];
     // BufferGeometries we own (fresh-allocated for this chunk and not
     // returned to a shared cache). Currently just the marching-squares
     // water mesh, but the array is generic so future per-chunk meshes
@@ -534,6 +623,9 @@ export class World {
     };
 
     // 3. Trees — density modulated by noise; never on water cells.
+    // Trees are harvestable: in addition to the visual placement we push a
+    // resourceSpawn descriptor with the mesh reference so Game can wrap it
+    // in a Resource entity hooked into the damageables pipeline.
     const treeAttempts = 14;
     for (let i = 0; i < treeAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
@@ -549,7 +641,9 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      colliders.push({ x, z, r: 1.0 });
+      const collider = { x, z, r: 1.0 };
+      colliders.push(collider);
+      resourceSpawns.push({ x, z, kind: 'tree', mesh, chunkKey, collider, colliderArray: colliders, group });
     }
 
     // 4a. Cliff clusters — on rocky outcrops (high noise), drop a tight
@@ -569,7 +663,10 @@ export class World {
     }
 
     // 4b. Scattered rocks — large/medium gray rocks on rocky cells, small
-    // rocks elsewhere as ground clutter.
+    // rocks elsewhere as ground clutter. Only the *big* rocks become
+    // harvestable resource nodes; the small ground-clutter rocks stay
+    // decorative (otherwise the world would be carpeted in tiny pickable
+    // nodes that aren't worth a swing).
     const rockAttempts = 10;
     for (let i = 0; i < rockAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
@@ -587,7 +684,11 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      if (big) colliders.push({ x, z, r: 0.9 });
+      if (big) {
+        const collider = { x, z, r: 0.9 };
+        colliders.push(collider);
+        resourceSpawns.push({ x, z, kind: 'rock', mesh, chunkKey, collider, colliderArray: colliders, group });
+      }
     }
 
     // 5. Bushes / clutter (skip water).
@@ -779,6 +880,7 @@ export class World {
       chestSpawns,
       breakableSpawns,
       altarSpawns,
+      resourceSpawns,
       cx,
       cz,
       _ownedGeos: ownedGeos,
@@ -1039,8 +1141,11 @@ export class World {
     const sunsetMix = sunsetBell(this.dayTime, SUNRISE, 1 / 24) + sunsetBell(this.dayTime, SUNSET, 1 / 24);
     // Day weight: 0 deep night, 1 full day, lerped across the full ±0.5
     // sunY band so sky / ambient / moon all fade gradually over several
-    // in-game hours either side of the horizon.
+    // in-game hours either side of the horizon. Also exposed on `this`
+    // so the audio layer (cricket / bird chorus, wind level) can read
+    // the same phase without recomputing the day-cycle math.
     const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
+    this.dayWeight = dayWeight;
     // Reuse the pre-allocated colour temporaries (see constructor) instead
     // of `new THREE.Color()` per frame; the resulting blend is copied into
     // scene.background which itself is a single persistent Color.
