@@ -314,47 +314,28 @@
         border-radius: 8px; margin: 4px 0 8px;
       }
       .start-section-label { font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 4px; }
-      /* Circular colour-wheel picker — see startMenu.js _buildColorWheel.
-         The wheel container is a fixed square; the centre swatch sits at
-         the absolute middle and ring swatches use --tx/--ty (set inline
-         from JS as cos/sin of the angle) to translate themselves out
-         along their radius. Using transform instead of left/top lets the
-         hover scale animation compose cleanly with the position. */
-      .start-color-wheel {
-        position: relative;
-        width: 200px; height: 200px;
-        margin: 4px auto 8px;
-        align-self: center;
+      /* Flat-row colour picker — wraps to 2 lines inside narrow slots
+         when the palette is large (13 colours).  Each swatch is a
+         circular 3-D-bead (radial gradient set inline in JS). */
+      .start-color-row {
+        display: flex; flex-wrap: wrap;
+        gap: 5px;
+        justify-content: flex-start;
+        margin: 4px 0 8px;
       }
       .start-swatch {
-        position: absolute;
-        top: 50%; left: 50%;
-        width: 28px; height: 28px;
-        margin: -14px 0 0 -14px;       /* recenter on (50%,50%) */
+        width: 24px; height: 24px;
         border-radius: 50%;
         border: 2px solid rgba(255,255,255,0.18);
         box-shadow: 0 1px 3px rgba(0,0,0,0.45);
         cursor: pointer; padding: 0;
-        --tx: 0; --ty: 0; --r: 80px;
-        transform: translate(calc(var(--tx) * var(--r)), calc(var(--ty) * var(--r)));
-        transition: transform 120ms ease, border-color 100ms ease, box-shadow 100ms ease;
+        transition: transform 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
       }
-      .start-swatch:hover {
-        transform: translate(calc(var(--tx) * var(--r)), calc(var(--ty) * var(--r))) scale(1.18);
-        z-index: 2;
-      }
+      .start-swatch:hover { transform: scale(1.15); z-index: 2; }
       .start-swatch.active {
         border-color: #fff;
         box-shadow: 0 0 0 2px rgba(59,130,246,0.7), 0 1px 3px rgba(0,0,0,0.45);
         z-index: 3;
-      }
-      .start-swatch.start-swatch-center {
-        --tx: 0; --ty: 0; --r: 0px;
-        width: 36px; height: 36px;
-        margin: -18px 0 0 -18px;
-      }
-      .start-swatch.start-swatch-center:hover {
-        transform: translate(0, 0) scale(1.12);
       }
       .start-weapon-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;

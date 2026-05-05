@@ -174,7 +174,7 @@ export class StartMenu {
     bodyLabel.className = 'start-section-label';
     bodyLabel.textContent = 'Цвет персонажа';
     slot.appendChild(bodyLabel);
-    const bodyRow = this._buildColorWheel(PLAYER_COLOR_PRESETS, this.config[index].color, (id) => {
+    const bodyRow = this._buildSwatchRow(PLAYER_COLOR_PRESETS, this.config[index].color, (id) => {
       this.config[index].color = id;
       this._applyTintToPreview(index);
     });
@@ -185,7 +185,7 @@ export class StartMenu {
     capeLabel.className = 'start-section-label';
     capeLabel.textContent = 'Цвет плаща';
     slot.appendChild(capeLabel);
-    const capeRow = this._buildColorWheel(CAPE_COLOR_PRESETS, this.config[index].cape, (id) => {
+    const capeRow = this._buildSwatchRow(CAPE_COLOR_PRESETS, this.config[index].cape, (id) => {
       this.config[index].cape = id;
       this._applyTintToPreview(index);
     });
@@ -225,24 +225,20 @@ export class StartMenu {
     return slot;
   }
 
-  // Build a circular colour-wheel picker. The first preset (whatever
-  // it is) is placed in the centre as the "neutral / default" hub; the
-  // remaining N presets are positioned at evenly-spaced angles on a
-  // ring around it. Each swatch is a circular button with a soft
-  // radial-gradient highlight so it reads as a 3-D bead instead of a
-  // flat disc — which is how the user wanted the picker to look.
-  _buildColorWheel(presets, activeId, onPick) {
-    const wheel = document.createElement('div');
-    wheel.className = 'start-color-wheel';
-    const [centerPreset, ...ringPresets] = presets;
-    const N = ringPresets.length;
-    const makeSwatch = (preset, isCenter) => {
+  // Build a flat-row colour picker. Each swatch is a circular bead
+  // (radial-gradient: highlight + darker rim → reads as 3-D), and the
+  // row uses flex-wrap so a 13-colour palette breaks into two lines
+  // inside the slot's narrow width without overflowing.
+  _buildSwatchRow(presets, activeId, onPick) {
+    const row = document.createElement('div');
+    row.className = 'start-color-row';
+    for (const preset of presets) {
       const sw = document.createElement('button');
       sw.type = 'button';
-      sw.className = 'start-swatch' + (isCenter ? ' start-swatch-center' : '');
+      sw.className = 'start-swatch';
       const css = hexToCss(preset.body);
-      // Radial gradient: bright highlight at top-left, fade to the
-      // base colour, then darker rim — gives the swatch a sphere/bead
+      // Radial gradient: bright highlight at top-left, fade to base,
+      // dark rim at bottom-right — gives the swatch a sphere/bead
       // feel without needing actual lighting.
       sw.style.background = `radial-gradient(circle at 32% 28%, rgba(255,255,255,0.55) 0%, ${css} 38%, ${css} 70%, rgba(0,0,0,0.25) 100%)`;
       sw.title = preset.name;
@@ -250,29 +246,14 @@ export class StartMenu {
       sw.setAttribute('aria-label', preset.name);
       if (activeId === preset.id) sw.classList.add('active');
       sw.addEventListener('click', () => {
-        wheel.querySelectorAll('.start-swatch').forEach((b) => {
+        row.querySelectorAll('.start-swatch').forEach((b) => {
           b.classList.toggle('active', b.getAttribute('data-color') === preset.id);
         });
         onPick(preset.id);
       });
-      return sw;
-    };
-    // Center hub
-    if (centerPreset) wheel.appendChild(makeSwatch(centerPreset, true));
-    // Ring of N swatches at angles 0, 360/N, 2*360/N, ... starting from
-    // the top of the wheel (angle = -90°) and going clockwise.
-    for (let i = 0; i < N; i++) {
-      const preset = ringPresets[i];
-      const sw = makeSwatch(preset, false);
-      const angleRad = (i / N) * Math.PI * 2 - Math.PI / 2;
-      const tx = Math.cos(angleRad);
-      const ty = Math.sin(angleRad);
-      // CSS variable consumed by .start-swatch's transform translate.
-      sw.style.setProperty('--tx', tx.toFixed(4));
-      sw.style.setProperty('--ty', ty.toFixed(4));
-      wheel.appendChild(sw);
+      row.appendChild(sw);
     }
-    return wheel;
+    return row;
   }
 
   // ---- Preview scene per slot ------------------------------------------

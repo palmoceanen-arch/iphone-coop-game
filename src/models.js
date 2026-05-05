@@ -525,10 +525,18 @@ function _findAndBuildSkinMask(scene) {
   return _buildSkinMaskFromImage(bodyTexture.image);
 }
 
-// Inject a fragment shader hook into a MeshToonMaterial so that
-// `material.color` (the user's tint) only multiplies non-skin pixels.
-// Where the skin mask is non-zero the atlas RGB is used unchanged, so
-// faces / hands keep their natural skin tone regardless of the tint.
+// Inject a fragment shader hook into a MeshToonMaterial so that the
+// body splits cleanly into two regions:
+//   - skin pixels (face, hands)            → keep the natural atlas RGB
+//   - everything else (armour, cloth, etc) → use `material.color` directly
+//
+// The "directly" part is important: we do NOT multiply tint × atlas for
+// non-skin pixels, because the atlas ships with desaturated grey armour
+// pixels — multiplying by white gives grey, multiplying by red gives
+// muddy maroon. Replacing the atlas value with the tint instead means
+// white = pure white armour, red = pure red armour, etc. The toon
+// gradient map still applies on top so the cel-shaded lit/shadow bands
+// come through.
 function _attachSkinAwareTintShader(material, skinMaskTex) {
   if (!material || !skinMaskTex) return;
   material.onBeforeCompile = (shader) => {
@@ -542,21 +550,23 @@ function _attachSkinAwareTintShader(material, skinMaskTex) {
         '#include <map_fragment>',
         `#ifdef USE_MAP
         vec4 sampledDiffuseColor = texture2D( map, vMapUv );
-        // \`diffuseColor.rgb\` enters this chunk = uniform "diffuse" =
-        // material.color (the user-picked tint). We blend the tint
-        // toward white (no tint) wherever the skin mask is hot, so
-        // skin pixels read through at their natural atlas colour
-        // while clothing / armour pixels still get multiplied by tint.
+        // \`diffuseColor.rgb\` enters this chunk equal to uniform
+        // "diffuse" = material.color (the user-picked tint). We blend
+        // toward sampledDiffuseColor wherever the skin mask is hot,
+        // so skin pixels read through at their natural atlas colour
+        // while clothing/armour pixels stay at the pure tint colour
+        // (no atlas multiplication → no muddiness).
         float skinAmount = texture2D( skinMaskTexture, vMapUv ).r;
-        vec3 effectiveTint = mix( diffuseColor.rgb, vec3(1.0), skinAmount );
-        diffuseColor.rgb = sampledDiffuseColor.rgb * effectiveTint;
+        diffuseColor.rgb = mix( diffuseColor.rgb, sampledDiffuseColor.rgb, skinAmount );
         diffuseColor.a *= sampledDiffuseColor.a;
         #endif`,
       );
   };
   // Share one compiled program across every clone — same uniforms layout,
-  // only `material.color` and the per-instance mask binding differ.
-  material.customProgramCacheKey = () => 'tinted-skin-aware-v1';
+  // only `material.color` and the per-instance mask binding differ. Bump
+  // the cache key when the shader logic itself changes so any cached v1
+  // programs from previous sessions don't leak in.
+  material.customProgramCacheKey = () => 'tinted-skin-aware-v2';
   material.needsUpdate = true;
 }
 

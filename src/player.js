@@ -24,18 +24,19 @@ const COLORS = [
 ];
 
 // Selectable colour palette shown in the start-menu character picker.
-// 12 hues evenly spaced around the colour wheel + a "white" default at
-// the centre — laid out as a circular wheel in the start menu (see
-// startMenu.js `_buildColorWheel`). The `body` value is a 24-bit RGB
-// hex int passed straight into `spawnCharacter()` as its `tint`
-// argument; `name` is the Russian label shown as the swatch tooltip.
+// White + 12 evenly-spaced hues laid out as a flat row in the start
+// menu (see startMenu.js `_buildSwatchRow`). The `body` value is a
+// 24-bit RGB hex int passed straight into `spawnCharacter()` as its
+// `tint` argument; `name` is the Russian label shown as the swatch
+// tooltip.
 //
-// Important: the body shader applies `material.color * atlas` only on
-// non-skin pixels (see models.js `_attachSkinAwareTintShader`), so a
-// pure-white tint reads as "natural" — armour stays its native steel
-// grey and the face/hands always keep their original skin tone.
+// Important: the body shader replaces non-skin atlas pixels with
+// `material.color` directly (see models.js `_attachSkinAwareTintShader`),
+// so the picked colour shows up purely on the armour/cloth — white is
+// pure white, red is pure red, no atlas-grey muddying. Skin pixels
+// (face/hands) always keep their natural tone regardless of the pick.
 export const PLAYER_COLOR_PRESETS = [
-  { id: 'natural', name: 'Натуральный', body: 0xffffff },
+  { id: 'white',   name: 'Белый',       body: 0xffffff },
   { id: 'red',     name: 'Красный',     body: 0xf25a5a },
   { id: 'orange',  name: 'Оранжевый',   body: 0xff8a3a },
   { id: 'amber',   name: 'Янтарь',      body: 0xffb633 },
