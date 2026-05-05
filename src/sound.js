@@ -293,7 +293,10 @@ export class Sound {
       case 'hitWood':   this.noise({ dur: 0.10, gain: 0.42, lp: 1300, hp: 240 }); this.tone({ freq: 240, type: 'sawtooth', dur: 0.06, gain: 0.14, slide: -90 }); break;
       case 'hitStone':  this.noise({ dur: 0.10, gain: 0.45, lp: 2200, hp: 500 }); this.tone({ freq: 360, type: 'square',   dur: 0.05, gain: 0.10, slide: -160 }); break;
       case 'potBreak':  this.noise({ dur: 0.22, gain: 0.55, lp: 4000, hp: 800 }); this.tone({ freq: 1400, type: 'square', dur: 0.10, gain: 0.18, slide: 800 }); break;
-      case 'coin':      this.tone({ freq: 980, type: 'square', dur: 0.06, gain: 0.16, slide: 320 }); this.tone({ freq: 1320, type: 'square', dur: 0.08, gain: 0.14, slide: 200 }); break;
+      // No 'coin' case: the synth fallback was a two-tone square-wave
+      // chiptune that read as out-of-place 8-bit when the Kenney coin .ogg
+      // hadn't finished decoding on the very first pickup. Better to be
+      // briefly silent than to slot a different aesthetic into the mix.
       case 'treeCreak': this.tone({ freq: 240, type: 'sawtooth', dur: 0.40, gain: 0.18, slide: -50 }); break;
     }
   }

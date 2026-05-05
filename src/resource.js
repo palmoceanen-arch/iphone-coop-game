@@ -71,11 +71,12 @@ function ensureStumpAssets() {
     });
   }
   if (!STUMP_GEOMETRY) {
-    // Squat cylinder with bevel-ish proportions so it reads as "tree was
-    // chopped here" rather than a tiny barrel. ~0.45 wide, ~0.35 tall is
-    // about half a meter tall — visible at gameplay distance but doesn't
-    // block sight lines.
-    STUMP_GEOMETRY = new THREE.CylinderGeometry(0.45, 0.55, 0.35, 8);
+    // Tiny pentagonal stub left where the tree used to stand. Original
+    // chunky 8-sided cylinder was scaled down 4× and dropped to 5 radial
+    // segments — reads as a low-poly chopped-flush remnant rather than a
+    // squat barrel. The 5-sided silhouette also visually distinguishes
+    // stumps from rocks / pebbles which are 8-sided.
+    STUMP_GEOMETRY = new THREE.CylinderGeometry(0.1125, 0.1375, 0.0875, 5);
   }
 }
 
@@ -193,7 +194,9 @@ export class Resource {
     const stump = new THREE.Mesh(STUMP_GEOMETRY, STUMP_MATERIAL);
     stump.castShadow = true;
     stump.receiveShadow = true;
-    stump.position.set(this.pos.x, 0.18, this.pos.z);
+    // Cylinder is centred on its midpoint, so y = half-height to sit flush
+    // on the ground. Matches the new 4×-smaller geometry (height ≈ 0.0875).
+    stump.position.set(this.pos.x, 0.045, this.pos.z);
     // Slight random rotation so a forest of stumps doesn't read as a grid.
     stump.rotation.y = defaultRandom() * Math.PI * 2;
     this.group.add(stump);
