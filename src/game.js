@@ -312,8 +312,15 @@ export class Game {
     // raw enemies list if the damageables snapshot hasn't been built yet
     // (e.g. when the player casts on the very first frame).
     const targets = this._damageables || this.enemies;
+    // `enemyList` carries every damageable (enemies + pots/crates + trees /
+    // rocks + player-built structures) so AoE explosions still break crates
+    // in their blast radius. `livingEnemies` is the strict subset that
+    // actually counts as a hostile creature — auto-aiming abilities (ice
+    // bolt, chain lightning, slow-time, wind-push, …) target through this
+    // list so player-placed walls / fences / trees never steal the lock-on.
     const ctx = {
       enemyList: targets,
+      livingEnemies: this.enemies,
       partner,
       effects: this.effects,
       sound: this.sound,

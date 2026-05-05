@@ -31,7 +31,11 @@ const SAMPLES = {
   hitHeavy:     ['hit_heavy_a.ogg', 'hit_heavy_b.ogg'],
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
-  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg'],
+  // Heavy plank-snap impacts (Kenney impactWood_heavy) — meatier
+  // splintering crack than the previous medium variants. `treeFall()`
+  // plays a slightly louder variant of these so a felled tree reads as a
+  // pure splinter-crack with no creaky preamble.
+  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg', 'wood_break_c.ogg'],
   potBreak:     ['pot_break_a.ogg', 'pot_break_b.ogg'],
   // Per-swing impact when a melee weapon connects with a tree (axe-on-
   // plank texture) or a rock (pickaxe / mining strike). Different
@@ -289,14 +293,20 @@ export class Sound {
       case 'hitWood':   this.noise({ dur: 0.10, gain: 0.42, lp: 1300, hp: 240 }); this.tone({ freq: 240, type: 'sawtooth', dur: 0.06, gain: 0.14, slide: -90 }); break;
       case 'hitStone':  this.noise({ dur: 0.10, gain: 0.45, lp: 2200, hp: 500 }); this.tone({ freq: 360, type: 'square',   dur: 0.05, gain: 0.10, slide: -160 }); break;
       case 'potBreak':  this.noise({ dur: 0.22, gain: 0.55, lp: 4000, hp: 800 }); this.tone({ freq: 1400, type: 'square', dur: 0.10, gain: 0.18, slide: 800 }); break;
-      case 'coin':      this.tone({ freq: 980, type: 'square', dur: 0.06, gain: 0.16, slide: 320 }); this.tone({ freq: 1320, type: 'square', dur: 0.08, gain: 0.14, slide: 200 }); break;
+      // No 'coin' case: the synth fallback was a two-tone square-wave
+      // chiptune that read as out-of-place 8-bit when the Kenney coin .ogg
+      // hadn't finished decoding on the very first pickup. Better to be
+      // briefly silent than to slot a different aesthetic into the mix.
       case 'treeCreak': this.tone({ freq: 240, type: 'sawtooth', dur: 0.40, gain: 0.18, slide: -50 }); break;
     }
   }
 
   // ---- Public SFX API (back-compat with the old method names) -----------
 
-  swing(opts)      { this._play('swing', opts); }
+  // Sword/weapon whoosh on every swing — pulled down to ~0.45 so it sits
+  // under the chop / mining impact tier instead of dominating dense
+  // attack-speed loops. Callers can still override via opts.gain.
+  swing(opts)      { this._play('swing', { gain: 0.45, ...(opts || {}) }); }
   hit(opts)        { this._play('hitFlesh', opts); }            // sword hits flesh
   enemyHit(opts)   { this._play('hitFlesh', { ...(opts || {}), gain: 0.7 }); }
   enemyDie(opts)   { this._play('enemyDie', opts); }
@@ -313,19 +323,21 @@ export class Sound {
   woodBreak(opts)  { this._play('woodBreak', opts); }
   potBreak(opts)   { this._play('potBreak', opts); }
   treeCreak(opts)  { this._play('treeCreak', opts); }
-  // Per-swing impact on a tree (axe-on-plank). Quieter than the
-  // tree-felled splinter so the chop loop reads as several muted thunks
-  // building up to one bigger break.
-  hitWood(opts)    { this._play('hitWood', { gain: 0.6, ...(opts || {}) }); }
+  // Per-swing impact on a tree (axe-on-plank). Pushed up to ~1.0 so the
+  // chop loop reads as a confident, audible thunk over the (now quieter)
+  // sword whoosh; the eventual tree-felled splinter is still louder.
+  hitWood(opts)    { this._play('hitWood', { gain: 1.0, ...(opts || {}) }); }
   // Per-swing impact on a rock. Mining-pick crack — sharper than wood,
   // distinct from the procedural rockBreak shatter so multiple hits
-  // don't all sound like the rock just died.
-  hitStone(opts)   { this._play('hitStone', { gain: 0.6, ...(opts || {}) }); }
-  // Tree felled: layer a creak preamble onto the wood-splinter break for
-  // a one-shot "timber!" cue. Different enough from breakable crate / pot
-  // that the gathering loop has its own audio identity even when a tree
-  // and a crate die on the same frame.
-  treeFall(opts)   { this._play('treeCreak', opts); this._play('woodBreak', { ...(opts || {}), gain: 0.85 }); }
+  // don't all sound like the rock just died. Same loudness tier as
+  // hitWood so trees and rocks share a "gathering connect" volume.
+  hitStone(opts)   { this._play('hitStone', { gain: 1.0, ...(opts || {}) }); }
+  // Tree felled: just the wood-splinter crack at a slightly hotter gain
+  // (1.0 vs the default crate-break ~1.0 too — the rate-limit + voice cap
+  // already keep stacked fells from smearing). The old version layered
+  // tree_creak as a slow creaky preamble, but on a fast resource-gather
+  // loop that creak read as drag rather than weight, so it's gone.
+  treeFall(opts)   { this._play('woodBreak', { gain: 1.0, ...(opts || {}) }); }
   // Rock crumbling on death — chunkier than the glassy potBreak. Procedural
   // because no Kenney sample reads cleanly as "boulder shatter"; the
   // filtered-noise + low square fundamental combo lands on the right side
