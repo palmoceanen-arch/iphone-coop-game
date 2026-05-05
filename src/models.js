@@ -440,8 +440,19 @@ function classifyMeshRole(meshNode) {
   while (cur) {
     const name = cur.name || '';
     if (name.includes('Cape')) return 'cape';
-    if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
     if (name.includes('Helmet')) return 'helmet';
+    if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
+    // Catch *any* mesh parented under a hand-slot bone — the built-in
+    // sword/shield meshes are caught by the names above, but external
+    // attached weapons (axe_1h, axe_2h, staff, wand …) come from
+    // separate GLBs and use their own arbitrary mesh names. Their one
+    // common ancestor after `setEquippedWeapon` adds them is the
+    // `handslotr` / `handslot.r` bone, so any mesh whose parent chain
+    // walks through that bone is treated as a weapon and skipped by
+    // the tinter. Three.js's PropertyBinding strips dots, so the
+    // sanitised name on cloned skeletons is `handslotr`; the original
+    // unsanitised `handslot.r` shows up on first-load before cloning.
+    if (name.toLowerCase().includes('handslot')) return 'weapon';
     cur = cur.parent;
   }
   return 'body';
@@ -609,6 +620,23 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
         } else if (hueShift !== 0) {
           applyHueShift(obj.material, hueShift);
         }
+      } else if (role === 'helmet') {
+        // Helmet shares the atlas with the body, but its UV region
+        // samples darkened steel-grey pixels — multiplying tint by
+        // those keeps the helmet looking grey/muddy regardless of
+        // what colour the user picks (the user reported this as
+        // "by default it's grey, lighten it"). Drop the map for
+        // pure-tint behaviour: helmet now follows the body colour
+        // exactly, so white-body = white-helmet, red-body =
+        // red-helmet, etc. Toon shading via the gradient map still
+        // gives it the cel-shaded shadow/light bands.
+        _stripMapForFlatColor(obj.material);
+        if (tint !== null) {
+          _tmpColor.setHex(tint);
+          applyTint(obj.material, _tmpColor);
+        } else if (hueShift !== 0) {
+          applyHueShift(obj.material, hueShift);
+        }
       } else if (role === 'body') {
         // Body keeps the atlas (so face / armour detail stays) but
         // when `skinAware` is requested it routes tint through a
@@ -627,8 +655,6 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
           applyHueShift(obj.material, hueShift);
         }
       } else if (tint !== null) {
-        // helmet & anything else falls through here — no skin in those
-        // regions, so a plain multiplicative tint is fine.
         _tmpColor.setHex(tint);
         applyTint(obj.material, _tmpColor);
       } else if (hueShift !== 0) {
