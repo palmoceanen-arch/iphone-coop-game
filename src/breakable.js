@@ -20,6 +20,17 @@ import * as THREE from 'three';
 import { TOON_GRADIENT } from './shading.js';
 import { spawnBreakable } from './models.js';
 import { defaultRandom } from './utils.js';
+import { HandlePool } from './pool.js';
+
+// Recycle the (relatively expensive) `spawnBreakable()` clones across
+// chunk-streaming churn. KayKit GLBs are deep-cloned on every spawn — that's
+// fine when one or two per chunk pop in, but a stress test that walks the
+// player back and forth across the map ends up cloning hundreds of trees.
+// We keep the cloned subgraph fully intact in the pool: the player visibly
+// re-encounters the same crate after we leave + re-enter a chunk, but every
+// breakable of a kind is visually identical (same atlas, same geometry, same
+// per-kind tint baked into the GLB) so reuse is safe.
+const BREAKABLE_POOL = new HandlePool(48);
 
 const POT_GOLD = [2, 5];
 const CRATE_GOLD = [3, 7];
@@ -49,8 +60,31 @@ export class Breakable {
     this.foodChance = kind === 'pot' ? 0.06 : 0.10;
     this.isBreakable = true;
     this._wobbleT = defaultRandom() * Math.PI * 2;
-    this.mesh = this._buildMesh();
+    const reused = BREAKABLE_POOL.acquire(this._poolKey());
+    if (reused) {
+      reused.position.x = this.pos.x;
+      reused.position.z = this.pos.z;
+      // Pots have an idle bob applied to mesh.position.y in update();
+      // make sure we start grounded so the first-frame y isn't wherever
+      // the previous instance was paused.
+      reused.position.y = 0;
+      // _seededRotation is per-(x,z,kind) so re-applying on pool reuse
+      // restores the deterministic orientation we'd get from a fresh
+      // spawn — chunks revisiting the same spot keep their familiar
+      // silhouette across pool round-trips.
+      reused.rotation.y = this._seededRotation(kind === 'pot' ? 0 : 1);
+      reused.visible = true;
+      this.mesh = reused;
+    } else {
+      this.mesh = this._buildMesh();
+    }
     this.scene.add(this.mesh);
+  }
+
+  // Pool bucket key — splits by kind so a pot acquire never returns a crate
+  // and vice-versa (they have different geometries baked into their GLBs).
+  _poolKey() {
+    return this.kind;
   }
 
   // Pick a deterministic Y rotation per spot so identical chunks regenerate
@@ -138,10 +172,19 @@ export class Breakable {
   destroyMesh() {
     if (!this.mesh) return;
     this.scene.remove(this.mesh);
-    this.mesh.traverse?.((o) => {
-      if (o.geometry) o.geometry.dispose?.();
-      if (o.material) o.material.dispose?.();
-    });
+    this.mesh.visible = false;
+    // Hand the mesh tree to the pool so the next pot/crate spawn can reuse
+    // it. If the bucket is full we just drop the reference and let GC collect
+    // it — disposing geometries/materials would force a costly upload on the
+    // next fresh spawn, so we deliberately leak a bit of GPU memory here in
+    // exchange for a smoother hot path.
+    const accepted = BREAKABLE_POOL.release(this._poolKey(), this.mesh);
+    if (!accepted) {
+      this.mesh.traverse?.((o) => {
+        if (o.geometry) o.geometry.dispose?.();
+        if (o.material) o.material.dispose?.();
+      });
+    }
     this.mesh = null;
   }
 

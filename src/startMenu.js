@@ -12,10 +12,11 @@ import * as THREE from 'three';
 import { PLAYER_COLOR_PRESETS, CAPE_COLOR_PRESETS } from './player.js';
 import { WEAPONS, applyCharacterTint, setEquippedWeapon, spawnCharacter } from './models.js';
 
-// Default picks per slot — match the historical P1 cyan-sword / P2 coral-axe
-// loadout so a user who just clicks "Применить" without touching anything
-// sees the original characters.
-const DEFAULT_BODY_BY_INDEX = ['cyan', 'coral'];
+// Default picks per slot — closest equivalents to the historical
+// P1 cyan-sword / P2 coral-axe loadout in the new wheel palette so a
+// user who just clicks "Применить" without touching anything sees the
+// familiar characters.
+const DEFAULT_BODY_BY_INDEX = ['sky', 'red'];
 const DEFAULT_CAPE_BY_INDEX = ['royal', 'crimson'];
 const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
 
@@ -224,6 +225,10 @@ export class StartMenu {
     return slot;
   }
 
+  // Build a flat-row colour picker. Each swatch is a circular bead
+  // (radial-gradient: highlight + darker rim → reads as 3-D), and the
+  // row uses flex-wrap so a 13-colour palette breaks into two lines
+  // inside the slot's narrow width without overflowing.
   _buildSwatchRow(presets, activeId, onPick) {
     const row = document.createElement('div');
     row.className = 'start-color-row';
@@ -231,7 +236,11 @@ export class StartMenu {
       const sw = document.createElement('button');
       sw.type = 'button';
       sw.className = 'start-swatch';
-      sw.style.background = hexToCss(preset.body);
+      const css = hexToCss(preset.body);
+      // Radial gradient: bright highlight at top-left, fade to base,
+      // dark rim at bottom-right — gives the swatch a sphere/bead
+      // feel without needing actual lighting.
+      sw.style.background = `radial-gradient(circle at 32% 28%, rgba(255,255,255,0.55) 0%, ${css} 38%, ${css} 70%, rgba(0,0,0,0.25) 100%)`;
       sw.title = preset.name;
       sw.setAttribute('data-color', preset.id);
       sw.setAttribute('aria-label', preset.name);
@@ -280,6 +289,7 @@ export class StartMenu {
       tint: presetHex(PLAYER_COLOR_PRESETS, cfg.color),
       capeTint: presetHex(CAPE_COLOR_PRESETS, cfg.cape),
       scale: 0.9,
+      skinAware: true,
     });
     // Centre on the canvas roughly at chest height; the model's origin sits
     // at the feet, so we don't translate vertically — the camera lookAt

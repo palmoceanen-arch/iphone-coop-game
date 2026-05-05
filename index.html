@@ -2,9 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Twin Hearts — Coop Adventure</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E" />
+    <!-- PWA: installable Chrome app + iOS Add-to-Home-Screen. The
+         manifest declares display:fullscreen so once installed the
+         game window has no browser chrome and (on supported OSs)
+         takes the whole screen. The companion service worker is
+         intentionally a no-op fetch passthrough — Chrome only
+         requires its existence to enable the "Install" affordance,
+         and a real cache strategy would just get in the way during
+         development. -->
+    <link rel="manifest" href="/game.webmanifest" />
+    <meta name="theme-color" content="#0c1015" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Twin Hearts" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <style>
       :root { color-scheme: dark; }
       html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1015; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e8e8; }
@@ -300,14 +314,29 @@
         border-radius: 8px; margin: 4px 0 8px;
       }
       .start-section-label { font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 4px; }
-      .start-color-row { display: flex; gap: 4px; flex-wrap: nowrap; }
-      .start-swatch {
-        width: 22px; height: 22px; flex: 1; max-width: 32px; border-radius: 50%;
-        border: 2px solid rgba(255,255,255,0.15); cursor: pointer;
-        padding: 0; transition: transform 100ms ease, border-color 100ms ease;
+      /* Flat-row colour picker — wraps to 2 lines inside narrow slots
+         when the palette is large (13 colours).  Each swatch is a
+         circular 3-D-bead (radial gradient set inline in JS). */
+      .start-color-row {
+        display: flex; flex-wrap: wrap;
+        gap: 5px;
+        justify-content: flex-start;
+        margin: 4px 0 8px;
       }
-      .start-swatch:hover { transform: scale(1.1); }
-      .start-swatch.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(59,130,246,0.6); }
+      .start-swatch {
+        width: 24px; height: 24px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.18);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+        cursor: pointer; padding: 0;
+        transition: transform 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
+      }
+      .start-swatch:hover { transform: scale(1.15); z-index: 2; }
+      .start-swatch.active {
+        border-color: #fff;
+        box-shadow: 0 0 0 2px rgba(59,130,246,0.7), 0 1px 3px rgba(0,0,0,0.45);
+        z-index: 3;
+      }
       .start-weapon-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
       }
@@ -404,7 +433,7 @@
             <button id="restart">Restart</button>
           </div>
         </div>
-        <div id="fps">FPS …</div>
+        <div id="fps">FPS … · — ms</div>
         <div id="pause" role="dialog" aria-modal="true" aria-labelledby="pause-title">
           <div class="pause-panel">
             <h1 id="pause-title">Пауза</h1>
@@ -477,7 +506,7 @@
               </div>
 
               <div class="pause-row">
-                <div class="label">Счётчик FPS<span class="desc">Показать FPS в углу экрана.</span></div>
+                <div class="label">Счётчик FPS<span class="desc">Показать FPS и frametime в углу экрана.</span></div>
                 <div class="control"><div class="toggle" data-key="showFps" data-type="toggle"></div></div>
               </div>
             </div>
@@ -586,5 +615,20 @@
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>
+    <script>
+      // Register the no-op service worker so Chrome considers the
+      // page installable as a PWA. Wrapped in a feature check + load
+      // handler so it doesn't slow down first paint and so older
+      // browsers without SW support still load the game normally.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+            // Registration failure is non-fatal — the game still
+            // works in a normal tab, you just won't see Chrome's
+            // "Install Twin Hearts" button in the address bar.
+          });
+        });
+      }
+    </script>
   </body>
 </html>

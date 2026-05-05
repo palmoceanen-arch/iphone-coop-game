@@ -235,9 +235,14 @@ export function preloadModels(onProgress) {
   const charPromises = charEntries.map(([key, { url }]) =>
     new Promise((resolve, reject) => {
       loader.load(url, (gltf) => {
+        // Pre-classify the body atlas's skin pixels once per character
+        // kind. Cheap (<100ms even on 1024×1024 atlases) and the mask
+        // is then shared by every clone — see _attachSkinAwareTintShader.
+        const skinMask = _findAndBuildSkinMask(gltf.scene);
         cache[key] = {
           scene: gltf.scene,
           animations: gltf.animations || [],
+          skinMask,
         };
         done += 1;
         onProgress?.(done, total, key);
@@ -435,14 +440,148 @@ function classifyMeshRole(meshNode) {
   while (cur) {
     const name = cur.name || '';
     if (name.includes('Cape')) return 'cape';
-    if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
     if (name.includes('Helmet')) return 'helmet';
+    if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
+    // Catch *any* mesh parented under a hand-slot bone — the built-in
+    // sword/shield meshes are caught by the names above, but external
+    // attached weapons (axe_1h, axe_2h, staff, wand …) come from
+    // separate GLBs and use their own arbitrary mesh names. Their one
+    // common ancestor after `setEquippedWeapon` adds them is the
+    // `handslotr` / `handslot.r` bone, so any mesh whose parent chain
+    // walks through that bone is treated as a weapon and skipped by
+    // the tinter. Three.js's PropertyBinding strips dots, so the
+    // sanitised name on cloned skeletons is `handslotr`; the original
+    // unsanitised `handslot.r` shows up on first-load before cloning.
+    if (name.toLowerCase().includes('handslot')) return 'weapon';
     cur = cur.parent;
   }
   return 'body';
 }
 
-export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, hueShift = 0 } = {}) {
+// -- Skin-mask precomputation -------------------------------------------------
+//
+// KayKit ships every character as a single skinned mesh sharing one atlas
+// texture, where face/hands "skin" pixels sit alongside armour and cloth
+// pixels. The simplest tinting approach (multiply `material.color` by the
+// atlas) ends up colouring the skin too — pick "cyan" and the face goes
+// teal — which is exactly the issue the user reported.
+//
+// To suppress tinting on skin pixels without splitting the geometry, we
+// pre-classify every atlas pixel as skin / non-skin once at preload time
+// and bake the result into a same-size single-channel "skin mask"
+// DataTexture. That texture is later sampled inside a custom fragment
+// shader (see `_attachSkinAwareTintShader`) which only multiplies the
+// user's tint into non-skin pixels — skin always reads through at its
+// natural atlas colour.
+function _isSkinPixel(r, g, b) {
+  // Heuristic tuned against KayKit's tan / orange-pink skin ramps:
+  //   r > g + 12, r > b + 25, g > b + 2  → red dominates (warm tone)
+  //   80 ≤ r ≤ 250                       → not pitch-black, not pure white
+  // Hits ranges like (178, 112, 82), (155, 90, 69), (248, 203, 171) without
+  // catching cool-toned cloth or weathered wood props that share the atlas.
+  return r >= 80 && r <= 250
+    && r > g + 12
+    && r > b + 25
+    && g > b + 2;
+}
+function _buildSkinMaskFromImage(image) {
+  if (!image || !image.width || !image.height) return null;
+  const w = image.width;
+  const h = image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  let pixels;
+  try {
+    pixels = ctx.getImageData(0, 0, w, h).data;
+  } catch {
+    // Cross-origin image — `getImageData` will throw a SecurityError. We
+    // serve the atlases from the same origin so this shouldn't happen,
+    // but bail gracefully to "no mask = legacy uniform tinting" if it
+    // ever does.
+    return null;
+  }
+  const mask = new Uint8Array(w * h);
+  for (let i = 0, n = w * h; i < n; i++) {
+    if (_isSkinPixel(pixels[i * 4], pixels[i * 4 + 1], pixels[i * 4 + 2])) {
+      mask[i] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(mask, w, h, THREE.RedFormat);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  // GLTF textures use V-up sampling (flipY=false). The canvas drawImage
+  // result above is already in canvas-orientation (V-down), which matches
+  // what `texture2D(map, vMapUv)` returns for GLTF maps — both samplers
+  // see the same pixel for the same UV.
+  tex.flipY = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Find the body mesh's diffuse map on a GLB scene and convert it into a
+// skin mask texture. Called once per character kind, then the same shared
+// mask is reused by every clone of that character.
+function _findAndBuildSkinMask(scene) {
+  let bodyTexture = null;
+  scene.traverse((obj) => {
+    if (bodyTexture || !obj.isMesh) return;
+    if (classifyMeshRole(obj) !== 'body') return;
+    const m = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    if (m && m.map && m.map.image) bodyTexture = m.map;
+  });
+  if (!bodyTexture) return null;
+  return _buildSkinMaskFromImage(bodyTexture.image);
+}
+
+// Inject a fragment shader hook into a MeshToonMaterial so that the
+// body splits cleanly into two regions:
+//   - skin pixels (face, hands)            → keep the natural atlas RGB
+//   - everything else (armour, cloth, etc) → use `material.color` directly
+//
+// The "directly" part is important: we do NOT multiply tint × atlas for
+// non-skin pixels, because the atlas ships with desaturated grey armour
+// pixels — multiplying by white gives grey, multiplying by red gives
+// muddy maroon. Replacing the atlas value with the tint instead means
+// white = pure white armour, red = pure red armour, etc. The toon
+// gradient map still applies on top so the cel-shaded lit/shadow bands
+// come through.
+function _attachSkinAwareTintShader(material, skinMaskTex) {
+  if (!material || !skinMaskTex) return;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.skinMaskTexture = { value: skinMaskTex };
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        'void main() {',
+        'uniform sampler2D skinMaskTexture;\nvoid main() {',
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+        vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+        // \`diffuseColor.rgb\` enters this chunk equal to uniform
+        // "diffuse" = material.color (the user-picked tint). We blend
+        // toward sampledDiffuseColor wherever the skin mask is hot,
+        // so skin pixels read through at their natural atlas colour
+        // while clothing/armour pixels stay at the pure tint colour
+        // (no atlas multiplication → no muddiness).
+        float skinAmount = texture2D( skinMaskTexture, vMapUv ).r;
+        diffuseColor.rgb = mix( diffuseColor.rgb, sampledDiffuseColor.rgb, skinAmount );
+        diffuseColor.a *= sampledDiffuseColor.a;
+        #endif`,
+      );
+  };
+  // Share one compiled program across every clone — same uniforms layout,
+  // only `material.color` and the per-instance mask binding differ. Bump
+  // the cache key when the shader logic itself changes so any cached v1
+  // programs from previous sessions don't leak in.
+  material.customProgramCacheKey = () => 'tinted-skin-aware-v2';
+  material.needsUpdate = true;
+}
+
+export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, hueShift = 0, skinAware = false } = {}) {
   const entry = cache[kind];
   if (!entry) {
     throw new Error(`[models] unknown kind "${kind}" — did preloadModels() resolve?`);
@@ -467,9 +606,50 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
         // Leave swords/shields with their atlas-driven colour so the user's
         // body tint doesn't bleed into the equipment.
       } else if (role === 'cape') {
+        // Cape gets a flat tint with no atlas multiplication: drop the
+        // shared map so `material.color` shows clean (white = white cape,
+        // crimson = crimson cape). The KayKit cape region of the atlas
+        // ships in a saturated red that would otherwise muddy every
+        // user-picked colour. Toon shading via the gradient map still
+        // gives the cape its cel-shaded lit/shadow bands.
+        _stripMapForFlatColor(obj.material);
         const capeHex = (capeTint !== null) ? capeTint : tint;
         if (capeHex !== null) {
           _tmpColor.setHex(capeHex);
+          applyTint(obj.material, _tmpColor);
+        } else if (hueShift !== 0) {
+          applyHueShift(obj.material, hueShift);
+        }
+      } else if (role === 'helmet') {
+        // Helmet shares the atlas with the body, but its UV region
+        // samples darkened steel-grey pixels — multiplying tint by
+        // those keeps the helmet looking grey/muddy regardless of
+        // what colour the user picks (the user reported this as
+        // "by default it's grey, lighten it"). Drop the map for
+        // pure-tint behaviour: helmet now follows the body colour
+        // exactly, so white-body = white-helmet, red-body =
+        // red-helmet, etc. Toon shading via the gradient map still
+        // gives it the cel-shaded shadow/light bands.
+        _stripMapForFlatColor(obj.material);
+        if (tint !== null) {
+          _tmpColor.setHex(tint);
+          applyTint(obj.material, _tmpColor);
+        } else if (hueShift !== 0) {
+          applyHueShift(obj.material, hueShift);
+        }
+      } else if (role === 'body') {
+        // Body keeps the atlas (so face / armour detail stays) but
+        // when `skinAware` is requested it routes tint through a
+        // shader hook so the face and hands aren't recoloured along
+        // with the clothing. Only enabled for the player Knight —
+        // enemy atlases (skeletons etc.) ship with warm-toned bones
+        // the heuristic would mis-classify, so we leave their
+        // tinting on the simple uniform path.
+        if (skinAware && entry.skinMask) {
+          _attachSkinAwareTintShader(obj.material, entry.skinMask);
+        }
+        if (tint !== null) {
+          _tmpColor.setHex(tint);
           applyTint(obj.material, _tmpColor);
         } else if (hueShift !== 0) {
           applyHueShift(obj.material, hueShift);
@@ -561,6 +741,22 @@ function applyTint(material, color) {
     // Keep the texture but tint via base color — KayKit uses a single gradient
     // atlas, so multiplying gives a recognisable team-color effect without
     // losing the shading detail in the atlas.
+  }
+}
+
+// Drop the diffuse map so `material.color` shows directly without being
+// multiplied by atlas pixels — used for cape tinting where the source
+// atlas region ships with a saturated colour that muddies every user-
+// picked tint.
+function _stripMapForFlatColor(material) {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    for (const m of material) _stripMapForFlatColor(m);
+    return;
+  }
+  if (material.map !== null) {
+    material.map = null;
+    material.needsUpdate = true;
   }
 }
 

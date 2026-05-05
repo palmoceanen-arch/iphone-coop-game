@@ -23,34 +23,53 @@ const COLORS = [
   { body: 0xff8a8a, trim: 0x803f3f, eye: 0xffffff },
 ];
 
-// Selectable colour palette shown in the start-menu character picker. The
-// `body` value is a 24-bit RGB hex int matching what `spawnCharacter()`
-// expects for its `tint` argument; `name` is the Russian label shown under
-// each swatch. The first two entries match the historical P1/P2 defaults.
+// Selectable colour palette shown in the start-menu character picker.
+// White + 12 evenly-spaced hues laid out as a flat row in the start
+// menu (see startMenu.js `_buildSwatchRow`). The `body` value is a
+// 24-bit RGB hex int passed straight into `spawnCharacter()` as its
+// `tint` argument; `name` is the Russian label shown as the swatch
+// tooltip.
+//
+// Important: the body shader replaces non-skin atlas pixels with
+// `material.color` directly (see models.js `_attachSkinAwareTintShader`),
+// so the picked colour shows up purely on the armour/cloth — white is
+// pure white, red is pure red, no atlas-grey muddying. Skin pixels
+// (face/hands) always keep their natural tone regardless of the pick.
 export const PLAYER_COLOR_PRESETS = [
-  { id: 'cyan',     name: 'Голубой',   body: 0x6ad0ff },
-  { id: 'coral',    name: 'Коралл',    body: 0xff8a8a },
-  { id: 'mint',     name: 'Мятный',    body: 0x6affb5 },
-  { id: 'lavender', name: 'Лаванда',   body: 0xc08aff },
-  { id: 'amber',    name: 'Янтарь',    body: 0xffc56a },
-  { id: 'rose',     name: 'Розовый',   body: 0xff6ac4 },
-  { id: 'azure',    name: 'Синий',     body: 0x5a8aff },
-  { id: 'lime',     name: 'Лайм',      body: 0xc8ff5a },
+  { id: 'white',   name: 'Белый',       body: 0xffffff },
+  { id: 'red',     name: 'Красный',     body: 0xf25a5a },
+  { id: 'orange',  name: 'Оранжевый',   body: 0xff8a3a },
+  { id: 'amber',   name: 'Янтарь',      body: 0xffb633 },
+  { id: 'yellow',  name: 'Жёлтый',      body: 0xffe066 },
+  { id: 'lime',    name: 'Лайм',        body: 0xb6e84d },
+  { id: 'green',   name: 'Зелёный',     body: 0x55cf6c },
+  { id: 'teal',    name: 'Бирюзовый',   body: 0x35bcd0 },
+  { id: 'sky',     name: 'Голубой',     body: 0x4ec1ff },
+  { id: 'blue',    name: 'Синий',       body: 0x6883ff },
+  { id: 'indigo',  name: 'Индиго',      body: 0x8474ff },
+  { id: 'purple',  name: 'Пурпурный',   body: 0xb56fec },
+  { id: 'pink',    name: 'Розовый',     body: 0xff77aa },
 ];
 
-// Cape palette — richer, more saturated tones so the cape reads as a
-// contrasting accent against the body even when the body uses one of the
-// pastel presets above. Reused IDs/names where it makes sense; the values
-// are deliberately deeper.
+// Cape palette — same ring layout as the body, just deeper / more
+// saturated tones so the cape reads as a contrasting accent. The cape
+// material has its texture stripped (see models.js `_stripMapForFlatColor`),
+// so `material.color` paints the cape exactly as picked — no atlas
+// multiplication, no muddying.
 export const CAPE_COLOR_PRESETS = [
-  { id: 'crimson', name: 'Багровый',  body: 0x8a1a1a },
-  { id: 'royal',   name: 'Королевский', body: 0x2a3aa0 },
-  { id: 'forest',  name: 'Лесной',    body: 0x1d6b2e },
-  { id: 'gold',    name: 'Золотой',   body: 0xc8a23a },
-  { id: 'plum',    name: 'Сливовый',  body: 0x6a2a8a },
-  { id: 'charcoal',name: 'Уголь',     body: 0x2a2f36 },
-  { id: 'silver',  name: 'Серебро',   body: 0xc0c8d0 },
-  { id: 'teal',    name: 'Бирюзовый', body: 0x1a8a8a },
+  { id: 'white',    name: 'Белый',       body: 0xf0f0f0 },
+  { id: 'crimson',  name: 'Багровый',    body: 0xa83232 },
+  { id: 'rust',     name: 'Ржавчина',    body: 0xc66128 },
+  { id: 'gold',     name: 'Золотой',     body: 0xc69a26 },
+  { id: 'olive',    name: 'Оливковый',   body: 0x6b7a2a },
+  { id: 'forest',   name: 'Лесной',      body: 0x2e7d3a },
+  { id: 'teal',     name: 'Бирюзовый',   body: 0x256e7a },
+  { id: 'navy',     name: 'Морской',     body: 0x223066 },
+  { id: 'royal',    name: 'Королевский', body: 0x2c3a96 },
+  { id: 'plum',     name: 'Сливовый',    body: 0x6a2585 },
+  { id: 'wine',     name: 'Винный',      body: 0x7a1a44 },
+  { id: 'silver',   name: 'Серебро',     body: 0xa8a8b0 },
+  { id: 'charcoal', name: 'Уголь',       body: 0x2a2e34 },
 ];
 
 // KayKit characters face +Z by default in the GLB; our atan2(facing.x,facing.z)
@@ -158,7 +177,7 @@ export class Player {
 
     // Animated CC0 character model from KayKit (Knight) — clone of the shared
     // skeleton + materials so each player can tint differently without leaking.
-    const character = spawnCharacter('knight', { tint, capeTint, scale: MODEL_SCALE });
+    const character = spawnCharacter('knight', { tint, capeTint, scale: MODEL_SCALE, skinAware: true });
     this._character = character;
     grp.add(character.root);
 
@@ -275,9 +294,10 @@ export class Player {
   die() {
     this.alive = false;
     this.invuln = 999;
-    // Player death is the heaviest event in the loop — a chunky freeze
-    // sells the moment without messing with the regular hit feel.
-    this.effects.doHitStop(0.12);
+    // Player death keeps the longest of the hit-stops, but trimmed
+    // hard from the older 0.12s — anything noticeably longer feels
+    // like the game stuttered rather than punctuated the death.
+    this.effects.doHitStop(0.04);
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xff8080, 24, 6, 0.7);
     this.sound.death();
     const death = this._character?.actions?.death;
@@ -517,7 +537,14 @@ export class Player {
 
     // Smoothed render transform — lerp position by exponential smoothing and
     // yaw by shortest-arc to avoid 180° flip on direction reversal.
-    const posLerp = 1 - Math.exp(-30 * dt);
+    //
+    // Time-constant 100 (≈81%/frame, ~33ms settling) instead of the older
+    // 30 (~39%/frame, ~83ms settling): the slower constant left a visible
+    // ~20cm gap between sim pos and rendered mesh at full run speed, which
+    // read as "rubber-banding" when the player tapped a new direction —
+    // the visual character would seem to drift then snap into place. 100
+    // keeps a faint sense of weight on direction changes without the lag.
+    const posLerp = 1 - Math.exp(-100 * dt);
     this.smoothPos.x += (this.pos.x - this.smoothPos.x) * posLerp;
     this.smoothPos.z += (this.pos.z - this.smoothPos.z) * posLerp;
     this.mesh.position.set(this.smoothPos.x, 0, this.smoothPos.z);

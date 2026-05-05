@@ -840,11 +840,16 @@ shopList.addEventListener('click', (e) => {
   }
 });
 
-// Send state at ~30Hz
+// Send state at the simulation rate (60Hz). Anything slower stair-steps
+// the moveX/moveZ axes — the host's fixed-step sim ticks twice for every
+// input snapshot, so the second sim frame sees stale input and the player
+// "lurches" toward the new direction one frame late. Volatile emits drop
+// in-flight when the next packet is queued, so doubling the rate doesn't
+// pile up if the network is briefly congested.
 setInterval(() => {
   if (assignedSlot < 0) return;
   socket.volatile.emit('input:state', state);
-}, 1000 / 30);
+}, 1000 / 60);
 
 // ----------------------------------------------------------------------
 // Aggressively suppress iOS Safari gestures: pinch-zoom, double-tap-zoom,

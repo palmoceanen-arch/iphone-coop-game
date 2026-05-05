@@ -1,6 +1,22 @@
 import * as THREE from 'three';
 import { vdist, defaultRandom } from './utils.js';
 import { spawnCharacter, crossFadeTo } from './models.js';
+import { HandlePool } from './pool.js';
+
+// Recycle the (heavy) skeleton clone + AnimationMixer + cloned MeshToon
+// materials produced by `spawnCharacter`. Killing 5 slimes a second is
+// realistic late-game; without pooling each kill drops ~60 ToonMaterial
+// clones + a fresh AnimationMixer with ~30 ClipActions onto the GC.
+//
+// Pool key bundles every visual axis a single instance pre-bakes — the
+// kind drives the source GLB + tint + transparent opacity (e.g. wisps render
+// at 0.55 alpha), and elite-ness drives the +15% scale + 0.3 emissive boost.
+// Two acquired handles for the same key are visually interchangeable.
+const ENEMY_POOL = new HandlePool(24);
+
+function enemyPoolKey(kind, elite) {
+  return `${kind}|${elite ? 'elite' : 'normal'}`;
+}
 
 // Map each enemy archetype to a CC0 character model + per-kind tint, scale,
 // vertical offset and which animation slot to use for its primary attack.
@@ -106,8 +122,15 @@ export class Enemy {
   }
 
   _buildMesh() {
-    const grp = new THREE.Group();
     const visual = ENEMY_VISUALS[this.kind] || ENEMY_VISUALS.slime;
+    const reused = ENEMY_POOL.acquire(enemyPoolKey(this.kind, this.elite));
+    if (reused) {
+      this._adoptHandle(reused, visual);
+      this._resetVisualState(visual);
+      return reused.grp;
+    }
+
+    const grp = new THREE.Group();
     const character = spawnCharacter(visual.kind, { tint: visual.tint, scale: visual.scale });
     character.root.position.y = visual.yOffset || 0;
     if (visual.transparent !== undefined) {
@@ -139,6 +162,7 @@ export class Enemy {
     this._animState = 'idle';
     this._attackAnimKey = visual.attackAnim;
     this.body = null; // legacy field; effects code references `body.material` for hit flash but we now use _materials.
+    this._eliteRing = null;
 
     // Elite enemies get a golden ring under their feet + emissive tint that
     // makes them readable from a distance. The ring is added to the parent
@@ -164,6 +188,104 @@ export class Enemy {
 
     grp.position.set(this.pos.x, 0, this.pos.z);
     return grp;
+  }
+
+  // Re-bind handles from a pooled bundle onto `this`. The `grp`/`character`
+  // /`materials`/`eliteRing` references are kept so all gameplay code that
+  // pokes `this._character` / `this._materials` / etc. just keeps working.
+  _adoptHandle(handle, visual) {
+    this._character = handle.character;
+    this._materials = handle.materials;
+    this._eliteRing = handle.eliteRing;
+    this._attackAnimKey = visual.attackAnim;
+    this._animState = 'idle';
+    this.body = null;
+  }
+
+  // Bring a pooled enemy back to a clean visual state. Must reverse anything
+  // the live update loop mutates between `acquire` and `release`:
+  //   • bomber pulses character.root.scale during fuse — reset to base
+  //   • _updateVisualEffects sets emissive flash / freeze / poison tint —
+  //     clear so the first re-spawn frame doesn't show a frozen-blue slime
+  //   • mixer plays attack / hit / death actions on top of idle/run — stop
+  //     all of them so the new instance crossfades cleanly into idle
+  //   • elite ring rotates over time — leave rotation as-is (no gameplay
+  //     impact) but make sure the ring is parented to grp (it is, just by
+  //     virtue of being a child of `grp`)
+  _resetVisualState(visual) {
+    const grp = this._character?.root?.parent || null;
+    if (grp) {
+      grp.position.set(this.pos.x, 0, this.pos.z);
+      grp.rotation.set(0, 0, 0);
+      grp.visible = true;
+    }
+    const root = this._character?.root;
+    if (root) {
+      const eliteScale = this.elite ? 1.15 : 1.0;
+      root.scale.setScalar(visual.scale * eliteScale);
+      root.position.y = visual.yOffset || 0;
+    }
+    // Animation reset: force every action off the mixer, then re-arm idle
+    // as the locomotion baseline. Three.js's `action.stop()` deactivates
+    // the action and clears its internal time tracking; `action.reset()`
+    // alone leaves it scheduled, which would let the previous death/hit/
+    // attack pose bleed into the new spawn (most visibly as a stuck
+    // T-pose when no locomotion clip ends up with weight > 0).
+    if (this._character?.actions) {
+      const actions = this._character.actions;
+      for (const a of Object.values(actions)) {
+        if (!a) continue;
+        a.stop();
+        a.weight = 0;
+      }
+      if (actions.idle) {
+        actions.idle.reset();
+        actions.idle.weight = 1;
+        actions.idle.enabled = true;
+        actions.idle.play();
+      }
+    }
+    // Park _animState in an impossible value so the locomotion machine's
+    // `desired !== _animState` check fires unconditionally on the first
+    // post-spawn tick — that way crossFadeTo runs through its normal
+    // path and we never ship an enemy whose action weights all sum to 0.
+    this._animState = null;
+    for (const m of this._materials || []) {
+      if (m.emissive) {
+        if (this.elite) {
+          m.emissive.setHex(0xffaa30);
+          m.emissiveIntensity = 0.3;
+        } else {
+          m.emissive.setHex(0x000000);
+          m.emissiveIntensity = 0;
+        }
+      }
+    }
+  }
+
+  // Tear-down counterpart of `_buildMesh`. Removes the mesh from the scene
+  // and either parks the visual handle in the pool for the next spawn or —
+  // if the bucket is full — drops the reference for GC. Called from die(),
+  // bomber self-explode, and the chunk-unload despawn path in game.js.
+  _releaseMesh() {
+    if (!this.mesh) return;
+    try { this.world.scene.remove(this.mesh); } catch { /* ignore */ }
+    this.mesh.visible = false;
+    if (!this._character) {
+      this.mesh = null;
+      return;
+    }
+    const handle = {
+      grp: this.mesh,
+      character: this._character,
+      materials: this._materials,
+      eliteRing: this._eliteRing || null,
+    };
+    ENEMY_POOL.release(enemyPoolKey(this.kind, this.elite), handle);
+    this.mesh = null;
+    this._character = null;
+    this._materials = null;
+    this._eliteRing = null;
   }
 
   _playAttackAnim() {
@@ -208,15 +330,16 @@ export class Enemy {
   die() {
     if (!this.alive) return;
     this.alive = false;
-    // Kills are the only place we still pay the freeze tax — a short
-    // 0.10s pause makes the moment land without choking high-DPS play
-    // (it's the natural rhythm break between targets, not added
-    // friction inside a single fight).
-    this.effects.doHitStop(0.10);
+    // Kills get the lightest possible micro-pause — barely perceptible
+    // (~1.5 sim frames of slow-mo) so high-DPS / multi-kill swings
+    // don't feel sluggish but the moment still registers as an
+    // "impact". The rising-edge guard in Effects.doHitStop prevents a
+    // 3-kill swing from triggering this three times in a row.
+    this.effects.doHitStop(0.025);
     this.effects.burst(this.pos.x, 0.7, this.pos.z, this._dieColor(), 18, 7, 0.6);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xffffff, 1.4, 0.35);
     this.sound.enemyDie();
-    this.world.scene.remove(this.mesh);
+    this._releaseMesh();
     if (this.kind === 'bomber') this._explode();
   }
 
@@ -228,7 +351,7 @@ export class Enemy {
     this.effects.flashSphere(this.pos.x, 0.8, this.pos.z, 0xff8a30, this.boomRadius, 0.3);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xff8a30, this.boomRadius, 0.4);
     this.effects.shakeCamera(0.5);
-    this.effects.doHitStop(0.06);
+    this.effects.doHitStop(0.02);
     this.sound.bomb();
     if (playersForDamage) {
       for (const p of playersForDamage) {
@@ -241,25 +364,57 @@ export class Enemy {
 
   update(dt, players, ctx) {
     if (!this.alive) return;
-    // Chunk-level culling: if this enemy's chunk is outside the simulation
-    // radius, freeze it entirely — no AI, no animation, no collisions. The
-    // mesh is hidden as well (the parent chunk group is hidden by World, but
-    // belt-and-braces). When players walk back into range, the enemy resumes
-    // exactly where it left off.
-    const cx = Math.floor(this.pos.x / 32);
-    const cz = Math.floor(this.pos.z / 32);
-    const sleeping = !this.world.isChunkSimulating(cx, cz);
-    if (sleeping) {
+    // Distance-based culling with hysteresis. The previous implementation
+    // sleep-gated on `world.isChunkSimulating(currentChunk)`, which has
+    // two flaws:
+    //   1. Granularity is one full chunk (32u). An enemy that walks
+    //      *across* a chunk boundary right at the sim-radius edge would
+    //      flip asleep on the very next tick — even if the player is
+    //      still 30 units away — and then flip back as the player
+    //      advances by another half-chunk. Visible to the user as
+    //      a "stuck twitching" enemy that can't leave its chunk.
+    //   2. The sleep check used `this.pos`, but `chunkKey` (set at
+    //      construction) was never recomputed. So the despawn-on-
+    //      chunk-unload path could free the wrong enemy (the one whose
+    //      *home* was in the unloaded chunk, even if the enemy itself
+    //      had since wandered out).
+    // Now: sleep when far from every alive player, with separate
+    // wake/sleep thresholds so brief boundary crossings don't flicker.
+    // Use every player's position, alive or downed — during the death
+    // screen we still want enemies in view to stay visible (they
+    // shouldn't pop out of existence the moment the player goes down).
+    let nearestPlayerD2 = Infinity;
+    for (const p of players) {
+      if (!p) continue;
+      const dx = this.pos.x - p.pos.x;
+      const dz = this.pos.z - p.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < nearestPlayerD2) nearestPlayerD2 = d2;
+    }
+    // Wake within ~70u (just over 2 chunks at 32u/chunk), sleep beyond
+    // ~85u so there's a 15u dead-zone between the two states.
+    const SLEEP_FAR_2 = 85 * 85;
+    const WAKE_NEAR_2 = 70 * 70;
+    const shouldSleep = this.asleep
+      ? nearestPlayerD2 > WAKE_NEAR_2
+      : nearestPlayerD2 > SLEEP_FAR_2;
+    if (shouldSleep) {
       if (!this.asleep) {
         this.asleep = true;
-        this.mesh.visible = false;
+        if (this.mesh) this.mesh.visible = false;
       }
       return;
     }
     if (this.asleep) {
       this.asleep = false;
-      this.mesh.visible = true;
+      if (this.mesh) this.mesh.visible = true;
     }
+    // Refresh chunkKey from current position so chunk-unload despawn
+    // operates on a wandering enemy's *current* chunk, not the chunk
+    // they spawned in. Cheap (one floor + string format) and avoids
+    // a class of "enemy disappears when player walks back through
+    // their old chunk" bugs.
+    this.chunkKey = this.world.chunkKeyOf(this.pos.x, this.pos.z);
     this.invuln = Math.max(0, this.invuln - dt);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
     const statusMult = this._slow > 0 ? 0.35 : 1;
@@ -306,16 +461,32 @@ export class Enemy {
         this.stateTimer = 0;
       }
     } else if (this.state === 'chase') {
-      // Lose aggro when no target in range, or pulled too far from home, or already taking damage repeatedly.
+      // Lose aggro only when the target is genuinely out of reach
+      // (dist > disengageRange) — drop the old leash check that
+      // tethered each enemy to its spawn point. The leash made
+      // mid-chase enemies "pop" back to a slow walk-home as soon
+      // as the player crossed an arbitrary radius from spawn,
+      // which the user reads as "twitches and slows down when far
+      // from spawn". Now they keep chasing as long as they can
+      // see a player; if the player escapes, the enemy stops in
+      // place and re-roots its home to that spot (below) so it
+      // wanders locally instead of trekking all the way back.
       const tooFar = !target || dist > this.disengageRange;
-      const leashed = distFromHome > this.leashRange;
-      if (tooFar || leashed) {
-        this.state = 'return';
+      if (tooFar) {
+        // Skip the legacy 'return' state — re-anchor home to the
+        // enemy's current position and drop straight into 'idle'.
+        // The old code routed through 'return', which marched the
+        // enemy back to its spawn point at idleSpeed (35% of run
+        // speed); that was exactly the "lag" the user saw whenever
+        // they walked far from a spawn cluster and aggroed enemies
+        // had to slowly trudge home afterwards.
+        this.state = 'idle';
         this.stateTimer = 0;
-        // bombers shouldn't fizzle their fuse — but if not yet started, abort and walk home
-        if (this.kind === 'bomber' && !this.fuseStarted) {
-          // ok, just walk home
-        }
+        this.home.x = this.pos.x;
+        this.home.z = this.pos.z;
+        this.wanderTarget.x = this.pos.x;
+        this.wanderTarget.z = this.pos.z;
+        this.wanderTimer = 0;
       }
     }
 
@@ -440,8 +611,12 @@ export class Enemy {
             if (this.fuseTimer <= 0) {
               this._explode(players);
               this.alive = false;
-              this.world.scene.remove(this.mesh);
+              this._releaseMesh();
               this.killedBy = 'self';
+              // Bail out of the rest of update() — _releaseMesh nulled
+              // this.mesh, so the position-set / yaw / visual-effect tail
+              // of the function would otherwise dereference null.
+              return;
             }
           }
           break;
@@ -592,6 +767,26 @@ export class Enemy {
     }
     if (this._animState === 'walk' && this._character?.actions?.walk) {
       this._character.actions.walk.timeScale = 0.85;
+    }
+    // T-pose safety net. After every locomotion-machine pass, the sum of
+    // locomotion action weights *should* be ~1 (either solo idle, solo
+    // run, solo walk, or one of those mid-crossfade with another). If
+    // the total is near zero — for any reason: a pool-reuse reset that
+    // didn't take, a stale interpolant, an aborted fadeIn — the skinned
+    // mesh falls back to bind pose (T-pose) and the user sees an enemy
+    // sliding around with arms straight out. This guard force-rearms
+    // idle so the worst case is "stationary idle anim" not "T-pose".
+    const acts = this._character?.actions;
+    if (acts) {
+      const wSum = (acts.idle?.weight || 0) + (acts.run?.weight || 0) + (acts.walk?.weight || 0);
+      if (wSum < 0.05 && acts.idle) {
+        acts.idle.stop();
+        acts.idle.reset();
+        acts.idle.weight = 1;
+        acts.idle.enabled = true;
+        acts.idle.play();
+        this._animState = 'idle';
+      }
     }
     this._character?.mixer?.update(dt);
   }
