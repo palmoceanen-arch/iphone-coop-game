@@ -23,13 +23,22 @@
 // every play picks a fresh variant with a small per-shot pitch jitter so
 // repeated combat hits never sound mechanically identical.
 const SAMPLES = {
-  swing:        ['swing_blade_a.ogg', 'swing_blade_b.ogg', 'swing_cloth_a.ogg', 'swing_cloth_b.ogg'],
+  // Sword/weapon swing — bamboo-stick whooshes (qubodup, CC0). Reads as
+  // air being cut, not a knife on cloth like the original RPG-Audio
+  // knifeSlice + cloth pair we shipped first.
+  swing:        ['swing_whoosh_a.ogg', 'swing_whoosh_b.ogg', 'swing_whoosh_c.ogg', 'swing_whoosh_d.ogg'],
   hitFlesh:     ['hit_flesh_a.ogg', 'hit_flesh_b.ogg', 'hit_flesh_c.ogg'],
   hitHeavy:     ['hit_heavy_a.ogg', 'hit_heavy_b.ogg'],
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
-  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg', 'wood_chop.ogg'],
+  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg'],
   potBreak:     ['pot_break_a.ogg', 'pot_break_b.ogg'],
+  // Per-swing impact when a melee weapon connects with a tree (axe-on-
+  // plank texture) or a rock (pickaxe / mining strike). Different
+  // material from the breakable crate / glass pot samples so the
+  // gathering loop has its own ear-recognisable rhythm.
+  hitWood:      ['hit_wood_a.ogg', 'hit_wood_b.ogg', 'hit_wood_c.ogg'],
+  hitStone:     ['hit_stone_a.ogg', 'hit_stone_b.ogg', 'hit_stone_c.ogg'],
   coin:         ['coin_a.ogg', 'coin_b.ogg'],
   treeCreak:    ['tree_creak_a.ogg', 'tree_creak_b.ogg'],
 };
@@ -46,6 +55,8 @@ const RATE_LIMIT = {
   enemyDie: 0.05,
   woodBreak: 0.05,
   potBreak: 0.05,
+  hitWood: 0.06,
+  hitStone: 0.06,
   coin: 0.04,
   treeCreak: 0.10,
 };
@@ -63,6 +74,8 @@ const VOICE_CAP = {
   enemyDie: 4,
   woodBreak: 3,
   potBreak: 3,
+  hitWood: 3,
+  hitStone: 3,
   coin: 5,
   treeCreak: 2,
 };
@@ -273,6 +286,8 @@ export class Sound {
       case 'hurt':      this.tone({ freq: 220, type: 'sawtooth', dur: 0.16, gain: 0.26, slide: -90 }); this.noise({ dur: 0.10, gain: 0.22 }); break;
       case 'enemyDie':  this.noise({ dur: 0.28, gain: 0.45, lp: 1200 }); this.tone({ freq: 180, type: 'sawtooth', dur: 0.20, gain: 0.16, slide: -130 }); break;
       case 'woodBreak': this.noise({ dur: 0.18, gain: 0.5, lp: 1100, hp: 200 }); break;
+      case 'hitWood':   this.noise({ dur: 0.10, gain: 0.42, lp: 1300, hp: 240 }); this.tone({ freq: 240, type: 'sawtooth', dur: 0.06, gain: 0.14, slide: -90 }); break;
+      case 'hitStone':  this.noise({ dur: 0.10, gain: 0.45, lp: 2200, hp: 500 }); this.tone({ freq: 360, type: 'square',   dur: 0.05, gain: 0.10, slide: -160 }); break;
       case 'potBreak':  this.noise({ dur: 0.22, gain: 0.55, lp: 4000, hp: 800 }); this.tone({ freq: 1400, type: 'square', dur: 0.10, gain: 0.18, slide: 800 }); break;
       case 'coin':      this.tone({ freq: 980, type: 'square', dur: 0.06, gain: 0.16, slide: 320 }); this.tone({ freq: 1320, type: 'square', dur: 0.08, gain: 0.14, slide: 200 }); break;
       case 'treeCreak': this.tone({ freq: 240, type: 'sawtooth', dur: 0.40, gain: 0.18, slide: -50 }); break;
@@ -298,6 +313,14 @@ export class Sound {
   woodBreak(opts)  { this._play('woodBreak', opts); }
   potBreak(opts)   { this._play('potBreak', opts); }
   treeCreak(opts)  { this._play('treeCreak', opts); }
+  // Per-swing impact on a tree (axe-on-plank). Quieter than the
+  // tree-felled splinter so the chop loop reads as several muted thunks
+  // building up to one bigger break.
+  hitWood(opts)    { this._play('hitWood', { gain: 0.6, ...(opts || {}) }); }
+  // Per-swing impact on a rock. Mining-pick crack — sharper than wood,
+  // distinct from the procedural rockBreak shatter so multiple hits
+  // don't all sound like the rock just died.
+  hitStone(opts)   { this._play('hitStone', { gain: 0.6, ...(opts || {}) }); }
   // Tree felled: layer a creak preamble onto the wood-splinter break for
   // a one-shot "timber!" cue. Different enough from breakable crate / pot
   // that the gathering loop has its own audio identity even when a tree
@@ -311,6 +334,11 @@ export class Sound {
     if (this.muted || !this.ctx) return;
     this.noise({ dur: 0.30, gain: 0.55, lp: 1600, hp: 200 });
     this.tone({ freq: 260, type: 'square', dur: 0.18, gain: 0.18, slide: -180 });
+    // Layer a mining-pick crack on top so the death moment of a rock
+    // sounds chunkier than just the noise sweep — reuses the same
+    // hit_stone_*.ogg variants we play on each chip swing, at a louder
+    // gain to read as a final "crack open".
+    this._play('hitStone', { gain: 0.95 });
   }
   // Resource pickups: distinct from coin so the topbar counters can be
   // identified by ear. Wood = soft thunk, stone = sharp clack. Both stay
@@ -545,10 +573,14 @@ export class Sound {
     const t = ctx.currentTime;
     // Two-note sweep — high triangle wave, soft envelope. Random pick of
     // a few "species" so the meadow doesn't sound like one bird on loop.
+    // Slightly louder than the cricket pulse so the daytime chorus reads
+    // over the wind bed without needing the player to crank ambient up.
     const species = [
-      { f0: 2400, f1: 3200, dur: 0.10, gain: 0.05 },
-      { f0: 1900, f1: 2600, dur: 0.14, gain: 0.05 },
-      { f0: 3000, f1: 2200, dur: 0.12, gain: 0.04 },
+      { f0: 2400, f1: 3200, dur: 0.10, gain: 0.10 },
+      { f0: 1900, f1: 2600, dur: 0.14, gain: 0.10 },
+      { f0: 3000, f1: 2200, dur: 0.12, gain: 0.08 },
+      { f0: 2200, f1: 2800, dur: 0.18, gain: 0.09 },
+      { f0: 2700, f1: 2300, dur: 0.16, gain: 0.09 },
     ];
     const s = species[(Math.random() * species.length) | 0];
     const o = ctx.createOscillator();
@@ -604,7 +636,9 @@ export class Sound {
     const world = ctx?.world ?? this._world;
 
     // Wind: always present, gusts louder during the day, dies at night.
-    a.windTarget = 0.18 + dayWeight * 0.10;
+    // Trimmed ~33% from the original 0.18 / 0.28 envelope so the gusts
+    // stay audible on quiet maps without crowding combat SFX.
+    a.windTarget = 0.12 + dayWeight * 0.07;
 
     // Water: scan a small ring around the player for water cells. The
     // closer a water cell is, the louder the lap. Caps at ~12m radius.
@@ -654,7 +688,9 @@ export class Sound {
     a.fireTarget = fireDist < 14 ? clamp01(1 - fireDist / 14) * 0.55 : 0;
 
     // Day/night chorus.
-    a.birdsTarget = dayWeight * dayWeight * 0.20;        // p(emit) per scheduler tick
+    // Birds: bumped p(emit) so the meadow actually has a daytime chorus
+    // instead of a single chirp every ~10s.
+    a.birdsTarget = dayWeight * dayWeight * 0.55;        // p(emit) per scheduler tick
     a.cricketsTarget = (1 - dayWeight) * (1 - dayWeight) * 0.45;
 
     // ----- Smooth & write -------------------------------------------------
