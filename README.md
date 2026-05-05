@@ -45,6 +45,9 @@ the danger after dark.
 | Move | `W` `A` `S` `D` | `↑` `←` `↓` `→` |
 | Attack | `F` | `L` |
 | Dash | `R` | `K` |
+| Interact (chest / altar / planter) | `E` | `J` |
+| Build mode (recipes 1–4) | `1` `2` `3` `4` | `7` `8` `9` `0` |
+| Cycle planter crop (M3 farming) | `Q` | `U` |
 
 | Global | |
 |---|---|
@@ -52,6 +55,16 @@ the danger after dark.
 | P1 buy upgrades 1–4 | `1` `2` `3` `4` |
 | P2 buy upgrades 1–4 | `7` `8` `9` `0` |
 | Pause | `P` |
+
+### Farming (M3)
+
+Planters built in build-mode (`Грядка` recipe — slot `4` for P1, slot `0` for
+P2) accept any seed from the shared `seeds` pool and grow whatever crop the
+planting player has currently selected: **пшеница → морковь → тыква →
+капуста**. Press `Q` (P1) or `U` (P2) to cycle — the seed-bar chip in the
+bottom corner shows the current pick and updates live. Each crop has its own
+grow time, food yield and seed return on harvest; see `src/farming.js`'s
+`CROPS` map for the exact numbers.
 
 ## Running
 
