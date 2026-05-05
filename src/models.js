@@ -584,9 +584,9 @@ function _attachSkinAwareTintShader(material, skinMaskTex) {
 // Fraction (0..1) of the atlas's contribution to the final helmet colour.
 // 0.0 = pure tint (no atlas, helmet looks flat / melts into body).
 // 1.0 = legacy `tint × atlas` (steel-grey atlas muddies user colours).
-// 0.25 keeps the picked colour dominant while leaving enough atlas
+// 0.35 keeps the picked colour dominant while leaving enough atlas
 // shadow/detail to read as a distinct armoured piece on top of the body.
-const HELMET_ATLAS_MIX = 0.25;
+const HELMET_ATLAS_MIX = 0.35;
 
 // Inject a fragment shader hook into a MeshToonMaterial so the helmet
 // keeps its atlas detail but only at `HELMET_ATLAS_MIX` strength. The
