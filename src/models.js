@@ -623,15 +623,14 @@ export const WEAPONS = {
   },
   // Heavy two-hander — wider arc, more reach, more wind-up. Uses the 2H
   // *spin* clip with the recovery tail trimmed off (see SLOT_TRIM in
-  // models.js): keeps the wind-up + active strike + follow-through, drops
-  // the last ~35% of the clip which would otherwise look like a second
-  // wind-up. Arc widened to match the spin's visual reach.
+  // models.js) and played at ~2× baked speed so the small held poses inside
+  // the clip blur into one continuous motion instead of reading as a pause.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
     attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
-    swing: 1.50,
+    swing: 0.75,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
@@ -664,7 +663,7 @@ export const WEAPONS = {
     showNodes: [],
     attach: 'axe_2h',
     attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
-    swing: 1.65,
+    swing: 0.85,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189°
