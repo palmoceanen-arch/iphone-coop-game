@@ -186,6 +186,10 @@ export class Game {
     this._fps = 0;
     this._fpsAcc = 0;
     this._fpsFrames = 0;
+    // Worst single-frame dt seen inside the current FPS window. Tracked so
+    // the readout can surface GC pauses / chunk-stream spikes that the
+    // averaged frametime would otherwise smooth away.
+    this._fpsMaxDt = 0;
     // Per-slot phone shop state (independent from desktop Tab-shop):
     this.phoneShopOpen = [false, false];
     this.lobby = null; // injected from main.js
@@ -436,7 +440,7 @@ export class Game {
 
   restart() {
     // remove enemies, projectiles, pickups
-    for (const e of this.enemies) { if (e.alive) this.scene.remove(e.mesh); }
+    for (const e of this.enemies) { if (e.alive) e._releaseMesh?.(); }
     for (const p of this.projectiles) { p._destroy?.(); }
     for (const ap of this.abilityProjectiles) { ap._cleanup?.(); }
     for (const p of this.pickups) { p._destroy?.(); }
@@ -550,11 +554,13 @@ export class Game {
   _despawnChunkEntities(chunkKey) {
     // Enemies: chunkKey is recomputed in enemy.update() as they walk,
     // so the only enemies still tagged with `chunkKey` are ones that
-    // were inside the chunk's footprint at the time of unload.
+    // were inside the chunk's footprint at the time of unload. Release
+    // their visual handles back to the enemy pool so the next spawn of
+    // the same kind doesn't have to re-clone the skeleton + mixer.
     compactInPlace(
       this.enemies,
       e => e.chunkKey !== chunkKey,
-      e => { try { this.world.scene.remove(e.mesh); } catch { /* ignore */ } },
+      e => { try { e._releaseMesh?.(); } catch { /* ignore */ } },
     );
     // Chests / breakables / altars don't move, so the chunkKey set at
     // spawn time is authoritative. Living-but-unloaded chests &
@@ -886,11 +892,19 @@ export class Game {
     if (!this.settings || !this.settings.showFps()) return;
     this._fpsAcc += dt0;
     this._fpsFrames += 1;
+    if (dt0 > this._fpsMaxDt) this._fpsMaxDt = dt0;
     if (this._fpsAcc >= 0.5) {
       this._fps = Math.round(this._fpsFrames / this._fpsAcc);
-      this._fpsAcc = 0; this._fpsFrames = 0;
+      // Average frametime over the same half-second window. Showing both
+      // the average and the worst single frame gives an at-a-glance read
+      // on GC pauses — a 60-fps average that hides a 50ms spike still
+      // means the player just stuttered, and that's exactly the kind of
+      // hitch object pooling is meant to remove.
+      const avgMs = (this._fpsAcc / this._fpsFrames) * 1000;
+      const maxMs = this._fpsMaxDt * 1000;
+      this._fpsAcc = 0; this._fpsFrames = 0; this._fpsMaxDt = 0;
       const el = document.getElementById('fps');
-      if (el) el.textContent = `FPS ${this._fps}`;
+      if (el) el.textContent = `FPS ${this._fps} · ${avgMs.toFixed(1)} ms (max ${maxMs.toFixed(0)})`;
     }
   }
 

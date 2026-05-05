@@ -1,6 +1,22 @@
 import * as THREE from 'three';
 import { vdist, defaultRandom } from './utils.js';
 import { spawnCharacter, crossFadeTo } from './models.js';
+import { HandlePool } from './pool.js';
+
+// Recycle the (heavy) skeleton clone + AnimationMixer + cloned MeshToon
+// materials produced by `spawnCharacter`. Killing 5 slimes a second is
+// realistic late-game; without pooling each kill drops ~60 ToonMaterial
+// clones + a fresh AnimationMixer with ~30 ClipActions onto the GC.
+//
+// Pool key bundles every visual axis a single instance pre-bakes — the
+// kind drives the source GLB + tint + transparent opacity (e.g. wisps render
+// at 0.55 alpha), and elite-ness drives the +15% scale + 0.3 emissive boost.
+// Two acquired handles for the same key are visually interchangeable.
+const ENEMY_POOL = new HandlePool(24);
+
+function enemyPoolKey(kind, elite) {
+  return `${kind}|${elite ? 'elite' : 'normal'}`;
+}
 
 // Map each enemy archetype to a CC0 character model + per-kind tint, scale,
 // vertical offset and which animation slot to use for its primary attack.
@@ -106,8 +122,15 @@ export class Enemy {
   }
 
   _buildMesh() {
-    const grp = new THREE.Group();
     const visual = ENEMY_VISUALS[this.kind] || ENEMY_VISUALS.slime;
+    const reused = ENEMY_POOL.acquire(enemyPoolKey(this.kind, this.elite));
+    if (reused) {
+      this._adoptHandle(reused, visual);
+      this._resetVisualState(visual);
+      return reused.grp;
+    }
+
+    const grp = new THREE.Group();
     const character = spawnCharacter(visual.kind, { tint: visual.tint, scale: visual.scale });
     character.root.position.y = visual.yOffset || 0;
     if (visual.transparent !== undefined) {
@@ -139,6 +162,7 @@ export class Enemy {
     this._animState = 'idle';
     this._attackAnimKey = visual.attackAnim;
     this.body = null; // legacy field; effects code references `body.material` for hit flash but we now use _materials.
+    this._eliteRing = null;
 
     // Elite enemies get a golden ring under their feet + emissive tint that
     // makes them readable from a distance. The ring is added to the parent
@@ -164,6 +188,97 @@ export class Enemy {
 
     grp.position.set(this.pos.x, 0, this.pos.z);
     return grp;
+  }
+
+  // Re-bind handles from a pooled bundle onto `this`. The `grp`/`character`
+  // /`materials`/`eliteRing` references are kept so all gameplay code that
+  // pokes `this._character` / `this._materials` / etc. just keeps working.
+  _adoptHandle(handle, visual) {
+    this._character = handle.character;
+    this._materials = handle.materials;
+    this._eliteRing = handle.eliteRing;
+    this._attackAnimKey = visual.attackAnim;
+    this._animState = 'idle';
+    this.body = null;
+  }
+
+  // Bring a pooled enemy back to a clean visual state. Must reverse anything
+  // the live update loop mutates between `acquire` and `release`:
+  //   • bomber pulses character.root.scale during fuse — reset to base
+  //   • _updateVisualEffects sets emissive flash / freeze / poison tint —
+  //     clear so the first re-spawn frame doesn't show a frozen-blue slime
+  //   • mixer plays attack / hit / death actions on top of idle/run — stop
+  //     all of them so the new instance crossfades cleanly into idle
+  //   • elite ring rotates over time — leave rotation as-is (no gameplay
+  //     impact) but make sure the ring is parented to grp (it is, just by
+  //     virtue of being a child of `grp`)
+  _resetVisualState(visual) {
+    const grp = this._character?.root?.parent || null;
+    if (grp) {
+      grp.position.set(this.pos.x, 0, this.pos.z);
+      grp.rotation.set(0, 0, 0);
+      grp.visible = true;
+    }
+    const root = this._character?.root;
+    if (root) {
+      const eliteScale = this.elite ? 1.15 : 1.0;
+      root.scale.setScalar(visual.scale * eliteScale);
+      root.position.y = visual.yOffset || 0;
+    }
+    if (this._character?.mixer) {
+      this._character.mixer.stopAllAction();
+      this._character.mixer.time = 0;
+    }
+    if (this._character?.actions) {
+      for (const a of Object.values(this._character.actions)) {
+        if (a) {
+          a.enabled = true;
+          a.weight = 0;
+          a.time = 0;
+        }
+      }
+      const idle = this._character.actions.idle;
+      if (idle) {
+        idle.weight = 1;
+        idle.play();
+      }
+    }
+    for (const m of this._materials || []) {
+      if (m.emissive) {
+        if (this.elite) {
+          m.emissive.setHex(0xffaa30);
+          m.emissiveIntensity = 0.3;
+        } else {
+          m.emissive.setHex(0x000000);
+          m.emissiveIntensity = 0;
+        }
+      }
+    }
+  }
+
+  // Tear-down counterpart of `_buildMesh`. Removes the mesh from the scene
+  // and either parks the visual handle in the pool for the next spawn or —
+  // if the bucket is full — drops the reference for GC. Called from die(),
+  // bomber self-explode, and the chunk-unload despawn path in game.js.
+  _releaseMesh() {
+    if (!this.mesh) return;
+    try { this.world.scene.remove(this.mesh); } catch { /* ignore */ }
+    this.mesh.visible = false;
+    if (!this._character) {
+      this.mesh = null;
+      return;
+    }
+    const handle = {
+      grp: this.mesh,
+      character: this._character,
+      materials: this._materials,
+      eliteRing: this._eliteRing || null,
+    };
+    ENEMY_POOL.release(enemyPoolKey(this.kind, this.elite), handle);
+    this.mesh = null;
+    this._character = null;
+    this._materials = null;
+    this._eliteRing = null;
   }
 
   _playAttackAnim() {
@@ -216,7 +331,7 @@ export class Enemy {
     this.effects.burst(this.pos.x, 0.7, this.pos.z, this._dieColor(), 18, 7, 0.6);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xffffff, 1.4, 0.35);
     this.sound.enemyDie();
-    this.world.scene.remove(this.mesh);
+    this._releaseMesh();
     if (this.kind === 'bomber') this._explode();
   }
 
@@ -440,7 +555,7 @@ export class Enemy {
             if (this.fuseTimer <= 0) {
               this._explode(players);
               this.alive = false;
-              this.world.scene.remove(this.mesh);
+              this._releaseMesh();
               this.killedBy = 'self';
             }
           }

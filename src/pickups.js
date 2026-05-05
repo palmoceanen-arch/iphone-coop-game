@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { vdist, rand, defaultRandom } from './utils.js';
 import { TOON_GRADIENT } from './shading.js';
+import { HandlePool } from './pool.js';
 
 const FOOD_TYPES = [
   { name: 'apple', color: 0xff4747, heal: 25, scale: 0.32 },
@@ -8,6 +9,23 @@ const FOOD_TYPES = [
   { name: 'meat', color: 0xc9603a, heal: 35, scale: 0.32 },
   { name: 'berry', color: 0xc14ad8, heal: 14, scale: 0.26 },
 ];
+
+const FOOD_BY_NAME = Object.fromEntries(FOOD_TYPES.map((f) => [f.name, f]));
+
+// Spawning gold/food is hot during combat (every kill drops several piles).
+// Build them once per silhouette and recycle on pickup/expiry instead of
+// re-allocating Group + CylinderGeometry / IcosahedronGeometry + ToonMaterial
+// on every spawn. Bucket cap is generous: a screen-clearing AoE can leave 30+
+// piles on the floor at once, multiplied by 5 silhouettes (gold + 4 food
+// kinds), and a fresh chunk stream usually drops 100+ piles into the world.
+const PICKUP_POOL = new HandlePool(96);
+
+function poolKey(kind, foodName) {
+  return kind === 'gold' ? 'gold' : `food:${foodName}`;
+}
+
+const GOLD_BASE_Y = 0.7;
+const FOOD_BASE_Y = 0.55;
 
 export class Pickup {
   constructor(scene, x, z, kind, value) {
@@ -18,7 +36,27 @@ export class Pickup {
     this.life = 18; // seconds before despawn
     this.alive = true;
     this.bobT = defaultRandom() * Math.PI * 2;
-    this.mesh = this._buildMesh();
+    if (this.kind === 'food') {
+      // Pick the food sub-kind up front so the pool key is stable. The
+      // heal value comes from the food table — the constructor's `value`
+      // arg is ignored for food since the original code already overwrote
+      // it inside _buildMesh.
+      this.foodType = FOOD_TYPES[Math.floor(defaultRandom() * FOOD_TYPES.length)];
+      this.value = this.foodType.heal;
+    } else {
+      this.foodType = null;
+    }
+    const key = poolKey(this.kind, this.foodType?.name);
+    const reused = PICKUP_POOL.acquire(key);
+    if (reused) {
+      this.mesh = reused;
+      this.mesh.visible = true;
+    } else {
+      this.mesh = this._buildMesh();
+    }
+    const baseY = this.kind === 'gold' ? GOLD_BASE_Y : FOOD_BASE_Y;
+    this.mesh.position.set(this.pos.x, baseY, this.pos.z);
+    this.mesh.rotation.set(0, 0, 0);
     scene.add(this.mesh);
   }
   _buildMesh() {
@@ -27,16 +65,13 @@ export class Pickup {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.07, 16), new THREE.MeshToonMaterial({ color: 0xffd166, gradientMap: TOON_GRADIENT }));
       m.castShadow = true;
       grp.add(m);
-      grp.position.set(this.pos.x, 0.7, this.pos.z);
       return grp;
     } else {
-      const food = this.foodType || (this.foodType = FOOD_TYPES[Math.floor(defaultRandom() * FOOD_TYPES.length)]);
+      const food = this.foodType || (this.foodType = FOOD_BY_NAME.apple);
       const grp = new THREE.Group();
       const m = new THREE.Mesh(new THREE.IcosahedronGeometry(food.scale, 0), new THREE.MeshToonMaterial({ color: food.color, gradientMap: TOON_GRADIENT }));
       m.castShadow = true;
       grp.add(m);
-      grp.position.set(this.pos.x, 0.55, this.pos.z);
-      this.value = food.heal;
       return grp;
     }
   }
@@ -44,7 +79,7 @@ export class Pickup {
     if (!this.alive) return;
     this.life -= dt;
     this.bobT += dt * 4;
-    this.mesh.position.y = (this.kind === 'gold' ? 0.7 : 0.55) + Math.sin(this.bobT) * 0.1;
+    this.mesh.position.y = (this.kind === 'gold' ? GOLD_BASE_Y : FOOD_BASE_Y) + Math.sin(this.bobT) * 0.1;
     this.mesh.rotation.y += dt * 1.6;
     if (this.life <= 0) { this._destroy(); return; }
     // attract toward closest alive player when near
@@ -82,8 +117,13 @@ export class Pickup {
     }
   }
   _destroy() {
+    if (!this.alive && !this.mesh) return;
     this.alive = false;
+    if (!this.mesh) return;
     this.scene.remove(this.mesh);
+    this.mesh.visible = false;
+    PICKUP_POOL.release(poolKey(this.kind, this.foodType?.name), this.mesh);
+    this.mesh = null;
   }
 }
 
