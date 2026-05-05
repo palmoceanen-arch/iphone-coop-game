@@ -77,6 +77,7 @@ export const DEFAULTS = {
   audio: {
     masterVolume: 0.5,
     sfxVolume: 1.0,
+    ambientVolume: 0.6,
     muted: false,
   },
 };
@@ -254,6 +255,7 @@ export class Settings {
     const a = this.values.audio;
     if (typeof this.sound.setMasterVolume === 'function') this.sound.setMasterVolume(a.masterVolume);
     if (typeof this.sound.setSfxVolume === 'function') this.sound.setSfxVolume(a.sfxVolume);
+    if (typeof this.sound.setAmbientVolume === 'function') this.sound.setAmbientVolume(a.ambientVolume);
     if (typeof this.sound.setMuted === 'function') this.sound.setMuted(a.muted);
   }
 

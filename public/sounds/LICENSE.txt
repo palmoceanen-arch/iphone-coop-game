@@ -1,0 +1,34 @@
+Bundled audio assets — Creative Commons Zero (CC0 1.0 Universal)
+================================================================
+
+All `.ogg` files in this folder are sourced from the following CC0
+sound packs by Kenney Vleugels (kenney.nl). They are released into the
+public domain — free to use in personal and commercial projects with
+no attribution required, though credit is always appreciated.
+
+  RPG Audio       https://kenney.nl/assets/rpg-audio
+  Impact Sounds   https://kenney.nl/assets/impact-sounds
+
+License: Creative Commons Zero, CC0
+         http://creativecommons.org/publicdomain/zero/1.0/
+
+File mapping
+------------
+swing_blade_a/b.ogg   <- knifeSlice / knifeSlice2          (RPG Audio)
+swing_cloth_a/b.ogg   <- cloth1 / cloth3                   (RPG Audio)
+hit_flesh_a/b/c.ogg   <- impactPunch_medium_000..002       (Impact)
+hit_heavy_a/b.ogg     <- impactPunch_heavy_000..001        (Impact)
+hurt_armor_a/b.ogg    <- impactPlate_light_000 / 002       (Impact)
+enemy_die_a/b.ogg     <- impactGeneric_light_000 / 002     (Impact)
+wood_break_a/b.ogg    <- impactWood_medium_000 / 002       (Impact)
+wood_chop.ogg         <- chop                              (RPG Audio)
+pot_break_a/b.ogg     <- impactGlass_medium_000 / 002      (Impact)
+coin_a/b.ogg          <- handleCoins / handleCoins2        (RPG Audio)
+tree_creak_a/b.ogg    <- creak1 / creak2                   (RPG Audio)
+
+Ambient layers (wind, water, forest hum, campfire crackle, crickets,
+distant birds) are generated procedurally in `src/sound.js` from
+shaped noise + low-frequency oscillators, so no looped audio file is
+shipped for them. This keeps the bundle small and lets the ambient
+texture vary continuously instead of repeating with a perceptible loop
+seam.

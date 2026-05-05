@@ -125,7 +125,7 @@ export class PauseMenu {
   // Audio keys are the ones declared in settings.DEFAULTS.audio. Everything
   // else lives under video.
   _isAudioKey(key) {
-    return key === 'masterVolume' || key === 'sfxVolume' || key === 'muted';
+    return key === 'masterVolume' || key === 'sfxVolume' || key === 'ambientVolume' || key === 'muted';
   }
 
   _readVideoOrAudio(key) {
