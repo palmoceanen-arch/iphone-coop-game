@@ -517,7 +517,14 @@ export class Player {
 
     // Smoothed render transform — lerp position by exponential smoothing and
     // yaw by shortest-arc to avoid 180° flip on direction reversal.
-    const posLerp = 1 - Math.exp(-30 * dt);
+    //
+    // Time-constant 100 (≈81%/frame, ~33ms settling) instead of the older
+    // 30 (~39%/frame, ~83ms settling): the slower constant left a visible
+    // ~20cm gap between sim pos and rendered mesh at full run speed, which
+    // read as "rubber-banding" when the player tapped a new direction —
+    // the visual character would seem to drift then snap into place. 100
+    // keeps a faint sense of weight on direction changes without the lag.
+    const posLerp = 1 - Math.exp(-100 * dt);
     this.smoothPos.x += (this.pos.x - this.smoothPos.x) * posLerp;
     this.smoothPos.z += (this.pos.z - this.smoothPos.z) * posLerp;
     this.mesh.position.set(this.smoothPos.x, 0, this.smoothPos.z);
