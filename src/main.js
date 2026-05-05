@@ -3,6 +3,9 @@ import { Game } from './game.js';
 import { ITEMS } from './items.js';
 import { Lobby } from './lobby.js';
 import { preloadModels } from './models.js';
+import { PauseMenu } from './pause.js';
+import { getSettings } from './settings.js';
+import { StartMenu } from './startMenu.js';
 
 window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('error', (e) => {
@@ -40,7 +43,31 @@ window.addEventListener('DOMContentLoaded', async () => {
       setTimeout(() => loadingEl.remove(), 250);
     }
 
-    game = new Game();
+    // Wire Settings + PauseMenu *before* the start menu so its "Настройки"
+    // button opens the same overlay used in-game. Settings.attach() is a
+    // no-op until a renderer/world exists, so values picked here just sit in
+    // localStorage and apply when Game finally builds. Game then reuses the
+    // same PauseMenu instance via opts.pauseMenu (no double-binding).
+    const settings = getSettings();
+    const pauseMenu = new PauseMenu(settings);
+
+    // Start menu collects { seed, players[].color, players[].weapon } before
+    // the heavy Game constructor runs. We defer Game creation here on
+    // purpose — picking a seed up-front means the World terrain is generated
+    // from the chosen seed, not the URL fallback.
+    const startMenu = new StartMenu({ pauseMenu });
+    startMenu.open();
+    const config = await new Promise((resolve) => { startMenu.onStart = resolve; });
+
+    // Reflect the chosen seed in the URL so a refresh keeps the same world,
+    // and so the rest of the app (already URL-driven) sees a consistent
+    // value. We use replaceState to avoid creating a back-button entry that
+    // returns to the menu mid-run.
+    const url = new URL(window.location.href);
+    url.searchParams.set('seed', config.seed);
+    window.history.replaceState({}, '', url.toString());
+
+    game = new Game({ seed: config.seed, players: config.players, pauseMenu });
     window.__game = game;
     if (params.get('testInventory') === '1') {
       for (const player of game.players) {
@@ -52,6 +79,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       game.players[0].setAbility(Object.keys(ABILITY_BY_ID)[0]);
       game.players[1].setAbility(Object.keys(ABILITY_BY_ID)[1] || Object.keys(ABILITY_BY_ID)[0]);
     }
+
+    // Reveal the lobby/QR overlay now that the world is built. Game's own
+    // `_waitingForStart` flag still freezes the simulation until the user
+    // clicks one of the lobby start buttons below.
+    const introEl = document.getElementById('intro');
+    if (introEl) introEl.style.display = 'flex';
 
     lobby = new Lobby();
     lobby.connect();

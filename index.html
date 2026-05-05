@@ -165,7 +165,7 @@
       #loading .stat { font-size: 12px; opacity: 0.6; margin-top: 6px; }
       #pause {
         position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-        background: rgba(0,0,0,0.65); pointer-events: auto; z-index: 25;
+        background: rgba(0,0,0,0.65); pointer-events: auto; z-index: 50;
         backdrop-filter: blur(2px);
       }
       #pause.open { display: flex; }
@@ -236,6 +236,104 @@
         color: #7aff8a; pointer-events: none; display: none;
       }
       #fps.show { display: block; }
+      /* Start menu — shown on launch before the lobby/QR screen. Mirrors the
+         pause-panel chrome (dark card, blue accents, segmented buttons) so
+         start, pause and altar UIs feel like the same family. */
+      #start-menu {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.7); pointer-events: auto; z-index: 40;
+        backdrop-filter: blur(2px);
+      }
+      #start-menu.open { display: flex; }
+      .start-panel {
+        width: min(820px, 94vw); max-height: 92vh; overflow-y: auto;
+        background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+        padding: 24px 28px;
+      }
+      .start-panel h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: 0.5px; text-align: center; }
+      .start-panel .sub { margin: 0 0 22px; font-size: 13px; opacity: 0.65; text-align: center; }
+      .start-view { display: none; }
+      .start-view.active { display: block; }
+      .start-main-actions { display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 12px auto 4px; }
+      .start-main-actions button {
+        padding: 14px 18px; font-size: 16px; font-weight: 700; letter-spacing: 0.3px;
+        border-radius: 12px; cursor: pointer; color: #fff;
+      }
+      .start-main-actions button.primary {
+        background: linear-gradient(180deg,#3b82f6,#2563eb); border: none;
+        box-shadow: 0 6px 18px rgba(37,99,235,0.35);
+      }
+      .start-main-actions button.secondary {
+        background: #2a313b; border: 1px solid rgba(255,255,255,0.1);
+      }
+      .start-main-actions button:hover:not(:disabled) { filter: brightness(1.1); }
+      .start-main-actions button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+      .start-seed-row {
+        display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; align-items: center;
+        padding: 10px 12px; margin: 0 0 14px; background: #0e1218; border-radius: 10px;
+      }
+      .start-seed-row .label { font-size: 13px; color: #cfd6e0; }
+      .start-seed-row .label .desc { display: block; font-size: 11px; opacity: 0.55; margin-top: 2px; font-weight: 400; }
+      .start-seed-row .control { display: flex; gap: 6px; align-items: center; }
+      .start-seed-row input[type=text] {
+        flex: 1; min-width: 0; background: #1a2029; color: #fff;
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+        padding: 8px 10px; font-size: 13px; font-family: ui-monospace, monospace; letter-spacing: 2px;
+      }
+      .start-seed-row input[type=text]:focus { outline: 1px solid #3b82f6; border-color: #3b82f6; }
+      .start-seed-row .control button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;
+      }
+      .start-seed-row .control button:hover { filter: brightness(1.1); }
+      .start-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      @media (max-width: 720px) { .start-slots { grid-template-columns: 1fr; } }
+      .start-slot {
+        background: #0e1218; border-radius: 12px; padding: 14px 16px;
+        border: 1px solid rgba(255,255,255,0.06);
+      }
+      .start-slot-p1 { border-top: 3px solid #6ad0ff; }
+      .start-slot-p2 { border-top: 3px solid #ff8a8a; }
+      .start-slot-title { margin: 0 0 12px; font-size: 16px; }
+      .start-slot-p1 .start-slot-title { color: #6ad0ff; }
+      .start-slot-p2 .start-slot-title { color: #ff8a8a; }
+      .start-section-label { font-size: 11px; opacity: 0.55; text-transform: uppercase; letter-spacing: 1px; margin: 10px 0 6px; }
+      .start-color-row { display: flex; gap: 6px; flex-wrap: wrap; }
+      .start-swatch {
+        width: 28px; height: 28px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.15); cursor: pointer;
+        padding: 0; transition: transform 120ms ease, border-color 120ms ease;
+      }
+      .start-swatch:hover { transform: scale(1.08); }
+      .start-swatch.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(59,130,246,0.6); transform: scale(1.05); }
+      .start-weapon-row { display: flex; flex-direction: column; gap: 4px; }
+      .start-weapon {
+        display: flex; flex-direction: column; align-items: flex-start;
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+        text-align: left; gap: 2px;
+      }
+      .start-weapon:hover { background: #20262e; }
+      .start-weapon.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
+      .start-weapon .w-name { font-weight: 700; font-size: 13px; }
+      .start-weapon .w-meta { font-size: 11px; opacity: 0.65; font-variant-numeric: tabular-nums; }
+      .start-load-empty {
+        background: #0e1218; border-radius: 12px; padding: 26px;
+        text-align: center; opacity: 0.7; font-size: 13px; line-height: 1.6;
+      }
+      .start-footer {
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
+      }
+      .start-footer button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 9px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      .start-footer button.primary {
+        background: linear-gradient(180deg,#3b82f6,#2563eb); border: none;
+        box-shadow: 0 6px 16px rgba(37,99,235,0.3);
+      }
+      .start-footer button:hover { filter: brightness(1.08); }
     </style>
   </head>
   <body>
@@ -250,7 +348,7 @@
           <span class="dot" id="clockdot"></span>
         </div>
         <div class="hud left">
-          <div class="name">P1 · Cyan</div>
+          <div class="name">Игрок 1</div>
           <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div><span class="text" id="hpval1">100 / 100</span></div>
           <div class="meta">
             <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold1">0</span></span>
@@ -265,7 +363,7 @@
           </div>
         </div>
         <div class="hud right">
-          <div class="name">P2 · Coral</div>
+          <div class="name">Игрок 2</div>
           <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div><span class="text" id="hpval2">100 / 100</span></div>
           <div class="meta">
             <span>DMG <span id="dmg2">10</span></span>
@@ -286,12 +384,12 @@
             <p>Spend gold to permanently upgrade your hero. Press <kbd>Tab</kbd> to close.</p>
             <div class="shop-row">
               <div class="shop-col p1">
-                <h3><span class="who">Player 1 — Cyan</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold1">0</span></span></h3>
+                <h3><span class="who">Игрок 1</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold1">0</span></span></h3>
                 <div id="shop-upgs-1"></div>
                 <div id="shop-inv-1" class="inv-section"></div>
               </div>
               <div class="shop-col p2">
-                <h3><span class="who">Player 2 — Coral</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold2">0</span></span></h3>
+                <h3><span class="who">Игрок 2</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold2">0</span></span></h3>
                 <div id="shop-upgs-2"></div>
                 <div id="shop-inv-2" class="inv-section"></div>
               </div>
@@ -416,7 +514,48 @@
             </div>
           </div>
         </div>
-        <div id="intro">
+        <div id="start-menu" role="dialog" aria-modal="true" aria-labelledby="start-title">
+          <div class="start-panel">
+            <h1 id="start-title">Twin Hearts</h1>
+            <p class="sub">Кооп-приключение на двоих. Выбери режим и начнём.</p>
+
+            <!-- Main view: New game / Load / Settings -->
+            <div class="start-view active" data-view="main">
+              <div class="start-main-actions">
+                <button id="start-btn-new" class="primary">Новая игра</button>
+                <button id="start-btn-load" class="secondary">Загрузить</button>
+                <button id="start-btn-settings" class="secondary">Настройки</button>
+              </div>
+            </div>
+
+            <!-- New game: seed + per-slot color/weapon picker -->
+            <div class="start-view" data-view="newgame">
+              <div class="start-seed-row">
+                <div class="label">Сид мира<span class="desc">Одинаковый сид — одинаковый мир. Поделись с другом, чтобы пробежаться вместе по тому же миру.</span></div>
+                <div class="control">
+                  <input id="start-seed" type="text" maxlength="12" autocomplete="off" spellcheck="false" />
+                  <button id="start-seed-random" type="button">Случайный</button>
+                </div>
+              </div>
+              <div id="start-slots" class="start-slots"></div>
+              <div class="start-footer">
+                <button data-back="main">Назад</button>
+                <button id="start-btn-confirm" class="primary">Применить и начать</button>
+              </div>
+            </div>
+
+            <!-- Load placeholder -->
+            <div class="start-view" data-view="load">
+              <div class="start-load-empty">
+                Сохранения отсутствуют.<br>Загрузка прогресса появится в одном из следующих обновлений.
+              </div>
+              <div class="start-footer">
+                <button data-back="main">Назад</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="intro" style="display:none;">
           <div class="panel">
             <h1>Twin Hearts</h1>
             <p>Кооп-приключение на двоих. Не уходите далеко друг от друга — мир сереет и здоровье тает.</p>

@@ -16,9 +16,26 @@ import { ABILITY_BY_ID } from './abilities.js';
 // reach and cooldown all retune automatically.
 const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
 
+// Default colour palette per slot (P1 cyan, P2 coral). The start menu lets
+// either player override these via `opts.color` in the constructor.
 const COLORS = [
   { body: 0x6ad0ff, trim: 0x2a5d80, eye: 0xffffff },
   { body: 0xff8a8a, trim: 0x803f3f, eye: 0xffffff },
+];
+
+// Selectable colour palette shown in the start-menu character picker. The
+// `body` value is a 24-bit RGB hex int matching what `spawnCharacter()`
+// expects for its `tint` argument; `name` is the Russian label shown under
+// each swatch. The first two entries match the historical P1/P2 defaults.
+export const PLAYER_COLOR_PRESETS = [
+  { id: 'cyan',     name: 'Голубой',   body: 0x6ad0ff },
+  { id: 'coral',    name: 'Коралл',    body: 0xff8a8a },
+  { id: 'mint',     name: 'Мятный',    body: 0x6affb5 },
+  { id: 'lavender', name: 'Лаванда',   body: 0xc08aff },
+  { id: 'amber',    name: 'Янтарь',    body: 0xffc56a },
+  { id: 'rose',     name: 'Розовый',   body: 0xff6ac4 },
+  { id: 'azure',    name: 'Синий',     body: 0x5a8aff },
+  { id: 'lime',     name: 'Лайм',      body: 0xc8ff5a },
 ];
 
 // KayKit characters face +Z by default in the GLB; our atan2(facing.x,facing.z)
@@ -28,11 +45,16 @@ const MODEL_YAW_OFFSET = 0;
 const MODEL_SCALE = 0.6;
 
 export class Player {
-  constructor(index, world, effects, sound) {
+  constructor(index, world, effects, sound, opts = {}) {
     this.index = index;
     this.world = world;
     this.effects = effects;
     this.sound = sound;
+    // Optional cosmetic / loadout overrides from the start menu. `colorHex`
+    // tints the character mesh in `_buildMesh()`; `weaponKind` picks the
+    // starter weapon instead of the per-slot default.
+    this._colorHex = (typeof opts.color === 'number') ? opts.color : null;
+    this._startWeapon = (typeof opts.weapon === 'string') ? opts.weapon : null;
 
     this.pos = { x: index === 0 ? -3 : 3, z: 4 };
     this.vel = { x: 0, z: 0 };
@@ -90,11 +112,15 @@ export class Player {
 
   _buildMesh() {
     const palette = COLORS[this.index] || COLORS[0];
+    // Start-menu colour override: keep the rest of the palette (trim, eye)
+    // intact and only swap the body tint, since that's the only field
+    // `spawnCharacter()` actually consumes.
+    const tint = (this._colorHex !== null) ? this._colorHex : palette.body;
     const grp = new THREE.Group();
 
     // Animated CC0 character model from KayKit (Knight) — clone of the shared
     // skeleton + materials so each player can tint differently without leaking.
-    const character = spawnCharacter('knight', { tint: palette.body, scale: MODEL_SCALE });
+    const character = spawnCharacter('knight', { tint, scale: MODEL_SCALE });
     this._character = character;
     grp.add(character.root);
 
@@ -118,7 +144,9 @@ export class Player {
     // (matches the Knight's default sword + shield loadout) but it also
     // initialises `weaponProfile` so the swing logic below has range/arc
     // values to use.
-    const startWeapon = DEFAULT_WEAPON_BY_INDEX[this.index] || 'sword_1h';
+    const startWeapon = this._startWeapon
+      || DEFAULT_WEAPON_BY_INDEX[this.index]
+      || 'sword_1h';
     this.setWeapon(startWeapon);
 
     return grp;

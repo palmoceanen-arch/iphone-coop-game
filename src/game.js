@@ -120,9 +120,15 @@ export class Game {
     this.input = new Input();
     this.effects = new Effects(this.scene, this.followCam.cam);
 
+    // Per-slot start-menu loadout (color + starter weapon). Each entry is
+    // `{ color: hexInt, weapon: 'sword_1h'|... }` and may be partially
+    // populated; missing fields fall back to the per-slot defaults inside
+    // Player. When `opts.players` is omitted entirely the original cyan-sword
+    // / coral-axe defaults still apply.
+    const playerOpts = Array.isArray(opts.players) ? opts.players : [];
     this.players = [
-      new Player(0, this.world, this.effects, this.sound),
-      new Player(1, this.world, this.effects, this.sound),
+      new Player(0, this.world, this.effects, this.sound, playerOpts[0] || {}),
+      new Player(1, this.world, this.effects, this.sound, playerOpts[1] || {}),
     ];
     // Starter abilities so phone & desktop have something to cast immediately.
     this.players[0].setAbility('fireball');
@@ -175,7 +181,11 @@ export class Game {
       followCam: this.followCam,
       effects: this.effects,
     });
-    this.pauseMenu = new PauseMenu(this.settings);
+    // Reuse a PauseMenu instance constructed earlier (e.g. by main.js so the
+    // start menu can open Settings before the Game is built); otherwise build
+    // one ourselves. Keeping it singleton-y prevents double event-handler
+    // registration on the same DOM nodes.
+    this.pauseMenu = opts.pauseMenu || new PauseMenu(this.settings);
 
     this._bindUI();
     window.addEventListener('resize', () => {
