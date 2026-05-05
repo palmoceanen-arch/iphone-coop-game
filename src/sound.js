@@ -31,7 +31,10 @@ const SAMPLES = {
   hitHeavy:     ['hit_heavy_a.ogg', 'hit_heavy_b.ogg'],
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
-  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg'],
+  // Heavy plank-snap impacts (Kenney impactWood_heavy) — meatier
+  // splintering crack than the previous medium variants, layered with
+  // tree_creak in `treeFall()` for the full "timber!" snap.
+  woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg', 'wood_break_c.ogg'],
   potBreak:     ['pot_break_a.ogg', 'pot_break_b.ogg'],
   // Per-swing impact when a melee weapon connects with a tree (axe-on-
   // plank texture) or a rock (pickaxe / mining strike). Different
@@ -296,7 +299,10 @@ export class Sound {
 
   // ---- Public SFX API (back-compat with the old method names) -----------
 
-  swing(opts)      { this._play('swing', opts); }
+  // Sword/weapon whoosh on every swing — pulled down to ~0.45 so it sits
+  // under the chop / mining impact tier instead of dominating dense
+  // attack-speed loops. Callers can still override via opts.gain.
+  swing(opts)      { this._play('swing', { gain: 0.45, ...(opts || {}) }); }
   hit(opts)        { this._play('hitFlesh', opts); }            // sword hits flesh
   enemyHit(opts)   { this._play('hitFlesh', { ...(opts || {}), gain: 0.7 }); }
   enemyDie(opts)   { this._play('enemyDie', opts); }
@@ -313,14 +319,15 @@ export class Sound {
   woodBreak(opts)  { this._play('woodBreak', opts); }
   potBreak(opts)   { this._play('potBreak', opts); }
   treeCreak(opts)  { this._play('treeCreak', opts); }
-  // Per-swing impact on a tree (axe-on-plank). Quieter than the
-  // tree-felled splinter so the chop loop reads as several muted thunks
-  // building up to one bigger break.
-  hitWood(opts)    { this._play('hitWood', { gain: 0.6, ...(opts || {}) }); }
+  // Per-swing impact on a tree (axe-on-plank). Pushed up to ~1.0 so the
+  // chop loop reads as a confident, audible thunk over the (now quieter)
+  // sword whoosh; the eventual tree-felled splinter is still louder.
+  hitWood(opts)    { this._play('hitWood', { gain: 1.0, ...(opts || {}) }); }
   // Per-swing impact on a rock. Mining-pick crack — sharper than wood,
   // distinct from the procedural rockBreak shatter so multiple hits
-  // don't all sound like the rock just died.
-  hitStone(opts)   { this._play('hitStone', { gain: 0.6, ...(opts || {}) }); }
+  // don't all sound like the rock just died. Same loudness tier as
+  // hitWood so trees and rocks share a "gathering connect" volume.
+  hitStone(opts)   { this._play('hitStone', { gain: 1.0, ...(opts || {}) }); }
   // Tree felled: layer a creak preamble onto the wood-splinter break for
   // a one-shot "timber!" cue. Different enough from breakable crate / pot
   // that the gathering loop has its own audio identity even when a tree

@@ -7,11 +7,17 @@
 //   color    — accent colour for the slot ring.
 //   cd       — cooldown in seconds (always counts down regardless of cast).
 //   cast(player, ctx) — the actual gameplay code. ctx exposes:
-//     - enemyList: live Enemy[] reference
-//     - partner:   the other Player (may be null/dead)
-//     - effects:   the Effects instance
-//     - sound:     the Sound instance
-//     - scene:     the THREE.Scene
+//     - enemyList:     every damageable (enemies + breakables + resources +
+//                      player-built structures). AoE damage iterates this
+//                      so e.g. fireball still pops crates in its blast.
+//     - livingEnemies: only true Enemy entities. Auto-aiming abilities
+//                      (ice bolt, chain lightning, slow-time, wind-push)
+//                      target through this list so walls / fences / trees
+//                      can never steal the lock-on.
+//     - partner:       the other Player (may be null/dead)
+//     - effects:       the Effects instance
+//     - sound:         the Sound instance
+//     - scene:         the THREE.Scene
 //     - spawnAbilityProjectile(opts): create a flying projectile
 //
 // Abilities should be self-contained — they should not mutate global game
@@ -40,6 +46,28 @@ function enemiesInRadius(player, enemyList, radius) {
     if (d <= radius + e.radius) out.push({ e, d });
   }
   return out;
+}
+
+// True Enemy entities only — pots / crates / trees / rocks / placed
+// fences and walls all share the (alive, takeDamage) damageable contract
+// but should never count as "an enemy" for auto-aim or status effects.
+// Anything that flagged itself as a non-enemy damageable is filtered out
+// so a wall behind a slime can't steal an ice-bolt's lock-on.
+function isLivingEnemy(e) {
+  return !!e
+    && e.alive
+    && !e.isStructure
+    && !e.isBreakable
+    && !e.isResource;
+}
+
+// Pull the strictest "real enemies" list available — game.js threads
+// `livingEnemies` through ctx, but we still defend in depth in case a
+// caller hands us only the legacy damageables snapshot (e.g. an item
+// hook routing through the abilities API directly).
+function livingEnemiesFromCtx(ctx) {
+  if (Array.isArray(ctx.livingEnemies)) return ctx.livingEnemies;
+  return ctx.enemyList.filter(isLivingEnemy);
 }
 
 // -----------------------------------------------------------------------
@@ -198,15 +226,21 @@ export const ABILITIES = [
       const iceMult = elementDamageMult(player, 'ice');
       const freezeT = 2.0 + freezeDurationBonus(player);
       let dx = player.facing.x, dz = player.facing.z;
-      const list = ctx.enemyList.filter(e => e.alive && vdist2(player, e) < 144);
-      if (list.length > 0) {
-        list.sort((a, b) => vdist2(player, a) - vdist2(player, b));
-        const t = list[0];
+      // Auto-aim only at real creatures within 12m — walls / fences / trees
+      // / rocks share the damageable contract but a player firing icebolt
+      // at an open wisp shouldn't have it veer into their own picket.
+      const targets = livingEnemiesFromCtx(ctx)
+        .filter(e => vdist2(player, e) < 144);
+      if (targets.length > 0) {
+        targets.sort((a, b) => vdist2(player, a) - vdist2(player, b));
+        const t = targets[0];
         const tdx = t.pos.x - player.pos.x, tdz = t.pos.z - player.pos.z;
         const d = Math.hypot(tdx, tdz) || 1;
         dx = tdx / d; dz = tdz / d;
       }
-      const enemies = ctx.enemyList;
+      // Freeze AoE only applies to real enemies — chilling a fence post
+      // does nothing meaningful, and a frozen tree feels off.
+      const freezeTargets = livingEnemiesFromCtx(ctx);
       ctx.spawnAbilityProjectile({
         x: player.pos.x + dx * 0.6,
         z: player.pos.z + dz * 0.6,
@@ -216,9 +250,12 @@ export const ABILITIES = [
         damage: 30 * iceMult, knockback: 4,
         aoeRadius: 2.5, aoeDamage: 0, aoeKnockback: 0,
         source: player,
-        onHitEnemy(e) { e._frozen = Math.max(e._frozen || 0, freezeT); },
+        onHitEnemy(e) {
+          if (!isLivingEnemy(e)) return;
+          e._frozen = Math.max(e._frozen || 0, freezeT);
+        },
         _customAoe(pos) {
-          for (const e of enemies) {
+          for (const e of freezeTargets) {
             if (!e.alive) continue;
             const ex = e.pos.x - pos.x, ez = e.pos.z - pos.z;
             if (Math.hypot(ex, ez) <= 2.5 + e.radius) {
@@ -240,9 +277,13 @@ export const ABILITIES = [
       let from = { x: player.pos.x, z: player.pos.z };
       let dmg = 30 * lightMult;
       const used = new Set();
+      // Chain hops between real enemies only — never arc into a placed
+      // wall or a tree, which would both look bizarre and waste jumps on
+      // targets that don't move or react to the cc.
+      const chainTargets = livingEnemiesFromCtx(ctx);
       for (let i = 0; i < jumps; i++) {
         let best = null, bestD = 7;
-        for (const e of ctx.enemyList) {
+        for (const e of chainTargets) {
           if (!e.alive || used.has(e)) continue;
           const edx = e.pos.x - from.x, edz = e.pos.z - from.z;
           const d = Math.hypot(edx, edz);
@@ -305,7 +346,9 @@ export const ABILITIES = [
     desc: 'Замедляет всех врагов в 6м до ×0.35 на 3с.',
     cast(player, ctx) {
       const slowDur = 3.0 + freezeDurationBonus(player);
-      const list = enemiesInRadius(player, ctx.enemyList, 6);
+      // Slow only applies to real enemies — slowing a wall is a no-op
+      // and would otherwise eat the cc on a useless target.
+      const list = enemiesInRadius(player, livingEnemiesFromCtx(ctx), 6);
       for (const { e } of list) e._slow = Math.max(e._slow || 0, slowDur);
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xc9a3ff, 6, 0.5);
       ctx.effects.flashSphere(player.pos.x, 0.5, player.pos.z, 0xc9a3ff, 3, 0.25);
@@ -319,7 +362,9 @@ export const ABILITIES = [
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
       const lightMult = elementDamageMult(player, 'lightning');
-      const list = enemiesInRadius(player, ctx.enemyList, 4);
+      // Wind push damages and knocks back real enemies only — auto-firing
+      // it next to your own fortress shouldn't dent your walls.
+      const list = enemiesInRadius(player, livingEnemiesFromCtx(ctx), 4);
       for (const { e } of list) {
         e.takeDamage(20 * lightMult, player.pos.x, player.pos.z, 14);
         if (!e.alive) e._deathCredit = player;
