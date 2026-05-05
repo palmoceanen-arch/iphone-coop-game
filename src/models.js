@@ -631,22 +631,35 @@ export const WEAPONS = {
     damageMult: 1.0,
     slash: { color: 0xdfeaff, height: 1.05 },
   },
-  // Heavy two-hander — wider arc, more reach, more wind-up. Uses
-  // `2H_Melee_Attack_Spinning` (0.67s baked) which is a clean continuous
-  // rotation — no anticipation, no recovery, no held poses inside, just
-  // one full sweep. Plays slightly slower than baked so the strike reads.
+  // Heavy two-hander — wide horizontal sweep on tap. Holding the attack
+  // button charges a 360° spin super (see `superAttack` below) that uses a
+  // different clip + AOE collider + ring VFX.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_spinning',  // 2H continuous-rotation sweep
-    swing: 0.55,
+    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
+    swing: 1.00,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
+    arc: Math.PI * 0.95,   // ~171° — sweeps almost shoulder to shoulder
     cooldown: 0.75,
     damageMult: 1.6,
     slash: { color: 0xc8d6ff, height: 1.10 },
+    // Charge attack — hold attack button to wind up a 360° spin sweep that
+    // hits everything around the player. Uses the dedicated continuous
+    // rotation clip (no anticipation or recovery), a much wider damage
+    // arc, and a longer cooldown so it can't be spammed.
+    superAttack: {
+      attackAnim: 'attack_2h_spinning',
+      swing: 0.65,
+      impactAt: 0.50,
+      range: 3.2,            // slightly longer reach than tap
+      arc: Math.PI * 2,      // full circle
+      cooldown: 1.30,        // ~1.7× the tap cooldown
+      damageMult: 2.4,       // 1.5× the tap (1.6×) damage
+      ringColor: 0xc8d6ff,
+    },
   },
   // 1H axe — shares the 1H horizontal slice clip with the sword. Slightly
   // slower swing and tighter arc on the rebuild because an axe head feels
@@ -665,20 +678,31 @@ export const WEAPONS = {
     damageMult: 1.2,
     slash: { color: 0xffd28a, height: 1.05 },
   },
-  // 2H battle axe — same continuous-rotation clip as the great-sword but a
-  // slightly longer swing window because the axe head is heavier.
+  // 2H battle axe — wide horizontal sweep on tap. Same charge-to-spin
+  // super as the great-sword but heavier numbers since the axe head is
+  // weightier (slower swing, higher damage, longer cooldown).
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_spinning',  // 2H continuous-rotation sweep
-    swing: 0.65,
+    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep
+    swing: 1.10,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 1.05,   // ~189°
+    arc: Math.PI * 0.95,   // ~171°
     cooldown: 0.85,
     damageMult: 1.8,
     slash: { color: 0xffae6a, height: 1.05 },
+    superAttack: {
+      attackAnim: 'attack_2h_spinning',
+      swing: 0.75,
+      impactAt: 0.50,
+      range: 3.2,
+      arc: Math.PI * 2,
+      cooldown: 1.50,
+      damageMult: 2.7,
+      ringColor: 0xffae6a,
+    },
   },
   staff: {
     label: 'Staff',

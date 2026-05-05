@@ -693,7 +693,11 @@ export class Game {
     runItemHook(player, 'onAttack', ctx);
     // Weapon profile scales base damage — a 2H battle axe hits much harder
     // than a wand, but the wand swings ~40% faster so DPS stays comparable.
-    const weaponMult = player.weaponProfile?.damageMult ?? 1.0;
+    // The active-swing snapshot wins over the weapon profile so the spin
+    // super's higher damageMult applies for that swing only.
+    const weaponMult = player._activeSwing?.damageMult
+      ?? player.weaponProfile?.damageMult
+      ?? 1.0;
     let dmg = player.stats.damage * (1 + Math.random() * 0.05) * ctx.dmgMult * weaponMult;
     if (player._berserk) dmg *= player._berserk.dmg;
     ctx.dmg = dmg;

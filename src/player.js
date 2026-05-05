@@ -59,6 +59,14 @@ export const CAPE_COLOR_PRESETS = [
 const MODEL_YAW_OFFSET = 0;
 const MODEL_SCALE = 0.6;
 
+// Hold-to-charge threshold for 2H super attacks. Tapping under this many
+// seconds fires the normal slice; holding past it (or releasing after a
+// hold longer than this) triggers the charge attack defined in
+// `weaponProfile.superAttack`. 0.30s is short enough that a deliberate
+// tap never accidentally charges, but long enough that a held button
+// reads as "I'm holding for the spin".
+const CHARGE_THRESHOLD = 0.30;
+
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
     this.index = index;
@@ -109,6 +117,18 @@ export class Player {
     this._swingHitSet = new Set();
     this._swingShookCam = false;
     this.swingFxFired = false;
+    // Per-swing parameter snapshot (taken at the moment the swing fires).
+    // Lets the tap and the charge-to-super attack share the same swing tick
+    // / damage window code while using different timings, range, arc, and
+    // damage multipliers. `null` between swings.
+    this._activeSwing = null;
+    // Charge tracking for the hold-to-spin super attack on 2H weapons.
+    // `_chargeTime` accumulates while the attack button is held; the super
+    // fires when it crosses `CHARGE_THRESHOLD` (or on release if the hold
+    // was long enough). `_chargeFired` prevents firing twice per hold.
+    this._chargeTime = 0;
+    this._chargeFired = false;
+    this._wasAttackHeld = false;
     this.invuln = 0; // i-frames
     this.dashTimer = 0;
     this.dashCooldown = 0;
@@ -348,45 +368,46 @@ export class Player {
       runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
-    // Attack trigger
+    // Attack trigger — split into "tap" and "charge" paths. Weapons with
+    // a `superAttack` profile (Greatsword, Battle Axe) defer their tap
+    // attack to release-time so the same button can either tap-swing or
+    // charge into the spin super; weapons without one fire instantly on
+    // the press edge for snappy combat.
     const wp = this.weaponProfile;
-    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
-    if (intent.attack && this.attackTimer <= 0) {
-      this.attackTimer = wp.cooldown * attackCdMult;
-      this.attackAnim = 0;
-      this.swingActive = true;
-      this._swingHitSet.clear();
-      this._swingShookCam = false;
-      this.swingFxFired = false;
-      // Whoosh sound + slash VFX both fire just before the impact frame
-      // (see swingActive branch below) so the trail is mid-paint when the
-      // visible blade reaches its strike pose. We deliberately do *not*
-      // fade out idle/run here — attack clips are pre-filtered to upper
-      // body bones only (see models.js), so the legs keep stepping
-      // through whatever locomotion state was active when the attack
-      // started.
-      const actions = this._character?.actions;
-      const action = actions?.[this._attackActionKey];
-      if (action) {
-        action.reset();
-        // Scale source clip to land on `wp.swing` seconds end-to-end. The
-        // KayKit melee clips are authored at ~1s; matching the gameplay
-        // swing length is what keeps animation impact frame and the damage
-        // window in sync. We deliberately don't compress under ~0.85× of
-        // the natural duration — past that the windup blurs out and the
-        // swing reads as a stab instead of a chop.
-        const srcDur = Math.max(action.getClip().duration, 0.05);
-        action.timeScale = srcDur / Math.max(wp.swing, 0.1);
-        // Boost the attack weight far above locomotion so that on shared
-        // upper-body bones (spine/chest/head/arms) the attack clearly
-        // wins. Three.js mixer blends overlapping tracks as
-        // result = lerp(other, attack, attackWeight / (attackWeight + otherWeight))
-        // — at weight 10 vs 1 the attack reads ~91% which dominates the
-        // pose while letting a tiny bit of run/idle bleed through (looks
-        // natural, not robotic).
-        action.setEffectiveWeight(10.0);
-        action.fadeIn(0.05).play();
+    const wpHasSuper = !!wp.superAttack;
+    const isHeld = !!intent.attackHeld;
+    const wasHeld = this._wasAttackHeld;
+    this._wasAttackHeld = isHeld;
+
+    if (wpHasSuper) {
+      if (isHeld) {
+        if (!wasHeld) {
+          // Press edge: start charging. Don't fire normal attack yet —
+          // we don't know if this will turn out to be a tap or a hold.
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          // Auto-fire the spin super the moment the hold crosses the
+          // threshold (don't make the player release to trigger it).
+          if (!this._chargeFired && this._chargeTime >= CHARGE_THRESHOLD && this.attackTimer <= 0) {
+            this._triggerAttack(true);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        // Release edge. If the super already auto-fired, do nothing —
+        // we already swung. Otherwise this was a short tap, fire the
+        // normal slice (deferred from the press edge).
+        if (!this._chargeFired && this.attackTimer <= 0) {
+          this._triggerAttack(false);
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
       }
+    } else if (intent.attack && this.attackTimer <= 0) {
+      // Weapons without a charge attack — instant tap.
+      this._triggerAttack(false);
     }
 
     // Apply movement intent (kinematic)
@@ -427,43 +448,43 @@ export class Player {
 
     // Swing hit detection — animation playback is driven by AnimationMixer,
     // but the gameplay damage window is still timer-based for predictability.
-    // We tick `attackAnim` from 0..1 over `wp.swing` seconds and fire damage
-    // exactly once when it crosses `wp.impactAt` — this is what keeps the
+    // We tick `attackAnim` from 0..1 over `as.swing` seconds and fire damage
+    // exactly once when it crosses `as.impactAt` — this is what keeps the
     // visual impact frame and the gameplay damage frame on the same tick,
     // so heavier weapons feel like the hit lands on the follow-through and
-    // light weapons feel like they connect early.
-    if (this.swingActive) {
-      this.attackAnim += dt / Math.max(wp.swing, 0.1);
-      // FX trigger fires partway between windup and impact so the slash
-      // is mid-paint when the blade reaches its strike pose. The damage
-      // window opens on the same tick (see below) and closes at
-      // `wp.impactAt`. `min()` guards against weapons whose impactAt is
-      // smaller than 0.25 — in that edge case fxAt collapses onto
-      // impactAt and the window becomes a single tick (the previous
-      // behaviour), so nothing can ever fire FX after the damage window
-      // is supposed to close.
-      const fxAt = Math.min(wp.impactAt, Math.max(0.10, wp.impactAt - 0.25));
+    // light weapons feel like they connect early. `as` is the per-swing
+    // parameter snapshot taken in `_triggerAttack` so a tap and a charge
+    // super can use different timings, ranges, arcs, and clips while
+    // sharing this tick code.
+    if (this.swingActive && this._activeSwing) {
+      const as = this._activeSwing;
+      this.attackAnim += dt / Math.max(as.swing, 0.1);
+      const fxAt = Math.min(as.impactAt, Math.max(0.10, as.impactAt - 0.25));
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
-        if (wp.slash) {
-          // Parent the slash mesh to the character group so the strip
-          // tracks the player if they keep moving / rotating during the
-          // followthrough — the model can pivot 90°+ between fxAt and
-          // arc-end on a strafing swing, and a world-anchored strip
-          // would visibly lag behind. World position/yaw args are kept
-          // as fallbacks but aren't used while a parent is present.
+        if (as.isSuper) {
+          // Spin super: a single expanding ring of energy on the ground
+          // sells the AOE shape better than the per-blade slash strip.
+          this.effects.ring(
+            this.smoothPos.x, 0.05, this.smoothPos.z,
+            as.ringColor ?? as.slash?.color ?? 0xffffff,
+            as.range,
+            0.45,
+          );
+        } else if (as.slash) {
+          // Standard tap: parent the slash mesh to the character group so
+          // the strip tracks the player if they keep moving / rotating
+          // during the followthrough.
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
               parent: this.mesh,
-              range: wp.range,
-              arc: wp.arc,
-              // Trail completes well inside the followthrough window
-              // (1 - impactAt) so it never overlaps the next swing.
-              duration: Math.min(wp.swing * (1 - fxAt) * 0.55, 0.28),
-              color: wp.slash.color,
-              height: wp.slash.height,
+              range: as.range,
+              arc: as.arc,
+              duration: Math.min(as.swing * (1 - fxAt) * 0.55, 0.28),
+              color: as.slash.color,
+              height: as.slash.height,
             }
           );
         }
@@ -474,9 +495,10 @@ export class Player {
         // Hand the upper body back to whatever locomotion is playing.
         // Without this fade-out the LoopOnce action would clamp on its
         // last frame and freeze the arms in the followthrough pose.
-        const a = this._character?.actions?.[this._attackActionKey];
+        const a = this._character?.actions?.[as.animKey];
         if (a) a.fadeOut(0.18);
-      } else if (this.swingFxFired && this.attackAnim <= wp.impactAt) {
+        this._activeSwing = null;
+      } else if (this.swingFxFired && this.attackAnim <= as.impactAt) {
         // Damage window is open: from the FX trigger up to (and
         // including) the canonical impact tick. Re-running every frame
         // means an enemy that walks into the arc mid-swing still gets
@@ -537,8 +559,56 @@ export class Player {
     }
   }
 
-  _processSwing(enemies, callback) {
+  // Start a new swing — either the weapon's tap attack or its charge-up
+  // super (when `isSuper` is true and a `superAttack` profile exists).
+  // Snapshots all parameters that the swing tick will need into
+  // `this._activeSwing` so the same tick code can drive both.
+  _triggerAttack(isSuper) {
     const wp = this.weaponProfile;
+    const sp = isSuper ? wp.superAttack : null;
+    if (isSuper && !sp) return;
+    const swing      = sp?.swing      ?? wp.swing;
+    const impactAt   = sp?.impactAt   ?? wp.impactAt;
+    const range      = sp?.range      ?? wp.range;
+    const arc        = sp?.arc        ?? wp.arc;
+    const slash      = sp?.slash      ?? wp.slash;
+    const damageMult = sp?.damageMult ?? wp.damageMult;
+    const cooldown   = sp?.cooldown   ?? wp.cooldown;
+    const animKey    = sp?.attackAnim ?? this._attackActionKey;
+    const ringColor  = sp?.ringColor  ?? null;
+
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    this.attackTimer = cooldown * attackCdMult;
+    this.attackAnim = 0;
+    this.swingActive = true;
+    this._swingHitSet.clear();
+    this._swingShookCam = false;
+    this.swingFxFired = false;
+    this._activeSwing = {
+      swing, impactAt, range, arc, slash, damageMult,
+      isSuper: !!isSuper, animKey, ringColor,
+    };
+
+    // Whoosh sound + slash VFX both fire just before the impact frame
+    // (see swingActive branch below) so the trail is mid-paint when the
+    // visible blade reaches its strike pose. We deliberately do *not*
+    // fade out idle/run here — attack clips are pre-filtered to upper
+    // body bones only (see models.js), so the legs keep stepping
+    // through whatever locomotion state was active when the attack
+    // started. The spin super opts out of the upper-body filter
+    // (FULL_BODY_SLOTS) so the whole rig rotates.
+    const action = this._character?.actions?.[animKey];
+    if (action) {
+      action.reset();
+      const srcDur = Math.max(action.getClip().duration, 0.05);
+      action.timeScale = srcDur / Math.max(swing, 0.1);
+      action.setEffectiveWeight(10.0);
+      action.fadeIn(0.05).play();
+    }
+  }
+
+  _processSwing(enemies, callback) {
+    const as = this._activeSwing || this.weaponProfile;
     // Sweep is performed against the player's *current* position and
     // facing, not the position/facing at the start of the swing. Combined
     // with the multi-tick damage window, this means the hitbox follows
@@ -547,8 +617,13 @@ export class Player {
     // group.
     const cx = this.pos.x, cz = this.pos.z;
     const fx = this.facing.x, fz = this.facing.z;
-    const range = wp.range;
-    const halfArc = wp.arc / 2;
+    const range = as.range;
+    const halfArc = as.arc / 2;
+    // Full-circle swings (the spin super) skip the angular check entirely
+    // — `acos` only returns values in [0, π] so even a halfArc of π still
+    // accepts every direction, but spelling it out makes the intent
+    // explicit and saves a few `acos` calls per frame.
+    const omni = as.arc >= Math.PI * 1.99;
     let newHits = 0;
     for (const e of enemies) {
       if (!e.alive) continue;
@@ -558,14 +633,15 @@ export class Player {
       const dx = e.pos.x - cx, dz = e.pos.z - cz;
       const d = Math.hypot(dx, dz);
       if (d > range + e.radius) continue;
-      const ndx = dx / (d || 1), ndz = dz / (d || 1);
-      const dot = ndx * fx + ndz * fz;
-      const ang = Math.acos(clamp(dot, -1, 1));
-      if (ang <= halfArc) {
-        callback(this, e);
-        this._swingHitSet.add(e);
-        newHits++;
+      if (!omni) {
+        const ndx = dx / (d || 1), ndz = dz / (d || 1);
+        const dot = ndx * fx + ndz * fz;
+        const ang = Math.acos(clamp(dot, -1, 1));
+        if (ang > halfArc) continue;
       }
+      callback(this, e);
+      this._swingHitSet.add(e);
+      newHits++;
     }
     // Heavier weapons still get more screen-shake — this is what makes a
     // greatsword swing read as physically heavier than a dagger jab.
@@ -578,7 +654,7 @@ export class Player {
     // enemies enter the arc.
     if (newHits > 0 && !this._swingShookCam) {
       this._swingShookCam = true;
-      const heft = Math.min(1, wp.damageMult / 2);
+      const heft = Math.min(1, as.damageMult / 2);
       this.effects.shakeCamera(0.20 + 0.30 * heft);
     }
   }
