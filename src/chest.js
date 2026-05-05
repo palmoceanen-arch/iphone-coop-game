@@ -10,7 +10,17 @@ import { TOON_GRADIENT } from './shading.js';
 import { Rune } from './runes.js';
 import { pickRandomItemId } from './items.js';
 import { pickRandomAbilityId } from './abilities.js';
-import { vdist, defaultRandom } from './utils.js';
+import { vdist, defaultRandom, rand } from './utils.js';
+import { spawnHarvestDrops } from './pickups.js';
+
+// Probability a chest also drops a small seed pouch when opened. Chests
+// are the only renewable seed source until players have an established
+// farm, so we want most chests to contribute a few — but not all of them,
+// so the rune is still the main reward.
+const SEED_DROP_CHANCE = 0.6;
+// Inclusive seed pouch range. 1-3 keeps the early game feeling generous
+// without dumping enough seeds to skip combat in favour of harvesting.
+const SEED_DROP_RANGE = [1, 3];
 
 const PROMPT_RADIUS = 2.2;
 const OPEN_RADIUS = 1.2;
@@ -54,7 +64,7 @@ export class Chest {
     return grp;
   }
 
-  update(dt, players, sound, effects, onSpawnRune) {
+  update(dt, players, sound, effects, onSpawnRune, onSpawnPickup) {
     if (!this.alive) return;
     this.bobT += dt * 2;
     if (this.opened) {
@@ -78,12 +88,12 @@ export class Chest {
     if (nd < OPEN_RADIUS) {
       const intent = near._lastIntent;
       if (intent && intent.interact) {
-        this._open(sound, effects, onSpawnRune);
+        this._open(sound, effects, onSpawnRune, onSpawnPickup);
       }
     }
   }
 
-  _open(sound, effects, onSpawnRune) {
+  _open(sound, effects, onSpawnRune, onSpawnPickup) {
     this.opened = true;
     if (this._lid) {
       this._lid.rotation.x = -0.6; // hinge open
@@ -97,6 +107,20 @@ export class Chest {
     onSpawnRune?.(rune);
     sound.pickupGold?.();
     if (effects.ring) effects.ring(this.pos.x, 0.05, this.pos.z, 0xffd166, 1.2, 0.35);
+    // Seed pouch — funnels into the shared world.resources.seeds counter
+    // via the existing 'seed' pickup path. We push them slightly to the
+    // opposite side of the rune so the player visually sees a small fan
+    // of green tetras alongside the gold-coloured rune.
+    if (onSpawnPickup && defaultRandom() < SEED_DROP_CHANCE) {
+      const lo = SEED_DROP_RANGE[0], hi = SEED_DROP_RANGE[1];
+      const amt = Math.max(lo, Math.floor(rand(lo, hi + 1)));
+      const drops = spawnHarvestDrops(
+        this.scene,
+        this.pos.x - 0.7, this.pos.z - 0.1,
+        'seed', amt,
+      );
+      for (const d of drops) onSpawnPickup(d);
+    }
   }
 
   _destroy() {

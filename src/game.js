@@ -3,7 +3,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Projectile } from './projectile.js';
-import { spawnDrops, spawnHarvestDrops } from './pickups.js';
+import { spawnDrops } from './pickups.js';
 import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
@@ -27,6 +27,8 @@ import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import { Structure, RECIPES, buildStructureMesh } from './structure.js';
 import { BuildController } from './buildMode.js';
+import { Crop, CROP_ORDER, cropLabel } from './farming.js';
+import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { iconHTML } from './icons.js';
@@ -167,6 +169,12 @@ export class Game {
     this.altars = []; // rare item-management altars
     this.resources = []; // harvestable trees / rocks (damageable resource nodes)
     this.structures = []; // player-placed structures (fences / walls / gates / planters)
+    // Live Crop entities (M3 farming). One per planter that has been
+    // tilled-or-later — never spawned for an 'empty' planter on chunk
+    // load (we only build the Crop on first interact / on rehydrate from
+    // a non-empty descriptor). Indexed alongside `structures` by
+    // chunkKey for chunk-unload cleanup.
+    this.crops = [];
     // One BuildController per player, lazily activated when the player
     // presses a recipe-select key. Stays alive across the session so the
     // player's last-used recipe / yaw is preserved when they re-enter.
@@ -488,11 +496,14 @@ export class Game {
     // chunks don't carry stale wall geometry, and clear the persistent
     // placedStructures map so a fresh run starts with no fortress.
     for (const s of this.structures) { s.destroyMesh?.(); s.removeCollider?.(); }
+    // Crops are children of planter meshes; structure destroyMesh() above
+    // already detached the parent, so we just drop our references.
+    for (const c of this.crops) { c.destroy?.(); }
     if (this.world?.placedStructures) this.world.placedStructures.clear();
     if (this.world?.structureSpawns) this.world.structureSpawns.length = 0;
     // Exit any active build mode so ghost previews don't outlive the run.
     for (const b of this.builders || []) { b?.exit?.(); }
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = []; this.structures = [];
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = []; this.structures = []; this.crops = [];
     if (this.world?.resources) {
       this.world.resources.wood = 0;
       this.world.resources.stone = 0;
@@ -648,6 +659,17 @@ export class Game {
         collider, chunk.colliders, chunk.group,
       );
       this.structures.push(struct);
+      // Planters get an attached Crop entity (M3 farming). New planters
+      // start in the 'empty' state with no crop mesh; reloaded planters
+      // restore from the descriptor's persisted farm field. The Crop is
+      // associated with the Structure so chunk unload / structure
+      // destruction drops both at the same time.
+      if (s.kind === 'planter') {
+        const crop = new Crop(mesh, { x: s.x, z: s.z }, s.chunkKey);
+        if (s.farm) crop.loadFromDescriptor(s.farm);
+        struct.crop = crop;
+        this.crops.push(crop);
+      }
     }
   }
 
@@ -703,6 +725,119 @@ export class Game {
       this.structures,
       s => s.chunkKey !== chunkKey,
     );
+    // Crops live in the planter's mesh group (chunk-owned), so chunk
+    // disposal already removed their visible meshes. We just drop the
+    // references — the persisted farm state stays in the placedStructures
+    // descriptor and is rehydrated on chunk reload.
+    compactInPlace(
+      this.crops,
+      c => c.chunkKey !== chunkKey,
+      c => { c.destroy?.(); },
+    );
+  }
+
+  // ---- Farming interaction (M3) -----------------------------------
+  // Find the planter closest to `player` within INTERACT_RADIUS and
+  // dispatch the player's interact press to it. Returns true if anything
+  // was consumed (mirrors _tryOpenAltar's contract). Build-mode is checked
+  // by the caller — interact in build mode is already swallowed for ghost
+  // rotation so we never reach here while the BuildController is active.
+  _tryFarmInteract(player) {
+    if (!player || !player.alive || this.crops.length === 0) return false;
+    const FARM_INTERACT_RADIUS = 1.4;
+    let target = null, bestD = FARM_INTERACT_RADIUS;
+    for (const c of this.crops) {
+      if (!c.hasPendingAction()) continue;
+      const d = Math.hypot(c.pos.x - player.pos.x, c.pos.z - player.pos.z);
+      if (d <= bestD) { bestD = d; target = c; }
+    }
+    if (!target) return false;
+    const outcome = target.interact(player.selectedCropKind, this.world.resources);
+    switch (outcome.kind) {
+      case 'till':
+        this.sound.till?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0x6e4a2a, 0.9, 0.25);
+        break;
+      case 'plant':
+        this.sound.plant?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0x9ad36b, 0.9, 0.25);
+        this.effects.toast?.(`Посажено: ${cropLabel(outcome.cropKind)}`, '#9ad36b');
+        break;
+      case 'noseed':
+        if (outcome.toast) this.effects.toast?.(outcome.toast, '#ff7a7a');
+        break;
+      case 'harvest': {
+        this.sound.harvest?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xffd166, 1.4, 0.4);
+        this.effects.burst(target.pos.x, 0.6, target.pos.z, 0xffd166, 12, 4, 0.4);
+        const food = Math.max(0, outcome.food | 0);
+        const seeds = Math.max(0, outcome.seeds | 0);
+        if (food > 0) {
+          const drops = spawnFoodDrops(this.scene, target.pos.x, target.pos.z, food);
+          for (const d of drops) this.pickups.push(d);
+        }
+        if (seeds > 0) {
+          const drops = spawnHarvestDrops(this.scene, target.pos.x, target.pos.z, 'seed', seeds);
+          for (const d of drops) this.pickups.push(d);
+        }
+        const summary = (seeds > 0)
+          ? `${cropLabel(outcome.cropKind)}: +${food} еды, +${seeds} семян`
+          : `${cropLabel(outcome.cropKind)}: +${food} еды`;
+        this.effects.toast?.(summary, '#7aff8a');
+        break;
+      }
+      case 'reset':
+        this.sound.till?.();
+        break;
+      default:
+        return false;
+    }
+    if (target.chunkKey) {
+      this.world.updateStructureFarm(target.chunkKey, target.pos.x, target.pos.z, target.toDescriptor());
+    }
+    return true;
+  }
+
+  // Render context-sensitive prompts above the closest pending planter
+  // for each player. Cheap: each frame finds the nearest farmable planter
+  // within prompt range and forwards the localised label to the toast
+  // overlay. Skipped while a player is in build mode — they're focused on
+  // ghost placement, not crop maintenance.
+  _showFarmPrompts() {
+    if (this.crops.length === 0) return;
+    const PROMPT_RADIUS = 1.8;
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const builder = this.builders[p.index];
+      if (builder && builder.active) continue;
+      let target = null, bestD = PROMPT_RADIUS;
+      for (const c of this.crops) {
+        const d = Math.hypot(c.pos.x - p.pos.x, c.pos.z - p.pos.z);
+        if (d <= bestD) { bestD = d; target = c; }
+      }
+      if (!target) {
+        // Player walked away from every planter — clear the cached
+        // prompt key so the next approach re-emits a fresh toast.
+        p._farmPromptKey = null;
+        continue;
+      }
+      // Only re-emit a fresh prompt when the closest planter or its state
+      // changes — otherwise the toast spams every frame the player stands
+      // next to a planter.
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.state}`;
+      if (p._farmPromptKey === stateKey) continue;
+      p._farmPromptKey = stateKey;
+      const key = (p.index === 0) ? 'E' : 'J';
+      const verb = target.promptLabel();
+      if (!verb) continue;
+      let text = `${key}: ${verb}`;
+      if (target.state === 'tilled') {
+        text = `${key}: ${verb} — ${cropLabel(p.selectedCropKind)} (${this.world.resources.seeds || 0} сем.)`;
+      } else if (target.state === 'mature' && target.cropKind) {
+        text = `${key}: ${verb} — ${cropLabel(target.cropKind)}`;
+      }
+      this.effects.toast?.(text, '#9ad36b');
+    }
   }
 
   // ---- Altar interaction ------------------------------------------
@@ -1214,6 +1349,51 @@ export class Game {
     // Altar idle update (proximity prompt, crystal bob, halo).
     for (const a of this.altars) a.update(dt, this.players, this.sound, this.effects);
 
+    // Seed-kind cycle (M3 farming). Press Q (P1) / U (P2) to rotate the
+    // crop kind that gets planted on the next interact-on-tilled-planter.
+    // Done after altar handling so an altar interaction doesn't accidentally
+    // skip the cycle key for the same frame.
+    for (const p of this.players) {
+      if (!p.alive || !p._lastIntent || !p._lastIntent.seedCycle) continue;
+      const idx = CROP_ORDER.indexOf(p.selectedCropKind);
+      const next = CROP_ORDER[(idx + 1) % CROP_ORDER.length];
+      p.selectedCropKind = next;
+      const k = (p.index === 0) ? 'P1' : 'P2';
+      this.effects.toast?.(`${k}: посадим — ${cropLabel(next)}`, '#9ad36b');
+    }
+
+    // Planter farming interaction. Players in build mode have already had
+    // their interact stripped above (build.update consumes it for ghost
+    // rotation), so we won't double-fire. We still allow growth ticks for
+    // every alive Crop in a sim-loaded chunk regardless of build mode.
+    if (!this.altarOpen) {
+      for (const p of this.players) {
+        if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
+        if (this._tryFarmInteract(p)) p._lastIntent.interact = false;
+      }
+    }
+    // Tick crops — only those whose chunk is in SIM_RADIUS so off-screen
+    // farms don't progress at full clock. Crop.update guards by state so
+    // an empty / mature / harvested planter is a no-op. Snapshot the
+    // pre-tick state per crop so the growing→mature transition surfaces a
+    // toast exactly once instead of every frame past maturity.
+    for (const c of this.crops) {
+      if (c.state !== 'growing') continue;
+      if (!this.world.simKeys.has(c.chunkKey)) continue;
+      const prevState = c.state;
+      c.update(dt);
+      if (c.state === 'mature' && prevState === 'growing') {
+        this.effects.toast?.(`Урожай созрел: ${cropLabel(c.cropKind)}`, '#7aff8a');
+      }
+      // Persist progress + state once a frame so a chunk unload mid-grow
+      // captures the latest progress value.
+      if (c.chunkKey) this.world.updateStructureFarm(c.chunkKey, c.pos.x, c.pos.z, c.toDescriptor());
+    }
+    // Render an interact prompt above the closest farmable planter for
+    // each player. Same UX as chest "press E to open" — keeps the rest of
+    // the planter logic out of the player module.
+    this._showFarmPrompts();
+
     // Update enemies
     const ctx = {
       spawnProjectile: (opts) => {
@@ -1261,7 +1441,14 @@ export class Game {
     // self-destroys we record its position in the world's consumed-set
     // so a later regeneration of the same chunk doesn't spawn a fresh
     // chest in the same spot.
-    for (const c of this.chests) c.update(dt, this.players, this.sound, this.effects, (rune) => this.runes.push(rune));
+    for (const c of this.chests) c.update(
+      dt, this.players, this.sound, this.effects,
+      (rune) => this.runes.push(rune),
+      // Seed pouch drops route into the existing pickup list so the
+      // gravitate-to-player + shared-resources deposit path handles them
+      // exactly like wood / stone pickups.
+      (pickup) => this.pickups.push(pickup),
+    );
     compactInPlace(this.chests, c => c.alive, c => {
       if (c.chunkKey) this.world.markChestConsumed(c.chunkKey, c.pos.x, c.pos.z);
     });
@@ -1307,8 +1494,17 @@ export class Game {
         s.removeCollider();
         s.destroyMesh();
         if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
+        // Drop any attached Crop too — the planter mesh is gone so no
+        // visible mesh remains, but the Crop entry would otherwise linger
+        // in this.crops and try to find a deleted descriptor each tick.
+        if (s.crop) {
+          s.crop.destroy?.();
+          s.crop._destroyed = true;
+        }
       },
     );
+    // Compact out any crops whose planter was destroyed this frame.
+    compactInPlace(this.crops, c => !c._destroyed);
 
     // Resources: idle hit-shake / regrow timer, then catch newly-dead ones
     // and route to the harvest path. Trees stay in the list as walk-through

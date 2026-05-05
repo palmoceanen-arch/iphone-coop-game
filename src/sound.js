@@ -325,6 +325,30 @@ export class Sound {
     this.noise({ dur: 0.07, gain: 0.32, lp: 1900, hp: 400 });
     this.tone({ freq: 380, type: 'square', dur: 0.05, gain: 0.10, slide: -180 });
   }
+  // Farming sfx (M3). Each routes to a small synth so we don't ship a new
+  // .ogg category for them; tuned to read against combat noise without
+  // crowding the breakable / pickup tier.
+  till() {
+    // Wet-soil scrape: a low filtered noise sweep, no tonal accent so it
+    // reads as "earth being turned" rather than a bell.
+    if (this.muted || !this.ctx) return;
+    this.noise({ dur: 0.20, gain: 0.30, lp: 700, hp: 80 });
+    this.tone({ freq: 130, type: 'triangle', dur: 0.18, gain: 0.10, slide: -30 });
+  }
+  plant() {
+    // Two-note pluck: a small "you placed a seed" affirmation distinct
+    // from the coin pickup ding.
+    if (this.muted || !this.ctx) return;
+    this.tone({ freq: 540, type: 'triangle', dur: 0.07, gain: 0.18, slide: 60 });
+    this.tone({ freq: 720, type: 'sine',     dur: 0.10, gain: 0.14, slide: 80 });
+  }
+  harvest() {
+    // Bright triple-arpeggio: rewards the player after the long grow wait.
+    if (this.muted || !this.ctx) return;
+    this.tone({ freq: 660, type: 'triangle', dur: 0.08, gain: 0.18 });
+    this.tone({ freq: 880, type: 'triangle', dur: 0.10, gain: 0.16 });
+    this.tone({ freq: 1100, type: 'sine',    dur: 0.14, gain: 0.14 });
+  }
   // Generic destroy — used by abilities AoE / bombs against breakables.
   bomb(opts) {
     if (this.muted || !this.ctx) return;

@@ -7,12 +7,19 @@ const P1_KEYS = {
   // toggling off if the same one is already active). Stays out of the swing
   // / dash key set so it doesn't conflict with combat.
   build: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
+  // Cycle the player's "selected crop kind" used when planting a seed in a
+  // tilled planter (M3 farming). Out of the WASD/F/R/E cluster so the
+  // movement+combat reach stays uncluttered.
+  seedCycle: ['KeyQ'],
 };
 const P2_KEYS = {
   up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
   attack: ['KeyL', 'Slash'], dash: ['KeyK', 'ShiftRight'], interact: ['KeyJ', 'Period'],
   // Right-hand digits 7..0 mirror the same 4-recipe catalog for player 2.
   build: ['Digit7', 'Digit8', 'Digit9', 'Digit0'],
+  // U is unbound by every existing system (combat / build / pause) and sits
+  // in P2's right-hand cluster next to J/K/L, mirroring P1's Q.
+  seedCycle: ['KeyU'],
 };
 
 export class Input {
@@ -96,6 +103,7 @@ export class Input {
     for (let i = 0; i < map.build.length; i++) {
       if (this.consumePressed([map.build[i]])) { buildSelect = i; break; }
     }
+    const seedCycle = this.consumePressed(map.seedCycle);
 
     return {
       moveX: mx,
@@ -106,6 +114,7 @@ export class Input {
       dashHeld: this.anyDown(map.dash) || r.dashHeld,
       interact: this.consumePressed(map.interact) || remoteInteractEdge,
       buildSelect,
+      seedCycle,
     };
   }
 

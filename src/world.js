@@ -353,6 +353,12 @@ export class World {
       for (const s of persisted) {
         this.structureSpawns.push({
           x: s.x, z: s.z, kind: s.kind, yaw: s.yaw, hp: s.hp,
+          // Forward the saved farming snapshot (planter only). The drainer
+          // hands this to Crop.loadFromDescriptor() so a re-streamed chunk
+          // resumes a half-grown crop at exactly the stage / progress it
+          // left off — including post-harvest "harvested" state that
+          // hasn't yet been reset.
+          farm: s.farm || null,
           chunkKey: key,
           group: chunk.group,
           colliderArray: chunk.colliders,
@@ -497,6 +503,24 @@ export class World {
     for (const d of arr) {
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
         d.hp = hp;
+        return;
+      }
+    }
+  }
+
+  // Persist the M3 farming snapshot on a planter's descriptor so a chunk
+  // reload mid-grow (player walked away and back) preserves the in-progress
+  // crop. `farm` is the JSON-clean object produced by Crop.toDescriptor()
+  // — null wipes the slot. Lookup uses the same eps tolerance as
+  // forgetStructure so float drift in (x,z) doesn't drop the match.
+  updateStructureFarm(chunkKey, x, z, farm) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    for (const d of arr) {
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        if (farm) d.farm = farm;
+        else delete d.farm;
         return;
       }
     }
