@@ -38,6 +38,21 @@ export const PLAYER_COLOR_PRESETS = [
   { id: 'lime',     name: 'Лайм',      body: 0xc8ff5a },
 ];
 
+// Cape palette — richer, more saturated tones so the cape reads as a
+// contrasting accent against the body even when the body uses one of the
+// pastel presets above. Reused IDs/names where it makes sense; the values
+// are deliberately deeper.
+export const CAPE_COLOR_PRESETS = [
+  { id: 'crimson', name: 'Багровый',  body: 0x8a1a1a },
+  { id: 'royal',   name: 'Королевский', body: 0x2a3aa0 },
+  { id: 'forest',  name: 'Лесной',    body: 0x1d6b2e },
+  { id: 'gold',    name: 'Золотой',   body: 0xc8a23a },
+  { id: 'plum',    name: 'Сливовый',  body: 0x6a2a8a },
+  { id: 'charcoal',name: 'Уголь',     body: 0x2a2f36 },
+  { id: 'silver',  name: 'Серебро',   body: 0xc0c8d0 },
+  { id: 'teal',    name: 'Бирюзовый', body: 0x1a8a8a },
+];
+
 // KayKit characters face +Z by default in the GLB; our atan2(facing.x,facing.z)
 // convention already maps facing direction to mesh.rotation.y when forward is
 // +Z, so no additional offset is required.
@@ -51,9 +66,11 @@ export class Player {
     this.effects = effects;
     this.sound = sound;
     // Optional cosmetic / loadout overrides from the start menu. `colorHex`
-    // tints the character mesh in `_buildMesh()`; `weaponKind` picks the
-    // starter weapon instead of the per-slot default.
+    // tints the character body + helmet; `capeColorHex` independently tints
+    // the cape; `weaponKind` picks the starter weapon instead of the
+    // per-slot default.
     this._colorHex = (typeof opts.color === 'number') ? opts.color : null;
+    this._capeColorHex = (typeof opts.capeColor === 'number') ? opts.capeColor : null;
     this._startWeapon = (typeof opts.weapon === 'string') ? opts.weapon : null;
 
     this.pos = { x: index === 0 ? -3 : 3, z: 4 };
@@ -116,11 +133,12 @@ export class Player {
     // intact and only swap the body tint, since that's the only field
     // `spawnCharacter()` actually consumes.
     const tint = (this._colorHex !== null) ? this._colorHex : palette.body;
+    const capeTint = (this._capeColorHex !== null) ? this._capeColorHex : null;
     const grp = new THREE.Group();
 
     // Animated CC0 character model from KayKit (Knight) — clone of the shared
     // skeleton + materials so each player can tint differently without leaking.
-    const character = spawnCharacter('knight', { tint, scale: MODEL_SCALE });
+    const character = spawnCharacter('knight', { tint, capeTint, scale: MODEL_SCALE });
     this._character = character;
     grp.add(character.root);
 

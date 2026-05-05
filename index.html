@@ -246,15 +246,13 @@
       }
       #start-menu.open { display: flex; }
       .start-panel {
-        width: min(820px, 94vw); max-height: 92vh; overflow-y: auto;
+        width: min(880px, 94vw); max-height: 92vh; overflow-y: auto;
         background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
-        padding: 24px 28px;
+        padding: 22px 24px;
       }
-      .start-panel h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: 0.5px; text-align: center; }
-      .start-panel .sub { margin: 0 0 22px; font-size: 13px; opacity: 0.65; text-align: center; }
       .start-view { display: none; }
       .start-view.active { display: block; }
-      .start-main-actions { display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 12px auto 4px; }
+      .start-main-actions { display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 18px auto; }
       .start-main-actions button {
         padding: 14px 18px; font-size: 16px; font-weight: 700; letter-spacing: 0.3px;
         border-radius: 12px; cursor: pointer; color: #fff;
@@ -269,12 +267,11 @@
       .start-main-actions button:hover:not(:disabled) { filter: brightness(1.1); }
       .start-main-actions button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
       .start-seed-row {
-        display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; align-items: center;
-        padding: 10px 12px; margin: 0 0 14px; background: #0e1218; border-radius: 10px;
+        display: flex; gap: 10px; align-items: center;
+        padding: 8px 12px; margin: 0 0 14px; background: #0e1218; border-radius: 10px;
       }
-      .start-seed-row .label { font-size: 13px; color: #cfd6e0; }
-      .start-seed-row .label .desc { display: block; font-size: 11px; opacity: 0.55; margin-top: 2px; font-weight: 400; }
-      .start-seed-row .control { display: flex; gap: 6px; align-items: center; }
+      .start-seed-row .label { font-size: 12px; color: #cfd6e0; flex-shrink: 0; opacity: 0.7; }
+      .start-seed-row .control { display: flex; gap: 6px; align-items: center; flex: 1; }
       .start-seed-row input[type=text] {
         flex: 1; min-width: 0; background: #1a2029; color: #fff;
         border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
@@ -286,37 +283,41 @@
         padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;
       }
       .start-seed-row .control button:hover { filter: brightness(1.1); }
-      .start-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .start-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       @media (max-width: 720px) { .start-slots { grid-template-columns: 1fr; } }
       .start-slot {
-        background: #0e1218; border-radius: 12px; padding: 14px 16px;
+        background: #0e1218; border-radius: 12px; padding: 10px 12px 12px;
         border: 1px solid rgba(255,255,255,0.06);
       }
       .start-slot-p1 { border-top: 3px solid #6ad0ff; }
       .start-slot-p2 { border-top: 3px solid #ff8a8a; }
-      .start-slot-title { margin: 0 0 12px; font-size: 16px; }
+      .start-slot-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
       .start-slot-p1 .start-slot-title { color: #6ad0ff; }
       .start-slot-p2 .start-slot-title { color: #ff8a8a; }
-      .start-section-label { font-size: 11px; opacity: 0.55; text-transform: uppercase; letter-spacing: 1px; margin: 10px 0 6px; }
-      .start-color-row { display: flex; gap: 6px; flex-wrap: wrap; }
+      .start-preview {
+        display: block; width: 100%; height: 220px;
+        background: radial-gradient(ellipse at center, #1a2029 0%, #0a0d12 80%);
+        border-radius: 8px; margin: 4px 0 8px;
+      }
+      .start-section-label { font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 4px; }
+      .start-color-row { display: flex; gap: 4px; flex-wrap: nowrap; }
       .start-swatch {
-        width: 28px; height: 28px; border-radius: 50%;
+        width: 22px; height: 22px; flex: 1; max-width: 32px; border-radius: 50%;
         border: 2px solid rgba(255,255,255,0.15); cursor: pointer;
-        padding: 0; transition: transform 120ms ease, border-color 120ms ease;
+        padding: 0; transition: transform 100ms ease, border-color 100ms ease;
       }
-      .start-swatch:hover { transform: scale(1.08); }
-      .start-swatch.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(59,130,246,0.6); transform: scale(1.05); }
-      .start-weapon-row { display: flex; flex-direction: column; gap: 4px; }
-      .start-weapon {
-        display: flex; flex-direction: column; align-items: flex-start;
+      .start-swatch:hover { transform: scale(1.1); }
+      .start-swatch.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(59,130,246,0.6); }
+      .start-weapon-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+      }
+      .start-weapon-chip {
         background: #1a2029; border: 1px solid rgba(255,255,255,0.08);
-        color: #cfd6e0; padding: 8px 12px; border-radius: 8px; cursor: pointer;
-        text-align: left; gap: 2px;
+        color: #cfd6e0; padding: 6px 4px; border-radius: 6px; cursor: pointer;
+        font-size: 11px; font-weight: 600; text-align: center; line-height: 1.2;
       }
-      .start-weapon:hover { background: #20262e; }
-      .start-weapon.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
-      .start-weapon .w-name { font-weight: 700; font-size: 13px; }
-      .start-weapon .w-meta { font-size: 11px; opacity: 0.65; font-variant-numeric: tabular-nums; }
+      .start-weapon-chip:hover { background: #20262e; }
+      .start-weapon-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
       .start-load-empty {
         background: #0e1218; border-radius: 12px; padding: 26px;
         text-align: center; opacity: 0.7; font-size: 13px; line-height: 1.6;
@@ -514,11 +515,8 @@
             </div>
           </div>
         </div>
-        <div id="start-menu" role="dialog" aria-modal="true" aria-labelledby="start-title">
+        <div id="start-menu" role="dialog" aria-modal="true">
           <div class="start-panel">
-            <h1 id="start-title">Twin Hearts</h1>
-            <p class="sub">Кооп-приключение на двоих. Выбери режим и начнём.</p>
-
             <!-- Main view: New game / Load / Settings -->
             <div class="start-view active" data-view="main">
               <div class="start-main-actions">
@@ -531,7 +529,7 @@
             <!-- New game: seed + per-slot color/weapon picker -->
             <div class="start-view" data-view="newgame">
               <div class="start-seed-row">
-                <div class="label">Сид мира<span class="desc">Одинаковый сид — одинаковый мир. Поделись с другом, чтобы пробежаться вместе по тому же миру.</span></div>
+                <div class="label">Сид</div>
                 <div class="control">
                   <input id="start-seed" type="text" maxlength="12" autocomplete="off" spellcheck="false" />
                   <button id="start-seed-random" type="button">Случайный</button>

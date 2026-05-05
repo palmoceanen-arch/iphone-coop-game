@@ -374,7 +374,25 @@ const _tmpColor = new THREE.Color();
 // `tint` (hex int) is optional — if provided, every mesh's material is cloned
 // and multiplied by the tint color so different instances of the same model
 // can have distinct colors without affecting siblings.
-export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = {}) {
+// Walk up a mesh's parent chain to figure out which "slot" it belongs to —
+// body (default), cape (the Knight_Cape rig node), helmet, or weapon (any
+// of the built-in 1H/2H sword and shield meshes parented to handslot.r/.l).
+// Used by spawnCharacter() / applyCharacterTint() so callers can tint the
+// cape independently from the rest of the character without affecting
+// weapons or shields.
+function classifyMeshRole(meshNode) {
+  let cur = meshNode;
+  while (cur) {
+    const name = cur.name || '';
+    if (name.includes('Cape')) return 'cape';
+    if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
+    if (name.includes('Helmet')) return 'helmet';
+    cur = cur.parent;
+  }
+  return 'body';
+}
+
+export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, hueShift = 0 } = {}) {
   const entry = cache[kind];
   if (!entry) {
     throw new Error(`[models] unknown kind "${kind}" — did preloadModels() resolve?`);
@@ -394,7 +412,19 @@ export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = 
       } else if (obj.material) {
         obj.material = toToonMaterial(obj.material);
       }
-      if (tint !== null) {
+      const role = classifyMeshRole(obj);
+      if (role === 'weapon') {
+        // Leave swords/shields with their atlas-driven colour so the user's
+        // body tint doesn't bleed into the equipment.
+      } else if (role === 'cape') {
+        const capeHex = (capeTint !== null) ? capeTint : tint;
+        if (capeHex !== null) {
+          _tmpColor.setHex(capeHex);
+          applyTint(obj.material, _tmpColor);
+        } else if (hueShift !== 0) {
+          applyHueShift(obj.material, hueShift);
+        }
+      } else if (tint !== null) {
         _tmpColor.setHex(tint);
         applyTint(obj.material, _tmpColor);
       } else if (hueShift !== 0) {
@@ -437,6 +467,29 @@ export function spawnCharacter(kind, { tint = null, scale = 1, hueShift = 0 } = 
   }
 
   return { root, mixer, actions };
+}
+
+// Re-tint a previously spawned character in-place (used by the start-menu
+// preview to react to swatch clicks without rebuilding the whole mesh).
+// `bodyHex` colours body + helmet; `capeHex` colours just the cape. Pass
+// `null` for either to leave that part alone.
+export function applyCharacterTint(character, { body = null, cape = null } = {}) {
+  if (!character || !character.root) return;
+  character.root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    const role = classifyMeshRole(obj);
+    if (role === 'weapon') return;
+    let hex = null;
+    if (role === 'cape') hex = (cape !== null) ? cape : body;
+    else hex = body;
+    if (hex === null) return;
+    _tmpColor.setHex(hex);
+    if (Array.isArray(obj.material)) {
+      for (const m of obj.material) applyTint(m, _tmpColor);
+    } else {
+      applyTint(obj.material, _tmpColor);
+    }
+  });
 }
 
 function applyTint(material, color) {

@@ -120,11 +120,11 @@ export class Game {
     this.input = new Input();
     this.effects = new Effects(this.scene, this.followCam.cam);
 
-    // Per-slot start-menu loadout (color + starter weapon). Each entry is
-    // `{ color: hexInt, weapon: 'sword_1h'|... }` and may be partially
-    // populated; missing fields fall back to the per-slot defaults inside
-    // Player. When `opts.players` is omitted entirely the original cyan-sword
-    // / coral-axe defaults still apply.
+    // Per-slot start-menu loadout (body / cape colours + starter weapon).
+    // Each entry is `{ color: hexInt, capeColor: hexInt, weapon: 'sword_1h'|... }`
+    // and may be partially populated; missing fields fall back to the
+    // per-slot defaults inside Player. When `opts.players` is omitted
+    // entirely the original cyan-sword / coral-axe defaults still apply.
     const playerOpts = Array.isArray(opts.players) ? opts.players : [];
     this.players = [
       new Player(0, this.world, this.effects, this.sound, playerOpts[0] || {}),

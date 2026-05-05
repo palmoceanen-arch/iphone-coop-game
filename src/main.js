@@ -2,7 +2,7 @@ import { ABILITY_BY_ID } from './abilities.js';
 import { Game } from './game.js';
 import { ITEMS } from './items.js';
 import { Lobby } from './lobby.js';
-import { preloadModels } from './models.js';
+import { preloadModels, preloadWeapons } from './models.js';
 import { PauseMenu } from './pause.js';
 import { getSettings } from './settings.js';
 import { StartMenu } from './startMenu.js';
@@ -38,6 +38,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (fillEl) fillEl.style.width = `${Math.round(100 * done / total)}%`;
       if (statEl) statEl.textContent = `${done} / ${total} · ${key}`;
     });
+    // Also preload the standalone weapon meshes so the start-menu preview
+    // can equip axes / staves / wands — the in-game flow lazily preloads
+    // these on first setWeapon() call but the menu shows them up-front.
+    await preloadWeapons();
     if (loadingEl) {
       loadingEl.classList.add('hidden');
       setTimeout(() => loadingEl.remove(), 250);
