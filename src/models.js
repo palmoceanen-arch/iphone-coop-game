@@ -573,17 +573,21 @@ export const WEAPONS = {
     damageMult: 1.0,
     slash: { color: 0xdfeaff, height: 1.05 },
   },
-  // Heavy two-hander — wider arc, more reach, more wind-up. Uses the
-  // 2H horizontal slice clip (the same wide sweep as `attack_2h_slice`).
+  // Heavy two-hander — wider arc, more reach, more wind-up. Plays the 2H
+  // *spin* clip (2.4s baked) which sweeps the blade in a wide ~270° arc
+  // with a heavy left-side wind-up and a long right-side follow-through —
+  // the simple `attack_2h_slice` cuts the follow-through off too early on
+  // a great-sword. The clip is upper-body-filtered (see UPPER_BODY_BONES)
+  // so the legs keep stepping through whatever locomotion is playing.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
-    swing: 1.00,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep (~2.4s baked)
+    swing: 1.40,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 0.95,   // ~171° — sweeps almost shoulder to shoulder
+    arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
     cooldown: 0.75,
     damageMult: 1.6,
     slash: { color: 0xc8d6ff, height: 1.10 },
@@ -605,18 +609,19 @@ export const WEAPONS = {
     damageMult: 1.2,
     slash: { color: 0xffd28a, height: 1.05 },
   },
-  // 2H battle axe — wide horizontal sweep instead of the old vertical chop.
-  // Heaviest reach + arc in the kit and the slowest cooldown so it hits like
-  // a truck without dominating DPS.
+  // 2H battle axe — same wide spin sweep as the great-sword (2.4s baked)
+  // but with a longer wind-up because the axe head is heavier. The sweep
+  // visibly carries past the impact frame so the strike reads as a heavy
+  // committed swing instead of being cut short by the next swing's fade-out.
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep
-    swing: 1.10,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep
+    swing: 1.55,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 0.95,   // ~171°
+    arc: Math.PI * 1.05,   // ~189°
     cooldown: 0.85,
     damageMult: 1.8,
     slash: { color: 0xffae6a, height: 1.05 },
