@@ -138,6 +138,9 @@ export class BuildController {
   _spotFree(x, z) {
     const eps2 = MIN_STRUCT_SPACING * MIN_STRUCT_SPACING;
     const ck0 = this.world.chunkKeyOf(x, z);
+    const myKind = this.currentRecipe();
+    const myYaw = this.yaw;
+    const cornerStackable = !!RECIPES[myKind]?.cornerStackable;
     // Collect placed-structure descriptors from the centre + 4 cardinal
     // neighbours so a wall on the chunk seam is also seen.
     const seamOffsets = [
@@ -151,7 +154,23 @@ export class BuildController {
       if (!arr) continue;
       for (const d of arr) {
         const dx = d.x - x, dz = d.z - z;
-        if (dx * dx + dz * dz < eps2) return false;
+        if (dx * dx + dz * dz < eps2) {
+          // Same-tile occupant. Default rule: reject (no stacking). For
+          // recipes flagged `cornerStackable` (fences) we make a single
+          // exception: a *perpendicular* twin of the same kind on the
+          // same tile is allowed so players can actually close a fence
+          // ring with a `+` corner. Two fences with the same orientation
+          // axis or any non-fence overlap are still rejected, and
+          // because the only other candidate orientation is also
+          // perpendicular to ours, this implicitly caps the stack at
+          // two pieces per tile.
+          if (cornerStackable && d.kind === myKind) {
+            const dyaw = (((d.yaw || 0) - myYaw) % Math.PI + Math.PI) % Math.PI;
+            const perpendicular = Math.abs(dyaw - Math.PI / 2) < 0.05;
+            if (perpendicular) continue;
+          }
+          return false;
+        }
       }
     }
     // Natural world colliders only — anything tagged `placed: true` was

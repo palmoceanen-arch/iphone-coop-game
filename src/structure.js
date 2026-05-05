@@ -48,6 +48,13 @@ export const RECIPES = {
     hp: 30,
     radius: 0.45,
     height: 1.0,
+    // Fences are linear pieces (long along X, thin along Z), so two
+    // fences can never form a clean L-corner from adjacent cells alone
+    // — there's always a 0.5 m diagonal hole at the corner. Marking the
+    // recipe `cornerStackable` lets the build-mode placement check
+    // accept a *perpendicular* second fence on the same tile, drawing
+    // a `+` cross at the corner so the ring actually closes.
+    cornerStackable: true,
   },
   wall: {
     name: 'Стена',
@@ -118,7 +125,11 @@ export function buildStructureMesh(kind) {
   const g = new THREE.Group();
   if (kind === 'fence') {
     // Two horizontal rails on three vertical posts — reads as a low
-    // wooden fence rather than a continuous wall.
+    // wooden fence rather than a continuous wall. Rails span the full
+    // 1m grid cell so adjacent same-yaw fences butt rail-to-rail with
+    // no visible gap; posts stay slightly inset (±0.40) so two
+    // neighbour fences keep two distinct posts at the seam instead of
+    // z-fighting one merged post.
     const postGeo = new THREE.BoxGeometry(0.10, 1.0, 0.10);
     for (const xOff of [-0.40, 0, 0.40]) {
       const post = new THREE.Mesh(postGeo, MATERIALS.woodDark);
@@ -126,7 +137,7 @@ export function buildStructureMesh(kind) {
       post.castShadow = true; post.receiveShadow = true;
       g.add(post);
     }
-    const railGeo = new THREE.BoxGeometry(0.95, 0.08, 0.06);
+    const railGeo = new THREE.BoxGeometry(1.00, 0.08, 0.06);
     for (const yOff of [0.30, 0.75]) {
       const rail = new THREE.Mesh(railGeo, MATERIALS.wood);
       rail.position.set(0, yOff, 0);
