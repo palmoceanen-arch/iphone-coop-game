@@ -1181,11 +1181,19 @@ export class Game {
         // gathering loop has weight. Damage is the player's current melee
         // damage so combat upgrades carry over.
         const dmg = Math.max(1, Math.round(player.stats?.damage || 10));
+        const wasAlive = target.alive;
         target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
         // Tag killer's weapon so the harvest yield can grant the axe bonus
         // even though the alive→dead transition is processed below in the
         // breakable-style compaction pass.
         target._lastDmgWeapon = player._weaponKind || null;
+        // Per-swing material impact — only on hits that *don't* fell the
+        // resource, so the killing blow gets to play its own treeFall /
+        // rockBreak cue without doubling up.
+        if (wasAlive && target.alive) {
+          if (target.kind === 'tree') this.sound.hitWood?.();
+          else if (target.kind === 'rock') this.sound.hitStone?.();
+        }
       } else if (target.isStructure) {
         // Friendly damage — a player can chop down their own walls if
         // they really want to. Reduced damage so a stray accidental swing
