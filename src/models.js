@@ -76,6 +76,7 @@ const ANIM_MAP = {
   attack_2h_chop:     '2H_Melee_Attack_Chop',
   attack_2h_slice:    '2H_Melee_Attack_Slice',
   attack_2h_spin:     '2H_Melee_Attack_Spin',
+  attack_2h_spinning: '2H_Melee_Attack_Spinning',  // 0.67s clean continuous rotation
   attack_2h_stab:     '2H_Melee_Attack_Stab',
   // dual-wield, ranged, magic
   attack_dual_chop:   'Dualwield_Melee_Attack_Chop',
@@ -498,7 +499,7 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
   if (actions.walk) actions.walk.setLoop(THREE.LoopRepeat);
   for (const k of [
     'attack_1h_chop', 'attack_1h_slice', 'attack_1h_horiz', 'attack_1h_stab',
-    'attack_2h_chop', 'attack_2h_slice', 'attack_2h_spin', 'attack_2h_stab',
+    'attack_2h_chop', 'attack_2h_slice', 'attack_2h_spin', 'attack_2h_spinning', 'attack_2h_stab',
     'attack_dual_chop', 'attack_dual_slice', 'attack_dual_stab',
     'attack_ranged', 'attack_spell', 'attack_spell_long', 'attack_throw',
     'attack_unarmed', 'attack_melee', 'attack_melee_heavy',
@@ -621,16 +622,16 @@ export const WEAPONS = {
     damageMult: 1.0,
     slash: { color: 0xdfeaff, height: 1.05 },
   },
-  // Heavy two-hander — wider arc, more reach, more wind-up. Uses the 2H
-  // *spin* clip with the recovery tail trimmed off (see SLOT_TRIM in
-  // models.js) and played at ~2× baked speed so the small held poses inside
-  // the clip blur into one continuous motion instead of reading as a pause.
+  // Heavy two-hander — wider arc, more reach, more wind-up. Uses
+  // `2H_Melee_Attack_Spinning` (0.67s baked) which is a clean continuous
+  // rotation — no anticipation, no recovery, no held poses inside, just
+  // one full sweep. Plays slightly slower than baked so the strike reads.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
-    swing: 0.75,
+    attackAnim: 'attack_2h_spinning',  // 2H continuous-rotation sweep
+    swing: 0.55,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
@@ -655,15 +656,14 @@ export const WEAPONS = {
     damageMult: 1.2,
     slash: { color: 0xffd28a, height: 1.05 },
   },
-  // 2H battle axe — same trimmed spin sweep as the great-sword but with a
-  // slightly longer swing window because the axe head is heavier; the
-  // follow-through reads as more committed.
+  // 2H battle axe — same continuous-rotation clip as the great-sword but a
+  // slightly longer swing window because the axe head is heavier.
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
-    swing: 0.85,
+    attackAnim: 'attack_2h_spinning',  // 2H continuous-rotation sweep
+    swing: 0.65,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189°
