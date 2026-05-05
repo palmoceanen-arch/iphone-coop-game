@@ -225,24 +225,31 @@ export class Enemy {
       root.scale.setScalar(visual.scale * eliteScale);
       root.position.y = visual.yOffset || 0;
     }
-    if (this._character?.mixer) {
-      this._character.mixer.stopAllAction();
-      this._character.mixer.time = 0;
-    }
+    // Animation reset: force every action off the mixer, then re-arm idle
+    // as the locomotion baseline. Three.js's `action.stop()` deactivates
+    // the action and clears its internal time tracking; `action.reset()`
+    // alone leaves it scheduled, which would let the previous death/hit/
+    // attack pose bleed into the new spawn (most visibly as a stuck
+    // T-pose when no locomotion clip ends up with weight > 0).
     if (this._character?.actions) {
-      for (const a of Object.values(this._character.actions)) {
-        if (a) {
-          a.enabled = true;
-          a.weight = 0;
-          a.time = 0;
-        }
+      const actions = this._character.actions;
+      for (const a of Object.values(actions)) {
+        if (!a) continue;
+        a.stop();
+        a.weight = 0;
       }
-      const idle = this._character.actions.idle;
-      if (idle) {
-        idle.weight = 1;
-        idle.play();
+      if (actions.idle) {
+        actions.idle.reset();
+        actions.idle.weight = 1;
+        actions.idle.enabled = true;
+        actions.idle.play();
       }
     }
+    // Park _animState in an impossible value so the locomotion machine's
+    // `desired !== _animState` check fires unconditionally on the first
+    // post-spawn tick — that way crossFadeTo runs through its normal
+    // path and we never ship an enemy whose action weights all sum to 0.
+    this._animState = null;
     for (const m of this._materials || []) {
       if (m.emissive) {
         if (this.elite) {
