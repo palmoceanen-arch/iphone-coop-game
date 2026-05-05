@@ -340,7 +340,12 @@ export class Effects {
     });
   }
 
-  shakeCamera(amt) { this.shakeMax = Math.max(this.shakeMax, amt); }
+  shakeCamera(_amt) {
+    // TEMP: camera shake disabled while we triage a perceived
+    // rubber-banding feel during combat. Re-enable by restoring the
+    // single-line body below.
+    // this.shakeMax = Math.max(this.shakeMax, _amt);
+  }
   doHitStop(secs) { this.hitStop = Math.max(this.hitStop, secs); }
 
   damageNumber(worldPos, value, color = '#ffe28a') {
