@@ -461,16 +461,32 @@ export class Enemy {
         this.stateTimer = 0;
       }
     } else if (this.state === 'chase') {
-      // Lose aggro when no target in range, or pulled too far from home, or already taking damage repeatedly.
+      // Lose aggro only when the target is genuinely out of reach
+      // (dist > disengageRange) — drop the old leash check that
+      // tethered each enemy to its spawn point. The leash made
+      // mid-chase enemies "pop" back to a slow walk-home as soon
+      // as the player crossed an arbitrary radius from spawn,
+      // which the user reads as "twitches and slows down when far
+      // from spawn". Now they keep chasing as long as they can
+      // see a player; if the player escapes, the enemy stops in
+      // place and re-roots its home to that spot (below) so it
+      // wanders locally instead of trekking all the way back.
       const tooFar = !target || dist > this.disengageRange;
-      const leashed = distFromHome > this.leashRange;
-      if (tooFar || leashed) {
-        this.state = 'return';
+      if (tooFar) {
+        // Skip the legacy 'return' state — re-anchor home to the
+        // enemy's current position and drop straight into 'idle'.
+        // The old code routed through 'return', which marched the
+        // enemy back to its spawn point at idleSpeed (35% of run
+        // speed); that was exactly the "lag" the user saw whenever
+        // they walked far from a spawn cluster and aggroed enemies
+        // had to slowly trudge home afterwards.
+        this.state = 'idle';
         this.stateTimer = 0;
-        // bombers shouldn't fizzle their fuse — but if not yet started, abort and walk home
-        if (this.kind === 'bomber' && !this.fuseStarted) {
-          // ok, just walk home
-        }
+        this.home.x = this.pos.x;
+        this.home.z = this.pos.z;
+        this.wanderTarget.x = this.pos.x;
+        this.wanderTarget.z = this.pos.z;
+        this.wanderTimer = 0;
       }
     }
 
