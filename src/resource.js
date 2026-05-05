@@ -6,21 +6,27 @@
 // swings, ability projectiles, AoE pulses) can hit them and route the kill
 // to a wood / stone drop instead of the enemy-death path.
 //
-// The visual mesh stays parented to the chunk group so chunk unload / reload
-// disposes / regenerates the mesh exactly like before. The Resource entity
-// is just a damage adapter:
-//   - duck-typed enemy-ish fields (pos, radius, alive, hp, maxHP, xp, elite)
-//     so combat code can iterate Resources alongside Enemies / Breakables.
-//   - `isResource = true` is the marker the swing callback / loot path uses
-//     to route to the harvest-drop spawn instead of the enemy XP / gold path.
-//   - on death we hide the mesh (visible=false) so the tree visually pops out
-//     without having to detach it from the chunk group; on chunk reload the
-//     world regenerates the chunk and the tree is back ("natural regrowth").
+// Lifecycle states:
+//   'alive'  — full tree / rock with HP and a registered collider in the
+//              chunk's `colliders` array. Hit detection works, props block
+//              movement.
+//   'stump'  — tree only. After being chopped, the leafy mesh is hidden and
+//              a small procedural stump cylinder takes its place. Collider
+//              is removed so players and enemies can walk through. Stays
+//              for ~10 game days, then regrows back to 'alive'.
+//   'gone'   — rock only (and trees never enter this). The entity is
+//              compacted out of the resources list at the next cleanup
+//              pass; the chunk's mesh is hidden but stays in the chunk
+//              group until the chunk unloads.
 //
-// HP values are deliberately higher than breakables (which fall in 1 hit) so
-// chopping a tree feels like a small commitment rather than a stray hit.
+// On chunk unload the entity is dropped from the resources list (chunk
+// owns its mesh + stump as group children), and on chunk reload the world
+// regenerates a fresh tree / rock — no consumed-set entry needed, even for
+// stumped trees, because regrowth via chunk regen is fast-path.
 
+import * as THREE from 'three';
 import { defaultRandom } from './utils.js';
+import { TOON_GRADIENT } from './shading.js';
 
 // Per-kind hit points. Tuned so a starter axe (~10 dmg) chops a tree in 4-5
 // swings and breaks a rock in 6-8. Higher-damage / late-game weapons should
@@ -45,18 +51,55 @@ const ROCK_RADIUS = 0.80;
 const TREE_BURST_COLOR = 0x6fbf5b;
 const ROCK_BURST_COLOR = 0x8a8f99;
 
+// Regrowth window for chopped trees, expressed in *game* days (the world
+// runs on a 480s day cycle; 10 game days ≈ 80 minutes of real-time play).
+// Stored as a constant here so the design tuning lives next to the entity.
+// Rocks never regrow — once smashed, that ore vein is gone for the chunk's
+// lifetime; chunk reload regenerates the world normally.
+export const TREE_REGROW_GAME_DAYS = 10;
+
+// Cached stump material. The chunk owns the stump mesh, but reusing the
+// same material across thousands of stumps avoids material allocations
+// during long sessions.
+let STUMP_MATERIAL = null;
+let STUMP_GEOMETRY = null;
+function ensureStumpAssets() {
+  if (!STUMP_MATERIAL) {
+    STUMP_MATERIAL = new THREE.MeshToonMaterial({
+      color: 0x6b4226,
+      gradientMap: TOON_GRADIENT,
+    });
+  }
+  if (!STUMP_GEOMETRY) {
+    // Squat cylinder with bevel-ish proportions so it reads as "tree was
+    // chopped here" rather than a tiny barrel. ~0.45 wide, ~0.35 tall is
+    // about half a meter tall — visible at gameplay distance but doesn't
+    // block sight lines.
+    STUMP_GEOMETRY = new THREE.CylinderGeometry(0.45, 0.55, 0.35, 8);
+  }
+}
+
 export class Resource {
   // `mesh` is the existing THREE.Object3D already mounted inside the chunk
   // group by world.js. We keep the reference so we can hide it on death and
   // bob it on hit reactions, but we never re-parent it — the chunk owns its
   // lifecycle. `chunkKey` is used by Game._despawnChunkEntities so this
   // entity is dropped in lockstep with the chunk that owns its mesh.
-  constructor(x, z, kind /* 'tree' | 'rock' */, mesh, chunkKey) {
+  // `collider` and `colliderArray` are the {x,z,r} object inside the chunk's
+  // `colliders` array; we splice it out on death so players / enemies can
+  // walk through stumps and rubble, and re-insert it on regrow.
+  // `group` is the chunk's THREE.Group, used to parent the procedural stump
+  // mesh so it goes away cleanly when the chunk unloads.
+  constructor(x, z, kind /* 'tree' | 'rock' */, mesh, chunkKey, collider, colliderArray, group) {
     this.kind = kind;
     this.pos = { x, z };
     this.alive = true;
+    this.state = 'alive';                 // 'alive' | 'stump' | 'gone'
     this.mesh = mesh || null;
     this.chunkKey = chunkKey || null;
+    this.collider = collider || null;
+    this.colliderArray = colliderArray || null;
+    this.group = group || null;
     this.maxHP = (kind === 'tree') ? TREE_HP : ROCK_HP;
     this.hp = this.maxHP;
     this.radius = (kind === 'tree') ? TREE_RADIUS : ROCK_RADIUS;
@@ -73,6 +116,12 @@ export class Resource {
     } else {
       this._restRotZ = 0;
     }
+    // Stump regrowth state. `regrowT` advances by dt when state==='stump';
+    // `regrowSecs` is computed lazily from the world's day-length the first
+    // time it's needed (the world's `dayLength` value can theoretically
+    // change at runtime in a future debug menu, so we re-read it).
+    this.regrowT = 0;
+    this.stumpMesh = null;
   }
 
   // Standard damageable contract — same shape as Enemy / Breakable. Returns
@@ -93,9 +142,18 @@ export class Resource {
     return true;
   }
 
-  // Per-frame idle / hit-reaction wobble. Trees lean slightly when chopped;
-  // rocks barely register. Hidden meshes (post-death) skip the work.
-  update(dt) {
+  // Per-frame idle / hit-reaction wobble + stump regrow timer.
+  // `dayLength` is `world.dayLength` (in real-time seconds) so the regrow
+  // threshold tracks game-time, not wall-clock.
+  update(dt, dayLength = 480) {
+    if (this.state === 'stump') {
+      this.regrowT += dt;
+      const threshold = TREE_REGROW_GAME_DAYS * dayLength;
+      if (this.regrowT >= threshold) {
+        this._regrow();
+      }
+      return;
+    }
     if (!this.mesh || !this.alive) return;
     if (this._shake <= 0.0001) return;
     this._shakeT += dt * 22;
@@ -109,17 +167,75 @@ export class Resource {
     }
   }
 
-  // Called when a Resource dies (from any source). Hides the mesh in place;
-  // the chunk still owns it, so chunk unload disposes it via the chunk's
-  // group-removal path. On chunk reload the world regenerates the tree /
-  // rock from the deterministic chunk seed → natural regrowth.
-  hideMesh() {
-    if (!this.mesh) return;
-    this.mesh.visible = false;
-    // Reset rotation so a later regen / pool-reuse path doesn't see stale
-    // wobble offsets if the engine ever shares meshes across resources
-    // (it doesn't today, but cheap insurance).
-    this.mesh.rotation.z = this._restRotZ;
+  // Transition from alive → stump (trees) or alive → gone (rocks).
+  // Hides the chunk-owned mesh, removes the collider from the chunk's
+  // collision list (so players walk through), and — for trees — spawns a
+  // small procedural stump that lives inside the chunk's group.
+  enterDeathState() {
+    if (this.mesh) {
+      this.mesh.visible = false;
+      this.mesh.rotation.z = this._restRotZ;
+    }
+    this._removeCollider();
+    if (this.kind === 'tree') {
+      this.state = 'stump';
+      this._spawnStump();
+    } else {
+      this.state = 'gone';
+    }
+  }
+
+  // Spawn the procedural stump mesh and parent it into the chunk's group
+  // so chunk unload disposes it as part of the chunk's normal teardown.
+  _spawnStump() {
+    if (this.stumpMesh || !this.group) return;
+    ensureStumpAssets();
+    const stump = new THREE.Mesh(STUMP_GEOMETRY, STUMP_MATERIAL);
+    stump.castShadow = true;
+    stump.receiveShadow = true;
+    stump.position.set(this.pos.x, 0.18, this.pos.z);
+    // Slight random rotation so a forest of stumps doesn't read as a grid.
+    stump.rotation.y = defaultRandom() * Math.PI * 2;
+    this.group.add(stump);
+    this.stumpMesh = stump;
+  }
+
+  // Splice the chunk-level collider entry. World.colliders is rebuilt every
+  // frame from chunk.colliders, so by next tick the dead resource is no
+  // longer part of any collision query.
+  _removeCollider() {
+    if (!this.colliderArray || !this.collider) return;
+    const idx = this.colliderArray.indexOf(this.collider);
+    if (idx >= 0) this.colliderArray.splice(idx, 1);
+  }
+
+  // Push the original collider object back so movement / pathfinding starts
+  // bouncing off the regrown tree again.
+  _restoreCollider() {
+    if (!this.colliderArray || !this.collider) return;
+    if (this.colliderArray.indexOf(this.collider) >= 0) return;
+    this.colliderArray.push(this.collider);
+  }
+
+  // Stump → alive. Hide stump, show the original tree mesh, restore HP and
+  // re-add the collider. Players / enemies standing on the spot get a small
+  // shove from the next collision-resolve pass; that's fine — a regrowing
+  // tree pushing a wandering enemy aside reads as natural world behaviour.
+  _regrow() {
+    if (this.kind !== 'tree') return;
+    this.state = 'alive';
+    this.alive = true;
+    this.hp = this.maxHP;
+    this.regrowT = 0;
+    if (this.mesh) this.mesh.visible = true;
+    if (this.stumpMesh) {
+      // Drop the stump from the chunk group; we don't pool stump meshes
+      // because each one is a tiny ~16-tri geometry sharing one material.
+      // GC happens when the chunk eventually unloads.
+      if (this.stumpMesh.parent) this.stumpMesh.parent.remove(this.stumpMesh);
+      this.stumpMesh = null;
+    }
+    this._restoreCollider();
   }
 
   burstColor() {
@@ -158,4 +274,3 @@ export function harvestYield(resourceKind, weaponKind, rng = defaultRandom) {
   }
   return null;
 }
-

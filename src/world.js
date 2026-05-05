@@ -560,8 +560,9 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      colliders.push({ x, z, r: 1.0 });
-      resourceSpawns.push({ x, z, kind: 'tree', mesh, chunkKey });
+      const collider = { x, z, r: 1.0 };
+      colliders.push(collider);
+      resourceSpawns.push({ x, z, kind: 'tree', mesh, chunkKey, collider, colliderArray: colliders, group });
     }
 
     // 4a. Cliff clusters — on rocky outcrops (high noise), drop a tight
@@ -603,8 +604,9 @@ export class World {
       mesh.position.set(x, 0, z);
       group.add(mesh);
       if (big) {
-        colliders.push({ x, z, r: 0.9 });
-        resourceSpawns.push({ x, z, kind: 'rock', mesh, chunkKey });
+        const collider = { x, z, r: 0.9 };
+        colliders.push(collider);
+        resourceSpawns.push({ x, z, kind: 'rock', mesh, chunkKey, collider, colliderArray: colliders, group });
       }
     }
 

@@ -585,7 +585,7 @@ export class Game {
     while (this.world.resourceSpawns.length > 0) {
       const s = this.world.resourceSpawns.shift();
       if (!this._isSpawnLive(s)) continue;
-      const r = new Resource(s.x, s.z, s.kind, s.mesh, s.chunkKey);
+      const r = new Resource(s.x, s.z, s.kind, s.mesh, s.chunkKey, s.collider, s.colliderArray, s.group);
       this.resources.push(r);
     }
   }
@@ -781,9 +781,10 @@ export class Game {
     this.effects.ring(r.pos.x, 0.05, r.pos.z, color, 1.0, 0.32);
     if (r.kind === 'tree') this.sound.treeFall?.();
     else this.sound.rockBreak?.();
-    // Hide the chunk-owned mesh; on chunk reload the world regenerates it
-    // (deterministic seed). Acts as natural regrowth.
-    r.hideMesh();
+    // Transition the resource: trees become walk-through stumps that regrow
+    // after ~10 game days; rocks vanish from the resources list and only
+    // come back via natural chunk regeneration.
+    r.enterDeathState();
   }
 
   // Always spawn one chest near origin on first load so players see the
@@ -1163,17 +1164,24 @@ export class Game {
       },
     );
 
-    // Resources: hit-shake idle update, then drain freshly-chopped trees /
-    // smashed rocks. Unlike breakables we deliberately *don't* mark them
-    // consumed — chunk reload regenerates them from the deterministic seed,
-    // which acts as the world's natural regrowth without any per-resource
-    // timers.
-    for (const r of this.resources) r.update(dt);
-    compactInPlace(
-      this.resources,
-      r => r.alive,
-      r => this._onResourceGathered(r, r._lastDmgWeapon || null),
-    );
+    // Resources: idle hit-shake / regrow timer, then catch newly-dead ones
+    // and route to the harvest path. Trees stay in the list as walk-through
+    // stumps (state==='stump') while their regrow timer ticks; rocks
+    // transition to state==='gone' and get compacted out below. Unlike
+    // breakables we don't mark either kind consumed — chunk reload
+    // regenerates them from the deterministic seed (the fast path), and
+    // the stump-regrow timer is the slow in-place path while the chunk
+    // stays loaded.
+    for (const r of this.resources) r.update(dt, this.world.dayLength);
+    for (const r of this.resources) {
+      if (!r.alive && r.state === 'alive') {
+        this._onResourceGathered(r, r._lastDmgWeapon || null);
+      }
+    }
+    // Compact only resources fully gone — trees in 'stump' state stay so
+    // their regrow timer can keep ticking (and so chunk-unload can drop
+    // them in lockstep with the rest of the chunk's entities).
+    compactInPlace(this.resources, r => r.state !== 'gone');
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
