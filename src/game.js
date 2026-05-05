@@ -484,11 +484,23 @@ export class Game {
     this._drainPendingEnemySpawns();
   }
 
+  // Skip spawn descriptors whose chunk is no longer loaded. This guards
+  // against pathological orderings where a chunk was loaded (descriptor
+  // pushed), then unloaded, then drained — without it the entity would
+  // be created tied to a chunk that doesn't exist, leaking the mesh into
+  // the scene because no future _despawnChunkEntities call matches it.
+  _isSpawnLive(s) {
+    const ck = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
+    return this.world.chunks.has(ck);
+  }
+
   _drainPendingEnemySpawns() {
     while (this.world.enemySpawns.length > 0) {
       const s = this.world.enemySpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
       const e = new Enemy(this.world, this.effects, this.sound, s.kind, s.x, s.z, s.level || 1, {
         homeX: s.homeX, homeZ: s.homeZ, elite: !!s.elite,
+        chunkKey: s.chunkKey,
       });
       this.enemies.push(e);
     }
@@ -498,6 +510,7 @@ export class Game {
     if (!this.world.chestSpawns) return;
     while (this.world.chestSpawns.length > 0) {
       const s = this.world.chestSpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
       const c = new Chest(this.scene, s.x, s.z);
       // chunkKey is stamped onto the entity so chunk-unload streaming
       // can despawn it without rebuilding a spatial index.
@@ -510,6 +523,7 @@ export class Game {
     if (!this.world.breakableSpawns) return;
     while (this.world.breakableSpawns.length > 0) {
       const s = this.world.breakableSpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
       const b = new Breakable(this.scene, s.x, s.z, s.kind);
       b.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
       this.breakables.push(b);
@@ -520,6 +534,7 @@ export class Game {
     if (!this.world.altarSpawns) return;
     while (this.world.altarSpawns.length > 0) {
       const s = this.world.altarSpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
       const a = new Altar(this.scene, s.x, s.z);
       a.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
       this.altars.push(a);
@@ -717,11 +732,18 @@ export class Game {
       positions.push({ x: p.pos.x, z: p.pos.z });
     }
     this.world.processChunkQueue();
-    this.world.refreshActiveChunks(positions);
+    // Drain before refreshActiveChunks: a chunk that was just sync-loaded
+    // (or just async-drained from the queue) has its spawn descriptors
+    // sitting in world.{enemy,chest,breakable,altar}Spawns but no Entity
+    // object yet. If refresh unloaded that chunk first, _despawnChunkEntities
+    // would walk this.{enemies,chests,...} and find nothing to remove —
+    // and then the drain below would create entities tied to a now-unloaded
+    // chunk, leaking meshes into the scene forever.
     this._drainPendingEnemySpawns();
     this._drainChestSpawns();
     this._drainBreakableSpawns();
     this._drainAltarSpawns();
+    this.world.refreshActiveChunks(positions);
   }
 
   // Lazy-build and update a small billboarded HP-style bar above a downed
