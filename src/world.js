@@ -559,15 +559,18 @@ export class World {
     // hash (worldSeed, cx, cz) with a salt so altar locations are stable
     // for a given seed (same seed → same altars) and independent from
     // the value-noise field (which is too smooth at chunk scale to give
-    // a reliable spawn distribution near the origin). ~10% of non-origin
-    // chunks roll an altar candidate (≈1 altar per 10 chunks ≈ 4-5
-    // visible across a 7×7 area) so they read as a regular but not
-    // ubiquitous landmark. The inner loop then makes sure the exact spot
-    // is clear of water/colliders/chests.
+    // a reliable spawn distribution near the origin). 22% of non-origin
+    // chunks roll an altar candidate (≈1 per 4-5 chunks ≈ 10 altars
+    // visible in the 7×7 active area) so they're a reliable landmark
+    // anywhere on the map, not just a lucky spawn near origin. The
+    // inner loop then makes sure the exact spot is clear of
+    // water/colliders/chests; we try 60 candidate positions before
+    // giving up so dense chunks (lots of trees / breakables) still
+    // place an altar rather than dropping it silently.
     if (!isOrigin) {
       const altarRoll = chunkSeed(this.seed ^ 0xA17A8B, cx, cz) % 100;
-      if (altarRoll < 10) {
-        for (let i = 0; i < 24; i++) {
+      if (altarRoll < 22) {
+        for (let i = 0; i < 60; i++) {
           const x = minX + r.range(4, CHUNK_SIZE - 4);
           const z = minZ + r.range(4, CHUNK_SIZE - 4);
           if (isOnWater(x, z)) continue;

@@ -468,14 +468,17 @@ export class Player {
           // just passes its full-circle `arc` (2π) so the strip sweeps the
           // whole way around. Parented to the character mesh so the strip
           // tracks the player if they keep moving / rotating during the
-          // followthrough.
+          // followthrough. The super stretches the trail duration ~4× so
+          // the rotating energy reads as a heavy, sustained sweep instead
+          // of zipping past in a quarter of a second.
+          const tapDur = Math.min(as.swing * (1 - fxAt) * 0.55, 0.28);
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
               parent: this.mesh,
               range: as.range,
               arc: as.arc,
-              duration: Math.min(as.swing * (1 - fxAt) * 0.55, 0.28),
+              duration: as.isSuper ? tapDur * 4 : tapDur,
               color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
             }
