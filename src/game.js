@@ -455,6 +455,11 @@ export class Game {
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
       p.vel = { x: 0, z: 0 }; p.knockback = { x: 0, z: 0 };
+      // Reset render-interp snapshots so respawn doesn't lerp from
+      // wherever they last died.
+      if (p.smoothPos) { p.smoothPos.x = p.pos.x; p.smoothPos.z = p.pos.z; }
+      p._renderPrev = { x: p.pos.x, z: p.pos.z };
+      p._renderPos = { x: p.pos.x, z: p.pos.z };
       // Wipe gold + found items + ability + item-buff state on restart.
       // Shop-purchased upgrades persist across deaths (`upgradeLevels`,
       // `stats`, `maxHP` are intentionally NOT touched here) so the
@@ -876,6 +881,16 @@ export class Game {
       this._fixedAccum += dt0 * consumeRate;
       let steps = 0;
       while (this._fixedAccum >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+        // Snapshot every renderable's pre-step position before the
+        // simulation tick so render() can lerp between prev (this
+        // snapshot) and curr (post-step pos) using the leftover
+        // accumulator as an alpha. This is the canonical Glenn Fiedler
+        // 'fix your timestep' approach — without it, on monitors whose
+        // refresh isn't a clean integer multiple of 60Hz the render
+        // freezes for 1 RAF and then double-steps on the next, which
+        // shows up as character-only "rubber-banding" because moving
+        // entities are the only ones with a delta to skip.
+        this._captureRenderPrev();
         this.update(FIXED_DT, dt0);
         this._fixedAccum -= FIXED_DT;
         steps += 1;
@@ -1103,6 +1118,10 @@ export class Game {
         dead.pos.x = partner.pos.x + 0.6;
         dead.pos.z = partner.pos.z + 0.6;
         dead.smoothPos = { x: dead.pos.x, z: dead.pos.z };
+        // Reset render-interp snapshot so the revived player doesn't
+        // appear to slide from their pre-death position to the partner.
+        dead._renderPrev = { x: dead.pos.x, z: dead.pos.z };
+        dead._renderPos = { x: dead.pos.x, z: dead.pos.z };
         dead.knockback = { x: 0, z: 0 };
         this.effects.ring(dead.pos.x, 0.2, dead.pos.z, 0x7aff8a, 2.5, 0.6);
         this.effects.toast(`P${dead.index + 1} revived!`, '#7aff8a');
@@ -1225,8 +1244,73 @@ export class Game {
     el.querySelector('.keyhint').textContent = key;
   }
 
+  // Snapshot pre-step positions so render() can lerp between this and the
+  // post-step pos using `_fixedAccum / FIXED_DT` as alpha. Lazy-initialises
+  // _renderPrev on first capture (and after pool reuse, where the
+  // constructor zeroes it) so freshly-spawned entities don't appear to
+  // slide from a stale handle's last position.
+  _captureRenderPrev() {
+    for (const p of this.players) {
+      if (!p || !p.alive) continue;
+      if (!p._renderPrev) p._renderPrev = { x: p.pos.x, z: p.pos.z };
+      else { p._renderPrev.x = p.pos.x; p._renderPrev.z = p.pos.z; }
+    }
+    for (const e of this.enemies) {
+      if (!e || !e.alive) continue;
+      if (!e._renderPrev) e._renderPrev = { x: e.pos.x, z: e.pos.z };
+      else { e._renderPrev.x = e.pos.x; e._renderPrev.z = e.pos.z; }
+    }
+    for (const pr of this.projectiles || []) {
+      if (!pr) continue;
+      if (!pr._renderPrev) pr._renderPrev = { x: pr.pos.x, z: pr.pos.z };
+      else { pr._renderPrev.x = pr.pos.x; pr._renderPrev.z = pr.pos.z; }
+    }
+  }
+
   render() {
-    this.followCam.update(0.016, this.players[0], this.players[1], this.effects.shake);
+    // Render-side interpolation. alpha is how far we are between the
+    // last completed sim step and the next pending one — clamped to
+    // [0,1] in case a partial step was queued.
+    const alpha = Math.max(0, Math.min(1, this._fixedAccum / FIXED_DT));
+    for (const p of this.players) {
+      if (!p || !p.alive || !p.mesh || !p._renderPrev) continue;
+      const ix = p._renderPrev.x + (p.pos.x - p._renderPrev.x) * alpha;
+      const iz = p._renderPrev.z + (p.pos.z - p._renderPrev.z) * alpha;
+      // Track the resolved render position so the camera and any
+      // entity-following effects can read it without recomputing the
+      // lerp. Mesh y is left untouched — locomotion bobs are sim-driven
+      // and look fine without sub-step interpolation.
+      p._renderPos = p._renderPos || { x: 0, z: 0 };
+      p._renderPos.x = ix; p._renderPos.z = iz;
+      p.mesh.position.set(ix, p.mesh.position.y, iz);
+    }
+    for (const e of this.enemies) {
+      if (!e || !e.alive || !e.mesh || !e._renderPrev) continue;
+      const ix = e._renderPrev.x + (e.pos.x - e._renderPrev.x) * alpha;
+      const iz = e._renderPrev.z + (e.pos.z - e._renderPrev.z) * alpha;
+      e.mesh.position.set(ix, e.mesh.position.y, iz);
+    }
+    for (const pr of this.projectiles || []) {
+      if (!pr || !pr.mesh || !pr._renderPrev) continue;
+      const ix = pr._renderPrev.x + (pr.pos.x - pr._renderPrev.x) * alpha;
+      const iz = pr._renderPrev.z + (pr.pos.z - pr._renderPrev.z) * alpha;
+      pr.mesh.position.set(ix, pr.mesh.position.y, iz);
+    }
+    // Camera follows the interpolated player positions. Without this
+    // the camera step-snaps to sim pos every fixed step while the
+    // meshes glide smoothly, which makes the world appear to "swim"
+    // around the player on burst frames.
+    const camP1 = this._cameraTarget(this.players[0]);
+    const camP2 = this._cameraTarget(this.players[1]);
+    this.followCam.update(0.016, camP1, camP2, this.effects.shake);
     this.renderer.render(this.scene, this.followCam.cam);
+  }
+
+  _cameraTarget(p) {
+    if (!p) return { alive: false, pos: { x: 0, z: 0 } };
+    return {
+      alive: p.alive,
+      pos: p._renderPos || p.pos,
+    };
   }
 }
