@@ -32,8 +32,9 @@ const SAMPLES = {
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
   // Heavy plank-snap impacts (Kenney impactWood_heavy) — meatier
-  // splintering crack than the previous medium variants, layered with
-  // tree_creak in `treeFall()` for the full "timber!" snap.
+  // splintering crack than the previous medium variants. `treeFall()`
+  // plays a slightly louder variant of these so a felled tree reads as a
+  // pure splinter-crack with no creaky preamble.
   woodBreak:    ['wood_break_a.ogg', 'wood_break_b.ogg', 'wood_break_c.ogg'],
   potBreak:     ['pot_break_a.ogg', 'pot_break_b.ogg'],
   // Per-swing impact when a melee weapon connects with a tree (axe-on-
@@ -328,11 +329,12 @@ export class Sound {
   // don't all sound like the rock just died. Same loudness tier as
   // hitWood so trees and rocks share a "gathering connect" volume.
   hitStone(opts)   { this._play('hitStone', { gain: 1.0, ...(opts || {}) }); }
-  // Tree felled: layer a creak preamble onto the wood-splinter break for
-  // a one-shot "timber!" cue. Different enough from breakable crate / pot
-  // that the gathering loop has its own audio identity even when a tree
-  // and a crate die on the same frame.
-  treeFall(opts)   { this._play('treeCreak', opts); this._play('woodBreak', { ...(opts || {}), gain: 0.85 }); }
+  // Tree felled: just the wood-splinter crack at a slightly hotter gain
+  // (1.0 vs the default crate-break ~1.0 too — the rate-limit + voice cap
+  // already keep stacked fells from smearing). The old version layered
+  // tree_creak as a slow creaky preamble, but on a fast resource-gather
+  // loop that creak read as drag rather than weight, so it's gone.
+  treeFall(opts)   { this._play('woodBreak', { gain: 1.0, ...(opts || {}) }); }
   // Rock crumbling on death — chunkier than the glassy potBreak. Procedural
   // because no Kenney sample reads cleanly as "boulder shatter"; the
   // filtered-noise + low square fundamental combo lands on the right side
