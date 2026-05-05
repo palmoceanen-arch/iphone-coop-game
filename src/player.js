@@ -463,19 +463,12 @@ export class Player {
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
-        if (as.isSuper) {
-          // Spin super: a single expanding ring of energy on the ground
-          // sells the AOE shape better than the per-blade slash strip.
-          this.effects.ring(
-            this.smoothPos.x, 0.05, this.smoothPos.z,
-            as.ringColor ?? as.slash?.color ?? 0xffffff,
-            as.range,
-            0.45,
-          );
-        } else if (as.slash) {
-          // Standard tap: parent the slash mesh to the character group so
-          // the strip tracks the player if they keep moving / rotating
-          // during the followthrough.
+        if (as.slash) {
+          // Same slashArc strip for both tap and the spin super — the super
+          // just passes its full-circle `arc` (2π) so the strip sweeps the
+          // whole way around. Parented to the character mesh so the strip
+          // tracks the player if they keep moving / rotating during the
+          // followthrough.
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
@@ -483,7 +476,7 @@ export class Player {
               range: as.range,
               arc: as.arc,
               duration: Math.min(as.swing * (1 - fxAt) * 0.55, 0.28),
-              color: as.slash.color,
+              color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
             }
           );
