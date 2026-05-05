@@ -536,20 +536,28 @@ function _findAndBuildSkinMask(scene) {
   return _buildSkinMaskFromImage(bodyTexture.image);
 }
 
+// Fraction (0..1) of the atlas's contribution to the final tinted body /
+// helmet colour. 0.0 = pure tint (flat, melts into adjacent pieces),
+// 1.0 = legacy `tint × atlas` (steel-grey atlas muddies user colours).
+// 0.35 keeps the picked colour dominant while leaving enough atlas
+// shadow/detail to read as a distinct armoured piece. Body and helmet
+// have separate constants so they can be retuned independently if one
+// reads heavier than the other under the toon gradient.
+const BODY_ATLAS_MIX = 0.35;
+const HELMET_ATLAS_MIX = 0.35;
+
 // Inject a fragment shader hook into a MeshToonMaterial so that the
 // body splits cleanly into two regions:
-//   - skin pixels (face, hands)            → keep the natural atlas RGB
-//   - everything else (armour, cloth, etc) → use `material.color` directly
-//
-// The "directly" part is important: we do NOT multiply tint × atlas for
-// non-skin pixels, because the atlas ships with desaturated grey armour
-// pixels — multiplying by white gives grey, multiplying by red gives
-// muddy maroon. Replacing the atlas value with the tint instead means
-// white = pure white armour, red = pure red armour, etc. The toon
-// gradient map still applies on top so the cel-shaded lit/shadow bands
-// come through.
+//   - skin pixels (face, hands) → keep the natural atlas RGB
+//   - everything else (armour, cloth, etc) → tint × (1 - mix) + tint × atlas × mix,
+//     i.e. mostly the user-picked tint with a small atlas modulation
+//     contributing shadow/detail. A pure-tint path here made the
+//     armour read as flat plastic; full `tint × atlas` muddied it.
+// Toon gradient still applies on top, so cel-shaded lit/shadow bands
+// come through unchanged.
 function _attachSkinAwareTintShader(material, skinMaskTex) {
   if (!material || !skinMaskTex) return;
+  const mix = BODY_ATLAS_MIX.toFixed(3);
   material.onBeforeCompile = (shader) => {
     shader.uniforms.skinMaskTexture = { value: skinMaskTex };
     shader.fragmentShader = shader.fragmentShader
@@ -562,31 +570,25 @@ function _attachSkinAwareTintShader(material, skinMaskTex) {
         `#ifdef USE_MAP
         vec4 sampledDiffuseColor = texture2D( map, vMapUv );
         // \`diffuseColor.rgb\` enters this chunk equal to uniform
-        // "diffuse" = material.color (the user-picked tint). We blend
-        // toward sampledDiffuseColor wherever the skin mask is hot,
-        // so skin pixels read through at their natural atlas colour
-        // while clothing/armour pixels stay at the pure tint colour
-        // (no atlas multiplication → no muddiness).
+        // "diffuse" = material.color (the user-picked tint).
+        //   armourColor: tint scaled by mix(1, atlas, BODY_ATLAS_MIX)
+        //                — picked colour dominates, atlas adds detail.
+        //   skinColor:   the natural atlas RGB, no tint multiplication
+        //                so face / hands stay at their warm-toned source.
+        vec3 armourColor = diffuseColor.rgb * mix(vec3(1.0), sampledDiffuseColor.rgb, ${mix});
         float skinAmount = texture2D( skinMaskTexture, vMapUv ).r;
-        diffuseColor.rgb = mix( diffuseColor.rgb, sampledDiffuseColor.rgb, skinAmount );
+        diffuseColor.rgb = mix( armourColor, sampledDiffuseColor.rgb, skinAmount );
         diffuseColor.a *= sampledDiffuseColor.a;
         #endif`,
       );
   };
   // Share one compiled program across every clone — same uniforms layout,
   // only `material.color` and the per-instance mask binding differ. Bump
-  // the cache key when the shader logic itself changes so any cached v1
-  // programs from previous sessions don't leak in.
-  material.customProgramCacheKey = () => 'tinted-skin-aware-v2';
+  // the cache key when the shader logic itself changes so cached programs
+  // from previous sessions don't leak in.
+  material.customProgramCacheKey = () => `tinted-skin-aware-v3-${mix}`;
   material.needsUpdate = true;
 }
-
-// Fraction (0..1) of the atlas's contribution to the final helmet colour.
-// 0.0 = pure tint (no atlas, helmet looks flat / melts into body).
-// 1.0 = legacy `tint × atlas` (steel-grey atlas muddies user colours).
-// 0.35 keeps the picked colour dominant while leaving enough atlas
-// shadow/detail to read as a distinct armoured piece on top of the body.
-const HELMET_ATLAS_MIX = 0.35;
 
 // Inject a fragment shader hook into a MeshToonMaterial so the helmet
 // keeps its atlas detail but only at `HELMET_ATLAS_MIX` strength. The
