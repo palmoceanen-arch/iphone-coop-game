@@ -557,6 +557,10 @@ export class Enemy {
               this.alive = false;
               this._releaseMesh();
               this.killedBy = 'self';
+              // Bail out of the rest of update() — _releaseMesh nulled
+              // this.mesh, so the position-set / yaw / visual-effect tail
+              // of the function would otherwise dereference null.
+              return;
             }
           }
           break;
