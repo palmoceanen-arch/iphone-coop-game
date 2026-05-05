@@ -72,11 +72,11 @@ function ensureStumpAssets() {
   }
   if (!STUMP_GEOMETRY) {
     // Tiny pentagonal stub left where the tree used to stand. Original
-    // chunky 8-sided cylinder was scaled down 4× and dropped to 5 radial
+    // chunky 8-sided cylinder was scaled down ~3.3× and dropped to 5 radial
     // segments — reads as a low-poly chopped-flush remnant rather than a
     // squat barrel. The 5-sided silhouette also visually distinguishes
     // stumps from rocks / pebbles which are 8-sided.
-    STUMP_GEOMETRY = new THREE.CylinderGeometry(0.1125, 0.1375, 0.0875, 5);
+    STUMP_GEOMETRY = new THREE.CylinderGeometry(0.135, 0.165, 0.105, 5);
   }
 }
 
@@ -195,8 +195,9 @@ export class Resource {
     stump.castShadow = true;
     stump.receiveShadow = true;
     // Cylinder is centred on its midpoint, so y = half-height to sit flush
-    // on the ground. Matches the new 4×-smaller geometry (height ≈ 0.0875).
-    stump.position.set(this.pos.x, 0.045, this.pos.z);
+    // on the ground. Matches the small pentagonal stump geometry above
+    // (height ≈ 0.105 → y = 0.0525).
+    stump.position.set(this.pos.x, 0.0525, this.pos.z);
     // Slight random rotation so a forest of stumps doesn't read as a grid.
     stump.rotation.y = defaultRandom() * Math.PI * 2;
     this.group.add(stump);
