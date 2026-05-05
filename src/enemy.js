@@ -330,11 +330,12 @@ export class Enemy {
   die() {
     if (!this.alive) return;
     this.alive = false;
-    // Kills are the only place we still pay the freeze tax — a short
-    // 0.10s pause makes the moment land without choking high-DPS play
-    // (it's the natural rhythm break between targets, not added
-    // friction inside a single fight).
-    this.effects.doHitStop(0.10);
+    // Kills get the lightest possible micro-pause — barely perceptible
+    // (~1.5 sim frames of slow-mo) so high-DPS / multi-kill swings
+    // don't feel sluggish but the moment still registers as an
+    // "impact". The rising-edge guard in Effects.doHitStop prevents a
+    // 3-kill swing from triggering this three times in a row.
+    this.effects.doHitStop(0.025);
     this.effects.burst(this.pos.x, 0.7, this.pos.z, this._dieColor(), 18, 7, 0.6);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xffffff, 1.4, 0.35);
     this.sound.enemyDie();
@@ -350,7 +351,7 @@ export class Enemy {
     this.effects.flashSphere(this.pos.x, 0.8, this.pos.z, 0xff8a30, this.boomRadius, 0.3);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xff8a30, this.boomRadius, 0.4);
     this.effects.shakeCamera(0.5);
-    this.effects.doHitStop(0.06);
+    this.effects.doHitStop(0.02);
     this.sound.bomb();
     if (playersForDamage) {
       for (const p of playersForDamage) {

@@ -275,9 +275,10 @@ export class Player {
   die() {
     this.alive = false;
     this.invuln = 999;
-    // Player death is the heaviest event in the loop — a chunky freeze
-    // sells the moment without messing with the regular hit feel.
-    this.effects.doHitStop(0.12);
+    // Player death keeps the longest of the hit-stops, but trimmed
+    // hard from the older 0.12s — anything noticeably longer feels
+    // like the game stuttered rather than punctuated the death.
+    this.effects.doHitStop(0.04);
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xff8080, 24, 6, 0.7);
     this.sound.death();
     const death = this._character?.actions?.death;

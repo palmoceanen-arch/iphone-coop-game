@@ -346,7 +346,16 @@ export class Effects {
     // single-line body below.
     // this.shakeMax = Math.max(this.shakeMax, _amt);
   }
-  doHitStop(secs) { this.hitStop = Math.max(this.hitStop, secs); }
+  doHitStop(secs) {
+    // Rising-edge only: if a hit-stop is already counting down, the
+    // new request is dropped on the floor. Without this, a swing that
+    // lands 3 kills in the same tick (or staggered across the active
+    // window) would re-trigger or extend the freeze, which reads as
+    // sluggish chain-combat. One swing should produce one micro-pause
+    // regardless of how many enemies it kills.
+    if (this.hitStop > 0) return;
+    this.hitStop = secs;
+  }
 
   damageNumber(worldPos, value, color = '#ffe28a') {
     const el = document.createElement('div');
