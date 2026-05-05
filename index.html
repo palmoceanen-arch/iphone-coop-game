@@ -74,6 +74,20 @@
       #topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; }
       #topbar .sep { width: 1px; height: 14px; background: rgba(255,255,255,0.18); }
       #topbar .glyph { vertical-align: -2px; }
+      .buildbar {
+        position: absolute; bottom: 96px;
+        background: rgba(8,12,18,0.7); border: 1px solid rgba(255,255,255,0.12);
+        padding: 7px 12px; border-radius: 10px; font-size: 12px;
+        display: none; gap: 12px; align-items: center; max-width: 320px;
+        pointer-events: none;
+      }
+      .buildbar.active { display: flex; }
+      .buildbar.bad { border-color: rgba(255,91,91,0.55); background: rgba(34,8,8,0.7); }
+      .buildbar .recipe { font-weight: 700; letter-spacing: 0.02em; }
+      .buildbar .cost { opacity: 0.8; }
+      .buildbar .hint { opacity: 0.55; font-size: 11px; }
+      #buildbar1 { left: 14px; }
+      #buildbar2 { right: 14px; }
       #leash {
         position: absolute; inset: 0; pointer-events: none;
         background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%);
@@ -415,6 +429,16 @@
             <span class="ab-name">пусто</span>
             <span class="keyhint">H</span>
           </div>
+        </div>
+        <div class="buildbar" id="buildbar1">
+          <span class="recipe" id="bb1-name">—</span>
+          <span class="cost" id="bb1-cost"></span>
+          <span class="hint">F:поставить · R:отмена · E:поворот</span>
+        </div>
+        <div class="buildbar" id="buildbar2">
+          <span class="recipe" id="bb2-name">—</span>
+          <span class="cost" id="bb2-cost"></span>
+          <span class="hint">L:поставить · K:отмена · J:поворот</span>
         </div>
         <div id="toast"></div>
         <div id="shop">
