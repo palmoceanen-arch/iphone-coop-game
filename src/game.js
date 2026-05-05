@@ -25,7 +25,7 @@ import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
-import { Structure, RECIPES, buildStructureMesh } from './structure.js';
+import { Structure, RECIPES, buildStructureMesh, buildFenceMesh } from './structure.js';
 import { BuildController } from './buildMode.js';
 import { Crop, CROP_ORDER, cropLabel, cropColor } from './farming.js';
 import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
@@ -680,6 +680,79 @@ export class Game {
         if (s.farm) crop.loadFromDescriptor(s.farm);
         struct.crop = crop;
         this.crops.push(crop);
+      }
+      // Fences auto-connect to neighbour fences (Minecraft-style).
+      // Rebuild the new fence's mesh with the right N/S/E/W arms, then
+      // refresh any already-spawned neighbour fence so the connection
+      // is mutual. Neighbours that haven't drained yet will pick up the
+      // connection naturally on their own first build below.
+      if (s.kind === 'fence') {
+        this._rebuildFenceMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      }
+    }
+  }
+
+  // True if the persisted descriptor map records a fence at world (x,z).
+  // Cheap O(n) scan of the chunk's descriptor list — typical chunk has
+  // <20 structures so this is fine inside a 4-neighbour loop.
+  _isFenceAt(x, z) {
+    const ck = this.world.chunkKeyOf(x, z);
+    const arr = this.world.placedStructures.get(ck);
+    if (!arr) return false;
+    const eps = 0.15;
+    for (const d of arr) {
+      if (d.kind === 'fence'
+          && Math.abs(d.x - x) < eps
+          && Math.abs(d.z - z) < eps) return true;
+    }
+    return false;
+  }
+
+  // Compute the {N,S,E,W} connection mask for a fence at world (x,z) by
+  // probing the four cardinal neighbour cells. North is -Z (matches the
+  // facing-vector convention used elsewhere in the codebase).
+  _fenceConnectionsAt(x, z) {
+    return {
+      N: this._isFenceAt(x, z - 1),
+      S: this._isFenceAt(x, z + 1),
+      E: this._isFenceAt(x + 1, z),
+      W: this._isFenceAt(x - 1, z),
+    };
+  }
+
+  // Rebuild a single fence's mesh with the current neighbour connection
+  // mask. Detaches the old group from the chunk, builds a fresh one,
+  // re-parents at the same world position. Yaw stays at 0 — the fence
+  // mesh is 4-way symmetric so the descriptor's yaw is meaningless.
+  _rebuildFenceMesh(struct) {
+    if (!struct || struct.kind !== 'fence' || !struct.alive || !struct.group) return;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildFenceMesh(conns);
+    next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
+  // After a fence at (x,z) is placed or destroyed, refresh the meshes of
+  // the four cardinal neighbour fences so their connection arms reflect
+  // the new state. Walks `this.structures` (live entities only); any
+  // descriptor-only fence still queued for spawn will pick up the right
+  // connections when it drains.
+  _rebuildFenceNeighborsOf(x, z) {
+    const eps = 0.15;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      for (const s of this.structures) {
+        if (!s.alive || s.kind !== 'fence') continue;
+        if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
+          this._rebuildFenceMesh(s);
+          break;
+        }
       }
     }
   }
@@ -1517,6 +1590,14 @@ export class Game {
         s.removeCollider();
         s.destroyMesh();
         if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
+        // Auto-disconnect: if a fence dies, its 4-cardinal fence
+        // neighbours need their connection arms refreshed so they no
+        // longer point at the (now empty) cell. forgetStructure above
+        // has already removed this fence's descriptor, so the rebuild
+        // sees the correct post-death state.
+        if (s.kind === 'fence') {
+          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
+        }
         // Drop any attached Crop too — the planter mesh is gone so no
         // visible mesh remains, but the Crop entry would otherwise linger
         // in this.crops and try to find a deleted descriptor each tick.

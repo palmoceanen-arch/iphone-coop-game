@@ -48,13 +48,6 @@ export const RECIPES = {
     hp: 30,
     radius: 0.45,
     height: 1.0,
-    // Fences are linear pieces (long along X, thin along Z), so two
-    // fences can never form a clean L-corner from adjacent cells alone
-    // — there's always a 0.5 m diagonal hole at the corner. Marking the
-    // recipe `cornerStackable` lets the build-mode placement check
-    // accept a *perpendicular* second fence on the same tile, drawing
-    // a `+` cross at the corner so the ring actually closes.
-    cornerStackable: true,
   },
   wall: {
     name: 'Стена',
@@ -114,6 +107,77 @@ export function spendCost(resources, recipeKind) {
   }
 }
 
+// Build a Minecraft-style fence mesh: a single centre post plus up to
+// four short horizontal rail "arms" pointing N/S/E/W toward neighbouring
+// fence cells. `connections` is `{ N, S, E, W }` booleans; missing keys
+// default to false. Each arm is two stacked rails that meet flush with
+// the cell boundary (x=±0.5 / z=±0.5), so two adjacent fences' arms
+// touch at the seam without any visible gap. Without arms (an isolated
+// fence) the silhouette is just the post — cleaner than the old plank
+// strip and identical regardless of placement yaw.
+export function buildFenceMesh(connections) {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const c = connections || { N: false, S: false, E: false, W: false };
+  // Centre post — chunkier than the old plank's posts (0.20×0.20 vs
+  // 0.10×0.10) so it actually reads as a fence post rather than a
+  // splinter. Sits in the cell centre, height 1.0m to match the recipe.
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(0.20, 1.0, 0.20),
+    MATERIALS.woodDark,
+  );
+  post.position.set(0, 0.50, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  // Arm geometry — extends from the post's outer face (x=±0.10) to the
+  // cell boundary (x=±0.5), so two arms from neighbouring fences meet
+  // flush at the seam without overlap or z-fighting.
+  const ARM_LEN = 0.40;
+  const ARM_OFFSET = 0.30;        // centre of arm
+  const RAIL_THICK = 0.06;
+  const RAIL_HEIGHT = 0.08;
+  const RAIL_HEIGHTS = [0.30, 0.75];
+  for (const yOff of RAIL_HEIGHTS) {
+    if (c.E) {
+      const r = new THREE.Mesh(
+        new THREE.BoxGeometry(ARM_LEN, RAIL_HEIGHT, RAIL_THICK),
+        MATERIALS.wood,
+      );
+      r.position.set(+ARM_OFFSET, yOff, 0);
+      r.castShadow = true; r.receiveShadow = true;
+      g.add(r);
+    }
+    if (c.W) {
+      const r = new THREE.Mesh(
+        new THREE.BoxGeometry(ARM_LEN, RAIL_HEIGHT, RAIL_THICK),
+        MATERIALS.wood,
+      );
+      r.position.set(-ARM_OFFSET, yOff, 0);
+      r.castShadow = true; r.receiveShadow = true;
+      g.add(r);
+    }
+    if (c.N) {
+      const r = new THREE.Mesh(
+        new THREE.BoxGeometry(RAIL_THICK, RAIL_HEIGHT, ARM_LEN),
+        MATERIALS.wood,
+      );
+      r.position.set(0, yOff, -ARM_OFFSET);
+      r.castShadow = true; r.receiveShadow = true;
+      g.add(r);
+    }
+    if (c.S) {
+      const r = new THREE.Mesh(
+        new THREE.BoxGeometry(RAIL_THICK, RAIL_HEIGHT, ARM_LEN),
+        MATERIALS.wood,
+      );
+      r.position.set(0, yOff, +ARM_OFFSET);
+      r.castShadow = true; r.receiveShadow = true;
+      g.add(r);
+    }
+  }
+  return g;
+}
+
 // Build a procedural mesh for one structure. Geometry is per-call so
 // each instance gets its own (small) buffers — this is fine for the
 // expected handful-of-structures-per-chunk usage. Materials are shared.
@@ -124,27 +188,12 @@ export function buildStructureMesh(kind) {
   ensureMaterials();
   const g = new THREE.Group();
   if (kind === 'fence') {
-    // Two horizontal rails on three vertical posts — reads as a low
-    // wooden fence rather than a continuous wall. Rails span the full
-    // 1m grid cell so adjacent same-yaw fences butt rail-to-rail with
-    // no visible gap; posts stay slightly inset (±0.40) so two
-    // neighbour fences keep two distinct posts at the seam instead of
-    // z-fighting one merged post.
-    const postGeo = new THREE.BoxGeometry(0.10, 1.0, 0.10);
-    for (const xOff of [-0.40, 0, 0.40]) {
-      const post = new THREE.Mesh(postGeo, MATERIALS.woodDark);
-      post.position.set(xOff, 0.50, 0);
-      post.castShadow = true; post.receiveShadow = true;
-      g.add(post);
-    }
-    const railGeo = new THREE.BoxGeometry(1.00, 0.08, 0.06);
-    for (const yOff of [0.30, 0.75]) {
-      const rail = new THREE.Mesh(railGeo, MATERIALS.wood);
-      rail.position.set(0, yOff, 0);
-      rail.castShadow = true; rail.receiveShadow = true;
-      g.add(rail);
-    }
-    return g;
+    // Default fence preview: just the centre post (no connector arms).
+    // Live fences in the world get arms attached by `buildFenceMesh()`
+    // below, called from game.js once neighbour fences are known. The
+    // ghost preview keeps this minimal silhouette so the player can
+    // see where the post will land before committing.
+    return buildFenceMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'wall') {
     // Solid stone block that fills its 1m grid cell. Slightly inset so
