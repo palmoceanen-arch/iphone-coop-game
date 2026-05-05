@@ -109,6 +109,17 @@ export class Sound {
   }
   pickupGold() { this.tone({ freq: 980, type: 'square', dur: 0.06, gain: 0.16, slide: 320 }); this.tone({ freq: 1320, type: 'square', dur: 0.08, gain: 0.14, slide: 200 }); }
   pickupFood() { this.tone({ freq: 540, type: 'triangle', dur: 0.1, gain: 0.18, slide: 220 }); this.tone({ freq: 720, type: 'sine', dur: 0.12, gain: 0.2, slide: 200 }); }
+  // Wood pickup: a soft thunk + woody fundamental, distinct from gold's
+  // bright two-tone chime. Lower fundamental + brief noise burst so the
+  // brain reads it as "something physical and chunky", not "coin".
+  pickupWood() { this.noise({ dur: 0.06, gain: 0.18, lp: 1100 }); this.tone({ freq: 220, type: 'triangle', dur: 0.09, gain: 0.18, slide: -40 }); }
+  // Stone pickup: a sharper clack — louder filtered noise, no tonal
+  // component, so it doesn't confuse with gold or wood.
+  pickupStone() { this.noise({ dur: 0.07, gain: 0.32, lp: 1900, hp: 400 }); this.tone({ freq: 380, type: 'square', dur: 0.05, gain: 0.10, slide: -180 }); }
+  // Tree falling / rock crumbling on death — chunkier than enemyDie so the
+  // gathering loop has its own audio identity.
+  treeFall() { this.noise({ dur: 0.4, gain: 0.45, lp: 900, hp: 80 }); this.tone({ freq: 140, type: 'sawtooth', dur: 0.35, gain: 0.22, slide: -60 }); }
+  rockBreak() { this.noise({ dur: 0.3, gain: 0.55, lp: 1600, hp: 200 }); this.tone({ freq: 260, type: 'square', dur: 0.18, gain: 0.18, slide: -180 }); }
   hurt() { this.tone({ freq: 220, type: 'sawtooth', dur: 0.18, gain: 0.28, slide: -90 }); this.noise({ dur: 0.1, gain: 0.25 }); }
   dash() { this.noise({ dur: 0.18, gain: 0.3, lp: 1800, hp: 700 }); }
   buy() { this.tone({ freq: 660, type: 'square', dur: 0.06, gain: 0.18, slide: 180 }); this.tone({ freq: 880, type: 'square', dur: 0.08, gain: 0.16, slide: 200 }); }
