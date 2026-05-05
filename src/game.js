@@ -134,6 +134,10 @@ export class Game {
     this.followCam = new FollowCamera(this.canvas);
 
     this.sound = new Sound();
+    // Hand the world to the audio layer so its `updateAmbient` can probe
+    // for nearby water and read the live day-weight without us threading
+    // the world through every call.
+    this.sound.setWorld(this.world);
     this.input = new Input();
     this.effects = new Effects(this.scene, this.followCam.cam);
 
@@ -711,7 +715,10 @@ export class Game {
     const color = b.burstColor();
     this.effects.burst(b.pos.x, 0.5, b.pos.z, color, 10, 4, 0.45);
     this.effects.ring(b.pos.x, 0.05, b.pos.z, 0xffd166, 0.8, 0.3);
-    this.sound.bomb?.();
+    // Pots shatter (glass-y crash), crates splinter (wood crack). Different
+    // samples make the two breakable kinds distinguishable from offscreen.
+    if (b.kind === 'pot') this.sound.potBreak?.();
+    else this.sound.woodBreak?.();
     b.destroyMesh();
   }
 
@@ -898,9 +905,28 @@ export class Game {
       // If we hit the budget cap, drop the carry so we don't spiral.
       if (steps >= MAX_STEPS_PER_FRAME) this._fixedAccum = 0;
     }
+    // Ambient soundscape: tick the procedural nature layers using the
+    // live midpoint between the players + the world's day weight. Runs
+    // even while paused / dead so the meadow keeps breathing in the
+    // background — it costs a few setTargetAtTime calls and doesn't
+    // care about simulation timestep.
+    this._updateAmbientSound(dt0);
     this.render();
     this._updateFps(dt0);
     requestAnimationFrame((tt) => this._loop(tt));
+  }
+
+  // Cheap wrapper around sound.updateAmbient — pulls the listener
+  // position from the camera's smoothed centroid (same point the
+  // FollowCamera tracks), so the soundscape follows what the player
+  // actually sees instead of either dead/alive sim positions.
+  _updateAmbientSound(dt0) {
+    if (!this.sound || !this.sound.updateAmbient) return;
+    const c = this.followCam?.smoothCenter;
+    const x = c ? c.x : (this.players[0]?.pos.x ?? 0);
+    const z = c ? c.z : (this.players[0]?.pos.z ?? 0);
+    const dayWeight = (typeof this.world?.dayWeight === 'number') ? this.world.dayWeight : 1.0;
+    this.sound.updateAmbient(dt0, { x, z, dayWeight, world: this.world });
   }
 
   _updateFps(dt0) {
