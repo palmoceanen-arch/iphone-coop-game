@@ -29,10 +29,12 @@ const CURSOR_DISTANCE = 1.5;
 const YAW_STEP = Math.PI / 2;
 
 // Minimum spacing between two structures' centres so the placement check
-// doesn't allow stacking. Roughly the union of any two recipe radii plus
-// a small tolerance, but expressed as a single conservative number to
-// keep the check cheap.
-const MIN_STRUCT_SPACING = 0.85;
+// doesn't allow stacking. The 1m grid snap already keeps placements at
+// >=1.0m apart for the cardinal-neighbour case (or sqrt(2) for diagonals),
+// so this is the deepest *overlap* we forbid — basically just "no two
+// structures on the exact same tile". A small slack is left to absorb
+// float drift from the round() in _computeCursor.
+const MIN_STRUCT_SPACING = 0.55;
 
 export class BuildController {
   constructor(scene, world, player) {
@@ -122,25 +124,45 @@ export class BuildController {
   }
 
   // True if (x,z) is free of other player-placed structures (avoid stacking
-  // / z-fighting) AND of world colliders (avoid burying a wall inside a
-  // tree). Both checks use a conservative radius so the player notices the
-  // ghost going red rather than spawning a wall that overlaps geometry.
+  // / z-fighting) AND of natural world colliders (avoid burying a wall
+  // inside a tree). The two cases use different spacing rules:
+  //   - structure-vs-structure: only reject *exact same tile* (overlap).
+  //     The grid snap to 1m already separates adjacent placements, so any
+  //     check tighter than ~0.6m is the right "no stacking" gate.
+  //   - structure-vs-natural: keep a generous buffer (recipe radius +
+  //     terrain radius + tolerance) so the player can't place a wall on
+  //     top of / inside a tree trunk.
+  // We also walk the centre tile's eight 1m neighbours' `placedStructures`
+  // entries so a build at a chunk seam isn't blind to a neighbouring
+  // chunk's already-placed structures.
   _spotFree(x, z) {
-    const chunkKey = this.world.chunkKeyOf(x, z);
-    const arr = this.world.placedStructures.get(chunkKey);
-    if (arr) {
+    const eps2 = MIN_STRUCT_SPACING * MIN_STRUCT_SPACING;
+    const ck0 = this.world.chunkKeyOf(x, z);
+    // Collect placed-structure descriptors from the centre + 4 cardinal
+    // neighbours so a wall on the chunk seam is also seen.
+    const seamOffsets = [
+      [0, 0], [1, 0], [-1, 0], [0, 1], [0, -1],
+      [1, 1], [1, -1], [-1, 1], [-1, -1],
+    ];
+    for (const [ox, oz] of seamOffsets) {
+      const ck = this.world.chunkKeyOf(x + ox, z + oz);
+      if (ck === ck0 && (ox !== 0 || oz !== 0)) continue;
+      const arr = this.world.placedStructures.get(ck);
+      if (!arr) continue;
       for (const d of arr) {
         const dx = d.x - x, dz = d.z - z;
-        if (dx * dx + dz * dz < MIN_STRUCT_SPACING * MIN_STRUCT_SPACING) return false;
+        if (dx * dx + dz * dz < eps2) return false;
       }
     }
-    // World colliders are aggregated each frame from all active chunks
-    // (trees, rocks, world props). Using them directly keeps this check
-    // chunk-agnostic — a wall placed near a chunk seam still sees colliders
-    // from the neighbour chunk.
+    // Natural world colliders only — anything tagged `placed: true` was
+    // pushed by a structure and is already covered by the loop above. The
+    // +0.55 buffer is sized for tree/rock radii so a wall doesn't overlap
+    // a trunk; structures don't need that buffer because we *want* them
+    // flush on adjacent grid cells.
     const cols = this.world.colliders;
     if (cols && cols.length) {
       for (const c of cols) {
+        if (c.placed) continue;
         const dx = c.x - x, dz = c.z - z;
         const r = (c.r || 0.5) + 0.55;
         if (dx * dx + dz * dz < r * r) return false;

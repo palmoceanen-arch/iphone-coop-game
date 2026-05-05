@@ -651,7 +651,11 @@ export class Game {
       chunk.group.add(mesh);
       let collider = null;
       if (recipe.radius > 0) {
-        collider = { x: s.x, z: s.z, r: recipe.radius };
+        // `placed: true` lets the build-mode placement check skip its
+        // tree/rock clearance buffer for player-placed structures —
+        // structure-vs-structure spacing is governed separately so walls
+        // can sit flush on adjacent 1m grid cells without false rejects.
+        collider = { x: s.x, z: s.z, r: recipe.radius, placed: true };
         chunk.colliders.push(collider);
       }
       const struct = new Structure(
