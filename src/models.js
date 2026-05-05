@@ -581,6 +581,45 @@ function _attachSkinAwareTintShader(material, skinMaskTex) {
   material.needsUpdate = true;
 }
 
+// Fraction (0..1) of the atlas's contribution to the final helmet colour.
+// 0.0 = pure tint (no atlas, helmet looks flat / melts into body).
+// 1.0 = legacy `tint × atlas` (steel-grey atlas muddies user colours).
+// 0.25 keeps the picked colour dominant while leaving enough atlas
+// shadow/detail to read as a distinct armoured piece on top of the body.
+const HELMET_ATLAS_MIX = 0.25;
+
+// Inject a fragment shader hook into a MeshToonMaterial so the helmet
+// keeps its atlas detail but only at `HELMET_ATLAS_MIX` strength. The
+// final per-pixel colour (before toon banding) becomes:
+//
+//     diffuseColor.rgb = material.color.rgb
+//                      * mix(vec3(1.0), atlasSample.rgb, HELMET_ATLAS_MIX)
+//
+// so a typical mid-grey atlas pixel (~0.5) only darkens the picked tint
+// by ~12.5% rather than halving it.
+function _attachHelmetAtlasMixShader(material) {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    for (const m of material) _attachHelmetAtlasMixShader(m);
+    return;
+  }
+  const mix = HELMET_ATLAS_MIX.toFixed(3);
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#ifdef USE_MAP
+        vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+        diffuseColor.rgb *= mix(vec3(1.0), sampledDiffuseColor.rgb, ${mix});
+        diffuseColor.a *= sampledDiffuseColor.a;
+      #endif`,
+    );
+  };
+  // Every helmet shares the same shader logic + atlas, so they can share
+  // a compiled program; only `material.color` differs per instance.
+  material.customProgramCacheKey = () => `helmet-atlas-mix-${mix}`;
+  material.needsUpdate = true;
+}
+
 export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, hueShift = 0, skinAware = false } = {}) {
   const entry = cache[kind];
   if (!entry) {
@@ -621,16 +660,19 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
           applyHueShift(obj.material, hueShift);
         }
       } else if (role === 'helmet') {
-        // Helmet shares the atlas with the body, but its UV region
-        // samples darkened steel-grey pixels — multiplying tint by
-        // those keeps the helmet looking grey/muddy regardless of
-        // what colour the user picks (the user reported this as
-        // "by default it's grey, lighten it"). Drop the map for
-        // pure-tint behaviour: helmet now follows the body colour
-        // exactly, so white-body = white-helmet, red-body =
-        // red-helmet, etc. Toon shading via the gradient map still
-        // gives it the cel-shaded shadow/light bands.
-        _stripMapForFlatColor(obj.material);
+        // Helmet shares the atlas with the body. Two extremes both
+        // looked wrong:
+        //   - Default `tint × atlas`  → atlas's darkened steel-grey
+        //     pixels muddied every user-picked colour (white→grey,
+        //     red→maroon).
+        //   - Pure tint (atlas dropped) → helmet became flat and
+        //     visually melted into the body, losing the contrast
+        //     and texture the atlas detailing provided.
+        // Compromise: keep the atlas but scale its contribution down
+        // to ~25%, so the user-picked colour stays clean while the
+        // atlas still contributes a touch of shadow/contrast detail.
+        // Toon shading via the gradient map still applies on top.
+        _attachHelmetAtlasMixShader(obj.material);
         if (tint !== null) {
           _tmpColor.setHex(tint);
           applyTint(obj.material, _tmpColor);
