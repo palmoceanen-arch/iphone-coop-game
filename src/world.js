@@ -149,6 +149,7 @@ export class World {
     this.chestSpawns = [];            // same idea but for procedural chests
     this.breakableSpawns = [];        // ditto for clay pots / wooden crates
     this.altarSpawns = [];            // ditto for altars (rare item-management nodes)
+    this.resourceSpawns = [];         // ditto for harvestable trees / rocks
     // ---- Chunk streaming (async load + safe unload) -------------------
     // Async load queue. ensureChunksAround() pushes "needed but not yet
     // generated" chunks here; processChunkQueue() drains a small budget
@@ -333,6 +334,7 @@ export class World {
     if (chunk.chestSpawns) for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
     if (chunk.breakableSpawns) for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
     if (chunk.altarSpawns) for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
+    if (chunk.resourceSpawns) for (const r of chunk.resourceSpawns) this.resourceSpawns.push(r);
   }
 
   // Drain up to `budget` queued chunks. Called once per game tick;
@@ -503,6 +505,12 @@ export class World {
     const chestSpawns = [];
     const breakableSpawns = [];
     const altarSpawns = [];
+    // Harvestable resource nodes (trees, rocks). Pushed alongside the visual
+    // mesh — the entity created by Game._drainResourceSpawns wraps the mesh
+    // for damage but doesn't reparent it, so the chunk group still owns the
+    // mesh's lifecycle. Only the *large* trees / rocks are harvestable; tiny
+    // ground-clutter rocks and bushes stay non-interactive.
+    const resourceSpawns = [];
     // BufferGeometries we own (fresh-allocated for this chunk and not
     // returned to a shared cache). Currently just the marching-squares
     // water mesh, but the array is generic so future per-chunk meshes
@@ -534,6 +542,9 @@ export class World {
     };
 
     // 3. Trees — density modulated by noise; never on water cells.
+    // Trees are harvestable: in addition to the visual placement we push a
+    // resourceSpawn descriptor with the mesh reference so Game can wrap it
+    // in a Resource entity hooked into the damageables pipeline.
     const treeAttempts = 14;
     for (let i = 0; i < treeAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
@@ -549,7 +560,9 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      colliders.push({ x, z, r: 1.0 });
+      const collider = { x, z, r: 1.0 };
+      colliders.push(collider);
+      resourceSpawns.push({ x, z, kind: 'tree', mesh, chunkKey, collider, colliderArray: colliders, group });
     }
 
     // 4a. Cliff clusters — on rocky outcrops (high noise), drop a tight
@@ -569,7 +582,10 @@ export class World {
     }
 
     // 4b. Scattered rocks — large/medium gray rocks on rocky cells, small
-    // rocks elsewhere as ground clutter.
+    // rocks elsewhere as ground clutter. Only the *big* rocks become
+    // harvestable resource nodes; the small ground-clutter rocks stay
+    // decorative (otherwise the world would be carpeted in tiny pickable
+    // nodes that aren't worth a swing).
     const rockAttempts = 10;
     for (let i = 0; i < rockAttempts; i++) {
       const x = minX + r.range(2, CHUNK_SIZE - 2);
@@ -587,7 +603,11 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      if (big) colliders.push({ x, z, r: 0.9 });
+      if (big) {
+        const collider = { x, z, r: 0.9 };
+        colliders.push(collider);
+        resourceSpawns.push({ x, z, kind: 'rock', mesh, chunkKey, collider, colliderArray: colliders, group });
+      }
     }
 
     // 5. Bushes / clutter (skip water).
@@ -779,6 +799,7 @@ export class World {
       chestSpawns,
       breakableSpawns,
       altarSpawns,
+      resourceSpawns,
       cx,
       cz,
       _ownedGeos: ownedGeos,
@@ -1039,8 +1060,11 @@ export class World {
     const sunsetMix = sunsetBell(this.dayTime, SUNRISE, 1 / 24) + sunsetBell(this.dayTime, SUNSET, 1 / 24);
     // Day weight: 0 deep night, 1 full day, lerped across the full ±0.5
     // sunY band so sky / ambient / moon all fade gradually over several
-    // in-game hours either side of the horizon.
+    // in-game hours either side of the horizon. Also exposed on `this`
+    // so the audio layer (cricket / bird chorus, wind level) can read
+    // the same phase without recomputing the day-cycle math.
     const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
+    this.dayWeight = dayWeight;
     // Reuse the pre-allocated colour temporaries (see constructor) instead
     // of `new THREE.Color()` per frame; the resulting blend is copied into
     // scene.background which itself is a single persistent Color.

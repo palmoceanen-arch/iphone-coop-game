@@ -3,7 +3,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Projectile } from './projectile.js';
-import { spawnDrops } from './pickups.js';
+import { spawnDrops, spawnHarvestDrops } from './pickups.js';
 import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
@@ -24,6 +24,7 @@ import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
+import { Resource, harvestYield } from './resource.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { iconHTML } from './icons.js';
@@ -134,6 +135,10 @@ export class Game {
     this.followCam = new FollowCamera(this.canvas);
 
     this.sound = new Sound();
+    // Hand the world to the audio layer so its `updateAmbient` can probe
+    // for nearby water and read the live day-weight without us threading
+    // the world through every call.
+    this.sound.setWorld(this.world);
     this.input = new Input();
     this.effects = new Effects(this.scene, this.followCam.cam);
 
@@ -158,6 +163,15 @@ export class Game {
     this.chests = []; // procedurally placed treasure chests
     this.breakables = []; // pots / crates scattered through chunks
     this.altars = []; // rare item-management altars
+    this.resources = []; // harvestable trees / rocks (damageable resource nodes)
+    // Shared resource pool — wood / stone / seeds. Both players share this
+    // because building consumes from the world (unlike personal gold which
+    // each player spends on their own upgrades). Future M3 farming will
+    // populate `seeds` from chests; for now it stays at 0.
+    // The structure also lives on `this.world.resources` so other modules
+    // (e.g. pickups) and any future save-system entry point can reach it
+    // through a single canonical pointer.
+    this.world.resources = { wood: 0, stone: 0, seeds: 0 };
 
     this.altarUI = new AltarUI();
     this.altarOpen = false;
@@ -174,6 +188,7 @@ export class Game {
     this._drainChestSpawns();
     this._drainBreakableSpawns();
     this._drainAltarSpawns();
+    this._drainResourceSpawns();
     this._spawnStarterChest();
 
     this.totalKills = 0;
@@ -448,9 +463,18 @@ export class Game {
     for (const c of this.chests) { c._destroy?.(); }
     for (const b of this.breakables) { b.destroyMesh?.(); }
     for (const a of this.altars) { a.destroyMesh?.(); }
+    // Resources own no THREE meshes themselves (the chunk owns them); we
+    // only need to drop the references so on chunk reload they get
+    // re-wrapped fresh. The chunk-resident meshes will reappear naturally
+    // when the player walks back into the area.
     if (this.altarUI?.isOpen) this.altarUI.close();
     this.altarOpen = false;
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = [];
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = [];
+    if (this.world?.resources) {
+      this.world.resources.wood = 0;
+      this.world.resources.stone = 0;
+      this.world.resources.seeds = 0;
+    }
     // revive players
     for (const p of this.players) {
       p.pos.x = (p.index === 0 ? -3 : 3); p.pos.z = 4;
@@ -550,6 +574,26 @@ export class Game {
     }
   }
 
+  // Wrap each tree / rock the world generated this frame in a Resource
+  // entity so the damageables pipeline can hit them. The chunk already
+  // mounted the visual mesh inside its group; we just take a reference so
+  // we can hide the mesh on death without re-parenting.
+  //
+  // Trees and rocks are NOT marked consumed when chopped — chunk reload
+  // regenerates them naturally. _isSpawnLive(s) only returns false here for
+  // descriptors whose chunk was already unloaded, which can happen on a
+  // late drain if the player walked far enough to cycle the chunk between
+  // generation and drain.
+  _drainResourceSpawns() {
+    if (!this.world.resourceSpawns) return;
+    while (this.world.resourceSpawns.length > 0) {
+      const s = this.world.resourceSpawns.shift();
+      if (!this._isSpawnLive(s)) continue;
+      const r = new Resource(s.x, s.z, s.kind, s.mesh, s.chunkKey, s.collider, s.colliderArray, s.group);
+      this.resources.push(r);
+    }
+  }
+
   // Despawn every entity tied to `chunkKey`. Invoked by World when a
   // far chunk is unloaded; living entities just disappear (their
   // chunkKey is recomputed from current position so a wandering enemy
@@ -585,6 +629,14 @@ export class Game {
       this.altars,
       a => a.chunkKey !== chunkKey,
       a => { a.destroyMesh?.(); },
+    );
+    // Resources don't own meshes (the chunk's group does), so we just drop
+    // the references — the chunk's _disposeChunk has already removed the
+    // group from the scene. On chunk reload _drainResourceSpawns wraps the
+    // freshly-spawned trees / rocks in new Resource entities.
+    compactInPlace(
+      this.resources,
+      r => r.chunkKey !== chunkKey,
     );
   }
 
@@ -711,8 +763,35 @@ export class Game {
     const color = b.burstColor();
     this.effects.burst(b.pos.x, 0.5, b.pos.z, color, 10, 4, 0.45);
     this.effects.ring(b.pos.x, 0.05, b.pos.z, 0xffd166, 0.8, 0.3);
-    this.sound.bomb?.();
+    // Pots shatter (glass-y crash), crates splinter (wood crack). Different
+    // samples make the two breakable kinds distinguishable from offscreen.
+    if (b.kind === 'pot') this.sound.potBreak?.();
+    else this.sound.woodBreak?.();
     b.destroyMesh();
+  }
+
+  // Fired when a Resource (tree / rock) drops to 0 HP. `weaponKind` is the
+  // string id of the weapon that landed the killing blow, used by
+  // harvestYield() to grant the +25% wood bonus to axe wielders. AoE /
+  // ability kills pass `weaponKind = null` and skip the bonus.
+  _onResourceGathered(r, weaponKind) {
+    const yld = harvestYield(r.kind, weaponKind);
+    if (yld && yld.amount > 0) {
+      const drops = spawnHarvestDrops(this.scene, r.pos.x, r.pos.z, yld.kind, yld.amount);
+      for (const d of drops) this.pickups.push(d);
+    }
+    // Visual + audio feedback that matches the resource. Trees lean over
+    // and emit a leafy burst; rocks crumble in a duster cloud.
+    const color = r.burstColor();
+    const burstY = r.burstY();
+    this.effects.burst(r.pos.x, burstY, r.pos.z, color, 12, 4, 0.55);
+    this.effects.ring(r.pos.x, 0.05, r.pos.z, color, 1.0, 0.32);
+    if (r.kind === 'tree') this.sound.treeFall?.();
+    else this.sound.rockBreak?.();
+    // Transition the resource: trees become walk-through stumps that regrow
+    // after ~10 game days; rocks vanish from the resources list and only
+    // come back via natural chunk regeneration.
+    r.enterDeathState();
   }
 
   // Always spawn one chest near origin on first load so players see the
@@ -754,6 +833,7 @@ export class Game {
     this._drainChestSpawns();
     this._drainBreakableSpawns();
     this._drainAltarSpawns();
+    this._drainResourceSpawns();
     this.world.refreshActiveChunks(positions);
   }
 
@@ -898,9 +978,28 @@ export class Game {
       // If we hit the budget cap, drop the carry so we don't spiral.
       if (steps >= MAX_STEPS_PER_FRAME) this._fixedAccum = 0;
     }
+    // Ambient soundscape: tick the procedural nature layers using the
+    // live midpoint between the players + the world's day weight. Runs
+    // even while paused / dead so the meadow keeps breathing in the
+    // background — it costs a few setTargetAtTime calls and doesn't
+    // care about simulation timestep.
+    this._updateAmbientSound(dt0);
     this.render();
     this._updateFps(dt0);
     requestAnimationFrame((tt) => this._loop(tt));
+  }
+
+  // Cheap wrapper around sound.updateAmbient — pulls the listener
+  // position from the camera's smoothed centroid (same point the
+  // FollowCamera tracks), so the soundscape follows what the player
+  // actually sees instead of either dead/alive sim positions.
+  _updateAmbientSound(dt0) {
+    if (!this.sound || !this.sound.updateAmbient) return;
+    const c = this.followCam?.smoothCenter;
+    const x = c ? c.x : (this.players[0]?.pos.x ?? 0);
+    const z = c ? c.z : (this.players[0]?.pos.z ?? 0);
+    const dayWeight = (typeof this.world?.dayWeight === 'number') ? this.world.dayWeight : 1.0;
+    this.sound.updateAmbient(dt0, { x, z, dayWeight, world: this.world });
   }
 
   _updateFps(dt0) {
@@ -978,17 +1077,29 @@ export class Game {
       }
     }
 
-    // Damageables = enemies + breakables. Sword swings, ability projectiles
-    // and AoE pulses all hit anything in this list. The swing callback below
-    // routes breakables to their loot path so item-on-kill hooks (xp, drops)
-    // don't fire for crates / pots.
-    const damageables = (this.breakables.length > 0)
-      ? [...this.enemies, ...this.breakables]
+    // Damageables = enemies + breakables + resources. Sword swings, ability
+    // projectiles and AoE pulses all hit anything in this list. The swing
+    // callback below routes breakables to their loot path and resources to
+    // the harvest path so item-on-kill hooks (xp, drops) don't fire for
+    // crates / pots / trees / rocks.
+    const damageables = (this.breakables.length > 0 || this.resources.length > 0)
+      ? [...this.enemies, ...this.breakables, ...this.resources]
       : this.enemies;
     this._damageables = damageables;
     const swingHit = (player, target) => {
       if (target.isBreakable) {
         target.takeDamage(0, player.pos.x, player.pos.z, 0);
+      } else if (target.isResource) {
+        // Resources soak per-swing damage — players need several hits to
+        // chop a tree (HP=40 vs typical melee ~10 dmg = 4 swings) so the
+        // gathering loop has weight. Damage is the player's current melee
+        // damage so combat upgrades carry over.
+        const dmg = Math.max(1, Math.round(player.stats?.damage || 10));
+        target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
+        // Tag killer's weapon so the harvest yield can grant the axe bonus
+        // even though the alive→dead transition is processed below in the
+        // breakable-style compaction pass.
+        target._lastDmgWeapon = player._weaponKind || null;
       } else {
         this._onPlayerHitsEnemy(player, target);
       }
@@ -1048,8 +1159,10 @@ export class Game {
     }
     compactInPlace(this.enemies, e => e.alive);
 
-    // Pickups
-    for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects);
+    // Pickups — pass the shared resource pool so wood / stone / seed
+    // pickups know where to deposit their value. Gold and food don't read
+    // it, so existing behaviour is unchanged.
+    for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects, this.world.resources);
     compactInPlace(this.pickups, pk => pk.alive);
 
     // Chests + runes. When a chest finishes its open animation and
@@ -1076,6 +1189,25 @@ export class Game {
         if (b.chunkKey) this.world.markBreakableConsumed(b.chunkKey, b.pos.x, b.pos.z);
       },
     );
+
+    // Resources: idle hit-shake / regrow timer, then catch newly-dead ones
+    // and route to the harvest path. Trees stay in the list as walk-through
+    // stumps (state==='stump') while their regrow timer ticks; rocks
+    // transition to state==='gone' and get compacted out below. Unlike
+    // breakables we don't mark either kind consumed — chunk reload
+    // regenerates them from the deterministic seed (the fast path), and
+    // the stump-regrow timer is the slow in-place path while the chunk
+    // stays loaded.
+    for (const r of this.resources) r.update(dt, this.world.dayLength);
+    for (const r of this.resources) {
+      if (!r.alive && r.state === 'alive') {
+        this._onResourceGathered(r, r._lastDmgWeapon || null);
+      }
+    }
+    // Compact only resources fully gone — trees in 'stump' state stay so
+    // their regrow timer can keep ticking (and so chunk-unload can drop
+    // them in lockstep with the rest of the chunk's entities).
+    compactInPlace(this.resources, r => r.state !== 'gone');
 
     // Leash mechanic
     const dBetween = vdist(this.players[0].pos, this.players[1].pos);
@@ -1165,6 +1297,15 @@ export class Game {
     set('clock', `${phase} · ${hh}:${mm}`);
     const dot = document.getElementById('clockdot');
     if (dot) dot.style.background = this.world.isNight() ? '#7aa6ff' : '#ffd166';
+    // Shared resource counters live on the world (wood / stone / seeds)
+    // so building consumes from a single pool. Both players see the same
+    // numbers, unlike per-player gold.
+    const res = this.world.resources;
+    if (res) {
+      set('wood', res.wood || 0);
+      set('stone', res.stone || 0);
+      set('seed', res.seeds || 0);
+    }
     // leash overlay
     const leashEl = document.getElementById('leash');
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);

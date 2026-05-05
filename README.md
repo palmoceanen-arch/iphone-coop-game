@@ -25,7 +25,10 @@ the danger after dark.
   | 4 | Wisp | Brief wind-up, then a fast lunge-dash through the player. |
   | 5 | Ogre | Slow, heavy. Tells then swings a club for huge damage + knockback. |
 - **Combat impact**: hit-stop (slow-mo), screen shake, knockback, particle
-  burst, damage numbers and procedurally synthesized hit/swing/death sounds.
+  burst, damage numbers and CC0-sampled hit / swing / death / break sounds
+  (Kenney) layered over a procedural day-aware ambient soundscape (wind,
+  pondside lap, forest hum, campfire crackle, daytime birds, night-time
+  crickets) — see "Notes on assets" below for sources.
 - **Loot**: gold piles and food (apples, mushrooms, meat, berries) drop from
   enemies and gravitate to nearby heroes.
 - **Upgrade shop** at the campfire (press `Tab`): each hero spends their own
@@ -100,23 +103,56 @@ src/
   upgrades.js       upgrade definitions + shop UI
   effects.js        particles, rings, hit-stop, screen shake, damage numbers
   camera.js         smooth follow camera that fits both players
-  sound.js          WebAudio procedural SFX
+  sound.js          WebAudio mixer: CC0 ogg samples + procedural ambient layers
   input.js          two-player keyboard input
   utils.js          tiny vector + math helpers
 ```
 
 ## Notes on assets
 
-The game ships with **zero external assets** so it works in restricted
-environments. To swap in CC0 GLB models (e.g. from
-[Kenney](https://kenney.nl/) or [Quaternius](https://quaternius.com/)) and real
-audio (e.g. [Freesound](https://freesound.org/)):
+### Audio
 
-1. Drop GLB files into `public/models/` and load them via
-   `THREE.GLTFLoader` inside `enemy.js` / `player.js`, replacing the procedural
-   primitives.
-2. Drop `.ogg` / `.mp3` files into `public/sounds/` and replace calls in
-   `sound.js` with `new Audio()` or `THREE.Audio` instances.
+One-shot SFX (sword swing, hits, damage, breakables, coins, tree creaks)
+play short CC0 `.ogg` samples shipped under `public/sounds/`. They are
+sourced from two free, public-domain Kenney audio packs:
+
+- **RPG Audio** — https://kenney.nl/assets/rpg-audio
+- **Impact Sounds** — https://kenney.nl/assets/impact-sounds
+
+Both packs are released under [Creative Commons Zero (CC0
+1.0)](http://creativecommons.org/publicdomain/zero/1.0/). The exact file
+mapping is documented in `public/sounds/LICENSE.txt`.
+
+Loading is **lazy** — the first call to a category kicks off a `fetch +
+decodeAudioData` and emits a synthesised placeholder; every subsequent
+trigger uses the decoded `AudioBuffer` with random pitch jitter and a
+random variant pick so repeated combat hits never sound mechanical.
+
+The ambient soundscape (wind, pondside lap, forest hum, campfire crackle,
+day-time birds, night-time crickets) is **fully procedural** — generated
+from one shared 8-second seeded noise buffer that loops forever, shaped
+by per-layer biquad filters and slow LFOs, and modulated each frame by
+the player's proximity to ponds / origin campfire and the world's
+day-weight phase. This keeps the bundle small (~220 KB total for all
+SFX, zero bytes for ambient) and lets the soundscape react to where the
+players are without rebuilding the WebAudio graph.
+
+### 3D Models
+
+GLB models live in `public/models/`. To swap in additional CC0 GLBs (e.g.
+from [Kenney](https://kenney.nl/) or [Quaternius](https://quaternius.com/)),
+drop them in and load via `THREE.GLTFLoader` inside `models.js`.
+
+### Adding more sounds
+
+To add a new SFX category:
+
+1. Drop `.ogg` files into `public/sounds/` (CC0 or compatible licence).
+2. Add an entry to the `SAMPLES` map at the top of `src/sound.js` with
+   the variant filenames.
+3. Add a wrapper method (or call `_play('newCategory', opts)` directly).
+4. Optionally add a `RATE_LIMIT` and `VOICE_CAP` entry to keep it from
+   stacking on dense combat frames.
 
 ## License
 
