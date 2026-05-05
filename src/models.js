@@ -131,6 +131,46 @@ const UPPER_BODY_BONES = new Set([
 // looks better than a static pose.
 const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
 
+// Per-slot clip trimming ratios. KayKit's `2H_Melee_Attack_Spin` is a 2.4s
+// clip that has a wide ~270° arc but spends roughly the first third holding
+// a wind-up pose — at any sane swing speed it reads as "attack pauses, then
+// resumes". Trimming the lead-in keeps only the active sweep + follow-through.
+// `start` and `end` are normalised positions (0..1) within the source clip.
+const SLOT_TRIM = {
+  attack_2h_spin: { start: 0.36, end: 1.00 },
+};
+
+// Trim a clip to a sub-range by re-sampling each track's keyframes within
+// [startTime, endTime] and shifting them so the new clip starts at t=0.
+// Mirrors what `THREE.AnimationUtils.subclip` does but in continuous time
+// units instead of frames, so we don't depend on knowing the source FPS.
+function trimClip(clip, startTime, endTime, name) {
+  const t0 = Math.max(0, startTime);
+  const t1 = Math.min(clip.duration, endTime);
+  if (t1 <= t0 + 1e-3) return clip;
+  const newTracks = clip.tracks.map((track) => {
+    const times = track.times;
+    const valueSize = track.getValueSize();
+    const values = track.values;
+    const keptTimes = [];
+    const keptValues = [];
+    for (let i = 0; i < times.length; i++) {
+      if (times[i] >= t0 && times[i] <= t1) {
+        keptTimes.push(times[i] - t0);
+        for (let v = 0; v < valueSize; v++) keptValues.push(values[i * valueSize + v]);
+      }
+    }
+    if (keptTimes.length === 0) {
+      // No keyframes in range — keep at least one so the track is valid.
+      keptTimes.push(0);
+      const lastIdx = times.length - 1;
+      for (let v = 0; v < valueSize; v++) keptValues.push(values[lastIdx * valueSize + v]);
+    }
+    return new track.constructor(track.name, keptTimes, keptValues);
+  });
+  return new THREE.AnimationClip(name, t1 - t0, newTracks, clip.blendMode);
+}
+
 // Build a copy of `clip` that only contains tracks whose bone is in
 // `UPPER_BODY_BONES`. Track names look like `<sanitizedBoneName>.<property>`
 // or `<sanitizedBoneName>.<property>[index]` — sanitized names cannot
@@ -438,8 +478,15 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
   for (const [slot, animName] of Object.entries(ANIM_MAP)) {
     const sourceClip = entry.animations.find(c => c.name === animName);
     if (!sourceClip) continue;
+    let clip = sourceClip;
+    const trim = SLOT_TRIM[slot];
+    if (trim) {
+      const t0 = trim.start * clip.duration;
+      const t1 = trim.end * clip.duration;
+      clip = trimClip(clip, t0, t1, `${animName}_trim`);
+    }
     const isUpperOnly = UPPER_BODY_SLOT_PREFIXES.some(p => slot.startsWith(p));
-    const clip = isUpperOnly ? buildUpperBodyClip(sourceClip) : sourceClip;
+    if (isUpperOnly) clip = buildUpperBodyClip(clip);
     const action = mixer.clipAction(clip);
     actions[slot] = action;
   }
@@ -574,20 +621,18 @@ export const WEAPONS = {
     slash: { color: 0xdfeaff, height: 1.05 },
   },
   // Heavy two-hander — wider arc, more reach, more wind-up. Uses the 2H
-  // horizontal slice clip (1.1s baked) but stretches it over a longer
-  // swing window (1.4s) so the post-impact half plays at ~0.79× speed and
-  // the follow-through to the right is clearly visible instead of being
-  // cut short by the next swing's fade-out. Cooldown / damage unchanged —
-  // only the on-screen swing is heavier.
+  // *spin* clip with the wind-up hold trimmed off (see SLOT_TRIM in
+  // models.js): the trimmed clip is ~1.5s of pure horizontal sweep, no
+  // mid-swing freeze. Arc widened to match the visual reach of the spin.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
-    swing: 1.40,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, lead-in trimmed
+    swing: 1.30,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 0.95,   // ~171° — sweeps almost shoulder to shoulder
+    arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
     cooldown: 0.75,
     damageMult: 1.6,
     slash: { color: 0xc8d6ff, height: 1.10 },
@@ -609,19 +654,18 @@ export const WEAPONS = {
     damageMult: 1.2,
     slash: { color: 0xffd28a, height: 1.05 },
   },
-  // 2H battle axe — same horizontal slice as the great-sword but stretched
-  // over a slightly longer window (1.55s vs 1.4s) because the axe head is
-  // heavier and the strike reads as more committed. The follow-through
-  // half plays at ~0.71× speed.
+  // 2H battle axe — same trimmed spin sweep as the great-sword but with a
+  // slightly longer swing window because the axe head is heavier; the
+  // follow-through reads as more committed.
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep
-    swing: 1.55,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, lead-in trimmed
+    swing: 1.45,
     impactAt: 0.55,
     range: 2.7,
-    arc: Math.PI * 0.95,   // ~171°
+    arc: Math.PI * 1.05,   // ~189°
     cooldown: 0.85,
     damageMult: 1.8,
     slash: { color: 0xffae6a, height: 1.05 },
