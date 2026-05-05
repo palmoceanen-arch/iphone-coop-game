@@ -268,6 +268,8 @@ export class Effects {
       thickness = 0.55,
       direction = -1,
       trailLen = 0.40,
+      yawOffset = 0,
+      sweepRatio = 0.70,
     } = opts;
     const outer = range * 1.05;
     const inner = Math.max(0.15, outer * (1 - thickness));
@@ -277,19 +279,21 @@ export class Effects {
     const geo = this._buildArcStripGeometry(arc, inner, outer, segments);
     const mat = this._buildSlashMaterial(tex, color, direction, trailLen);
     const m = new THREE.Mesh(geo, mat);
+    const baseYaw = parent ? yawOffset : yaw + yawOffset;
     if (parent) {
       // Local-space spawn: parent already carries the character's position
-      // and facing, so we only set the height offset and leave rotation
-      // at zero. The follow-through twist applied per-frame in update()
-      // is added on top as a local-space delta.
+      // and facing, so we only set the height offset. `yawOffset` rotates
+      // the strip *relative to the player's forward* — used by the spin
+      // super to align its u=0 painting start with the normal slice's
+      // start side instead of dropping the bright tip behind the player.
       m.position.set(0, height, 0);
-      m.rotation.y = 0;
+      m.rotation.y = baseYaw;
       parent.add(m);
     } else {
       // World-space spawn: freeze the strip in place at the location/yaw
       // that was current at impact time.
       m.position.set(x, y + height, z);
-      m.rotation.y = yaw;
+      m.rotation.y = baseYaw;
       this.scene.add(m);
     }
     m.renderOrder = 5;
@@ -301,8 +305,9 @@ export class Effects {
       // For attached strips the per-frame `mesh.rotation.y` is the local
       // twist on top of the parent. For free strips it's the world yaw at
       // impact time.
-      _yaw: parent ? 0 : yaw,
+      _yaw: baseYaw,
       _alphaScale: 1.0,
+      _sweepRatio: sweepRatio,
     });
   }
 
@@ -365,10 +370,13 @@ export class Effects {
       }
       if (f._kind === 'arc') {
         // The slash paints itself along its length: progress 0→1 over the
-        // first 70% of life (ease-in-out cubic so the swing accelerates and
-        // settles like a real arm motion), then holds while the trailing
-        // brightness fades to zero over the remaining 30%.
-        const sweep = 0.70;
+        // first `sweep` fraction of life (ease-in-out cubic so the swing
+        // accelerates and settles like a real arm motion), then holds
+        // while the trailing brightness fades to zero over the remainder.
+        // The default 0.70 reads as a snappy slice; the spin super passes
+        // a higher value (closer to 1.0) so it sweeps almost the full
+        // life and the fade-out tail is short.
+        const sweep = f._sweepRatio || 0.70;
         let progress;
         if (t < sweep) {
           const p = t / sweep;

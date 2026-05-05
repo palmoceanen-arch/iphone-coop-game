@@ -555,35 +555,46 @@ export class World {
       }
     }
 
-    // 9. Altar of the Ancients — fully deterministic per-chunk roll. We
-    // hash (worldSeed, cx, cz) with a salt so altar locations are stable
-    // for a given seed (same seed → same altars) and independent from
-    // the value-noise field (which is too smooth at chunk scale to give
-    // a reliable spawn distribution near the origin). 22% of non-origin
-    // chunks roll an altar candidate (≈1 per 4-5 chunks ≈ 10 altars
-    // visible in the 7×7 active area) so they're a reliable landmark
-    // anywhere on the map, not just a lucky spawn near origin. The
-    // inner loop then makes sure the exact spot is clear of
-    // water/colliders/chests; we try 60 candidate positions before
-    // giving up so dense chunks (lots of trees / breakables) still
-    // place an altar rather than dropping it silently.
+    // 9. Altar of the Ancients — mirrors the chest spawn rule (camp-tied
+    // cluster + small stray fallback) so altars cluster around fights
+    // the same way as chests, but at a slightly lower rate so they read
+    // as the rarer landmark of the two. Determinism is preserved — the
+    // chunk RNG `r` is seeded purely from (worldSeed, cx, cz), so the
+    // same seed always produces the same altars.
+    //
+    //   per-camp probability: 35% (chests are 55%)
+    //   stray fallback:       4% on chunks with no camp (chests: 6%)
+    //
+    // Either way, the inner loop guards against water / colliders /
+    // chest clusters before committing the position.
     if (!isOrigin) {
-      const altarRoll = chunkSeed(this.seed ^ 0xA17A8B, cx, cz) % 100;
-      if (altarRoll < 22) {
-        for (let i = 0; i < 60; i++) {
-          const x = minX + r.range(4, CHUNK_SIZE - 4);
-          const z = minZ + r.range(4, CHUNK_SIZE - 4);
+      const tryAltarPlace = (cx0, cz0, range, attempts) => {
+        for (let i = 0; i < attempts; i++) {
+          const x = cx0 + r.range(-range, range);
+          const z = cz0 + r.range(-range, range);
+          if (x < minX + 2 || x > minX + CHUNK_SIZE - 2) continue;
+          if (z < minZ + 2 || z > minZ + CHUNK_SIZE - 2) continue;
           if (isOnWater(x, z)) continue;
           if (!this._spotClear(x, z, 1.6, colliders)) continue;
-          // Don't place an altar right on top of a chest cluster.
           let nearChest = false;
           for (const c of chestSpawns) {
             if (Math.hypot(c.x - x, c.z - z) < 3) { nearChest = true; break; }
           }
           if (nearChest) continue;
           altarSpawns.push({ x, z, chunkKey: `${cx},${cz}` });
-          break;
+          return true;
         }
+        return false;
+      };
+      let altarPlaced = false;
+      for (const cc of campCenters) {
+        if (!r.chance(0.35)) continue;
+        if (tryAltarPlace(cc.x, cc.z, 6.5, 14)) { altarPlaced = true; }
+      }
+      if (!altarPlaced && r.chance(0.04)) {
+        const x0 = minX + CHUNK_SIZE / 2;
+        const z0 = minZ + CHUNK_SIZE / 2;
+        tryAltarPlace(x0, z0, CHUNK_SIZE / 2 - 4, 24);
       }
     }
 

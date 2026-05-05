@@ -468,9 +468,17 @@ export class Player {
           // just passes its full-circle `arc` (2π) so the strip sweeps the
           // whole way around. Parented to the character mesh so the strip
           // tracks the player if they keep moving / rotating during the
-          // followthrough. The super stretches the trail duration ~4× so
-          // the rotating energy reads as a heavy, sustained sweep instead
-          // of zipping past in a quarter of a second.
+          // followthrough. The super:
+          //  • is rotated by π (180°) so its u=1 endpoint (where the bright
+          //    leading edge sits at t=0 since `direction:-1` makes
+          //    lead=1−uProgress) lines up with the player's *forward*
+          //    instead of dropping behind them — same starting side as
+          //    the normal slice.
+          //  • uses sweepRatio 0.92 so the sweep almost fills the full
+          //    duration (short fade tail) — without this, the painted
+          //    arc lingers visibly after the swing already finished.
+          //  • stretches duration to ~1.5× tap so the spin reads as a
+          //    sustained sweep but doesn't drag.
           const tapDur = Math.min(as.swing * (1 - fxAt) * 0.55, 0.28);
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
@@ -478,9 +486,11 @@ export class Player {
               parent: this.mesh,
               range: as.range,
               arc: as.arc,
-              duration: as.isSuper ? tapDur * 4 : tapDur,
+              duration: as.isSuper ? tapDur * 1.5 : tapDur,
               color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
+              yawOffset: as.isSuper ? Math.PI : 0,
+              sweepRatio: as.isSuper ? 0.92 : 0.70,
             }
           );
         }
