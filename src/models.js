@@ -132,6 +132,14 @@ const UPPER_BODY_BONES = new Set([
 // looks better than a static pose.
 const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
 
+// Slots that should be exempt from the upper-body filter — their clips
+// drive the *whole body* (e.g. a spinning attack rotates the whole rig
+// from the root, not just the arms; filtering it to upper-body strips
+// out the actual rotation and leaves a static pose).
+const FULL_BODY_SLOTS = new Set([
+  'attack_2h_spinning',
+]);
+
 // Per-slot clip trimming ratios. KayKit's `2H_Melee_Attack_Spin` is a 2.4s
 // clip that has a wide ~270° arc, but the last ~35% of the clip is a recovery
 // pose that visually reads as "second wind-up" right after the strike — it
@@ -487,7 +495,8 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
       const t1 = trim.end * clip.duration;
       clip = trimClip(clip, t0, t1, `${animName}_trim`);
     }
-    const isUpperOnly = UPPER_BODY_SLOT_PREFIXES.some(p => slot.startsWith(p));
+    const isUpperOnly = UPPER_BODY_SLOT_PREFIXES.some(p => slot.startsWith(p))
+      && !FULL_BODY_SLOTS.has(slot);
     if (isUpperOnly) clip = buildUpperBodyClip(clip);
     const action = mixer.clipAction(clip);
     actions[slot] = action;
