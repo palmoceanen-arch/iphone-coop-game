@@ -3,10 +3,16 @@
 const P1_KEYS = {
   up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
   attack: ['KeyF'], dash: ['KeyR'], interact: ['KeyE'],
+  // Build-mode recipe slots 1..4 (entering build mode with that recipe, or
+  // toggling off if the same one is already active). Stays out of the swing
+  // / dash key set so it doesn't conflict with combat.
+  build: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
 };
 const P2_KEYS = {
   up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
   attack: ['KeyL', 'Slash'], dash: ['KeyK', 'ShiftRight'], interact: ['KeyJ', 'Period'],
+  // Right-hand digits 7..0 mirror the same 4-recipe catalog for player 2.
+  build: ['Digit7', 'Digit8', 'Digit9', 'Digit0'],
 };
 
 export class Input {
@@ -82,6 +88,14 @@ export class Input {
     const remoteAttackEdge = r.attackEdge; r.attackEdge = false;
     const remoteDashEdge = r.dashEdge; r.dashEdge = false;
     const remoteInteractEdge = r.interactEdge; r.interactEdge = false;
+    // Build-mode recipe select: returns 0..3 for the slot pressed this
+    // frame, or -1 if no recipe key was hit. Each slot is a single keycode
+    // so we can't piggy-back consumePressed (which dedupes the first match
+    // across an array of synonymous keys).
+    let buildSelect = -1;
+    for (let i = 0; i < map.build.length; i++) {
+      if (this.consumePressed([map.build[i]])) { buildSelect = i; break; }
+    }
 
     return {
       moveX: mx,
@@ -91,6 +105,7 @@ export class Input {
       dash: dashPressed || remoteDashEdge,
       dashHeld: this.anyDown(map.dash) || r.dashHeld,
       interact: this.consumePressed(map.interact) || remoteInteractEdge,
+      buildSelect,
     };
   }
 
