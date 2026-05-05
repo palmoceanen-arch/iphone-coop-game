@@ -132,12 +132,13 @@ const UPPER_BODY_BONES = new Set([
 const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
 
 // Per-slot clip trimming ratios. KayKit's `2H_Melee_Attack_Spin` is a 2.4s
-// clip that has a wide ~270° arc but spends roughly the first third holding
-// a wind-up pose — at any sane swing speed it reads as "attack pauses, then
-// resumes". Trimming the lead-in keeps only the active sweep + follow-through.
-// `start` and `end` are normalised positions (0..1) within the source clip.
+// clip that has a wide ~270° arc, but the last ~35% of the clip is a recovery
+// pose that visually reads as "second wind-up" right after the strike — it
+// looks like the character is about to swing again. Trim the tail off so the
+// clip ends right after the follow-through. `start` and `end` are normalised
+// positions (0..1) within the source clip.
 const SLOT_TRIM = {
-  attack_2h_spin: { start: 0.36, end: 1.00 },
+  attack_2h_spin: { start: 0.00, end: 0.65 },
 };
 
 // Trim a clip to a sub-range by re-sampling each track's keyframes within
@@ -621,15 +622,16 @@ export const WEAPONS = {
     slash: { color: 0xdfeaff, height: 1.05 },
   },
   // Heavy two-hander — wider arc, more reach, more wind-up. Uses the 2H
-  // *spin* clip with the wind-up hold trimmed off (see SLOT_TRIM in
-  // models.js): the trimmed clip is ~1.5s of pure horizontal sweep, no
-  // mid-swing freeze. Arc widened to match the visual reach of the spin.
+  // *spin* clip with the recovery tail trimmed off (see SLOT_TRIM in
+  // models.js): keeps the wind-up + active strike + follow-through, drops
+  // the last ~35% of the clip which would otherwise look like a second
+  // wind-up. Arc widened to match the spin's visual reach.
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
     attach: null,
-    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, lead-in trimmed
-    swing: 1.30,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
+    swing: 1.50,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189° — full follow-through to the right
@@ -661,8 +663,8 @@ export const WEAPONS = {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, lead-in trimmed
-    swing: 1.45,
+    attackAnim: 'attack_2h_spin',  // 2H wide spin sweep, recovery trimmed
+    swing: 1.65,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 1.05,   // ~189°
