@@ -1060,8 +1060,11 @@ export class World {
     const sunsetMix = sunsetBell(this.dayTime, SUNRISE, 1 / 24) + sunsetBell(this.dayTime, SUNSET, 1 / 24);
     // Day weight: 0 deep night, 1 full day, lerped across the full ±0.5
     // sunY band so sky / ambient / moon all fade gradually over several
-    // in-game hours either side of the horizon.
+    // in-game hours either side of the horizon. Also exposed on `this`
+    // so the audio layer (cricket / bird chorus, wind level) can read
+    // the same phase without recomputing the day-cycle math.
     const dayWeight = THREE.MathUtils.smoothstep(sunY, -0.5, 0.5);
+    this.dayWeight = dayWeight;
     // Reuse the pre-allocated colour temporaries (see constructor) instead
     // of `new THREE.Color()` per frame; the resulting blend is copied into
     // scene.background which itself is a single persistent Color.
