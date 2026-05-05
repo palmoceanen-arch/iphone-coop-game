@@ -364,25 +364,57 @@ export class Enemy {
 
   update(dt, players, ctx) {
     if (!this.alive) return;
-    // Chunk-level culling: if this enemy's chunk is outside the simulation
-    // radius, freeze it entirely — no AI, no animation, no collisions. The
-    // mesh is hidden as well (the parent chunk group is hidden by World, but
-    // belt-and-braces). When players walk back into range, the enemy resumes
-    // exactly where it left off.
-    const cx = Math.floor(this.pos.x / 32);
-    const cz = Math.floor(this.pos.z / 32);
-    const sleeping = !this.world.isChunkSimulating(cx, cz);
-    if (sleeping) {
+    // Distance-based culling with hysteresis. The previous implementation
+    // sleep-gated on `world.isChunkSimulating(currentChunk)`, which has
+    // two flaws:
+    //   1. Granularity is one full chunk (32u). An enemy that walks
+    //      *across* a chunk boundary right at the sim-radius edge would
+    //      flip asleep on the very next tick — even if the player is
+    //      still 30 units away — and then flip back as the player
+    //      advances by another half-chunk. Visible to the user as
+    //      a "stuck twitching" enemy that can't leave its chunk.
+    //   2. The sleep check used `this.pos`, but `chunkKey` (set at
+    //      construction) was never recomputed. So the despawn-on-
+    //      chunk-unload path could free the wrong enemy (the one whose
+    //      *home* was in the unloaded chunk, even if the enemy itself
+    //      had since wandered out).
+    // Now: sleep when far from every alive player, with separate
+    // wake/sleep thresholds so brief boundary crossings don't flicker.
+    // Use every player's position, alive or downed — during the death
+    // screen we still want enemies in view to stay visible (they
+    // shouldn't pop out of existence the moment the player goes down).
+    let nearestPlayerD2 = Infinity;
+    for (const p of players) {
+      if (!p) continue;
+      const dx = this.pos.x - p.pos.x;
+      const dz = this.pos.z - p.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < nearestPlayerD2) nearestPlayerD2 = d2;
+    }
+    // Wake within ~70u (just over 2 chunks at 32u/chunk), sleep beyond
+    // ~85u so there's a 15u dead-zone between the two states.
+    const SLEEP_FAR_2 = 85 * 85;
+    const WAKE_NEAR_2 = 70 * 70;
+    const shouldSleep = this.asleep
+      ? nearestPlayerD2 > WAKE_NEAR_2
+      : nearestPlayerD2 > SLEEP_FAR_2;
+    if (shouldSleep) {
       if (!this.asleep) {
         this.asleep = true;
-        this.mesh.visible = false;
+        if (this.mesh) this.mesh.visible = false;
       }
       return;
     }
     if (this.asleep) {
       this.asleep = false;
-      this.mesh.visible = true;
+      if (this.mesh) this.mesh.visible = true;
     }
+    // Refresh chunkKey from current position so chunk-unload despawn
+    // operates on a wandering enemy's *current* chunk, not the chunk
+    // they spawned in. Cheap (one floor + string format) and avoids
+    // a class of "enemy disappears when player walks back through
+    // their old chunk" bugs.
+    this.chunkKey = this.world.chunkKeyOf(this.pos.x, this.pos.z);
     this.invuln = Math.max(0, this.invuln - dt);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
     const statusMult = this._slow > 0 ? 0.35 : 1;
@@ -719,6 +751,26 @@ export class Enemy {
     }
     if (this._animState === 'walk' && this._character?.actions?.walk) {
       this._character.actions.walk.timeScale = 0.85;
+    }
+    // T-pose safety net. After every locomotion-machine pass, the sum of
+    // locomotion action weights *should* be ~1 (either solo idle, solo
+    // run, solo walk, or one of those mid-crossfade with another). If
+    // the total is near zero — for any reason: a pool-reuse reset that
+    // didn't take, a stale interpolant, an aborted fadeIn — the skinned
+    // mesh falls back to bind pose (T-pose) and the user sees an enemy
+    // sliding around with arms straight out. This guard force-rearms
+    // idle so the worst case is "stationary idle anim" not "T-pose".
+    const acts = this._character?.actions;
+    if (acts) {
+      const wSum = (acts.idle?.weight || 0) + (acts.run?.weight || 0) + (acts.walk?.weight || 0);
+      if (wSum < 0.05 && acts.idle) {
+        acts.idle.stop();
+        acts.idle.reset();
+        acts.idle.weight = 1;
+        acts.idle.enabled = true;
+        acts.idle.play();
+        this._animState = 'idle';
+      }
     }
     this._character?.mixer?.update(dt);
   }
