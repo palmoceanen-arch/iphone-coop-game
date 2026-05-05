@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Twin Controller" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0c0f17" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>Twin Hearts — Controller</title>
+    <style>
+      :root { color-scheme: dark; }
+      * {
+        box-sizing: border-box;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+        touch-action: none;
+      }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        position: fixed; inset: 0;
+        background: radial-gradient(ellipse at top, #1a2236 0%, #0c0f17 60%);
+        color: #e0e6f3;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        touch-action: none;
+      }
+      input.codeinput { -webkit-user-select: text; user-select: text; touch-action: manipulation; }
+      button { font: inherit; }
+      #lobby, #controller {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        padding: env(safe-area-inset-top, 16px) 16px env(safe-area-inset-bottom, 16px);
+      }
+      #controller { display: none; }
+      #controller.inventory-open .joystick,
+      #controller.inventory-open .action.attack,
+      #controller.inventory-open .action.dash,
+      #controller.inventory-open .action.ability,
+      #controller.inventory-open .action.interact,
+      #controller.inventory-open .hint {
+        opacity: 0.18;
+        pointer-events: none;
+      }
+      h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.5px; }
+      .sub { color: #9aa6c0; font-size: 14px; margin-bottom: 6px; text-align: center; max-width: 320px; }
+      .lobby-card {
+        width: min(92vw, 420px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+      }
+      .codeinput {
+        width: 220px;
+        padding: 16px;
+        font-size: 32px;
+        text-align: center;
+        letter-spacing: 8px;
+        background: #1a2030;
+        color: #e0e6f3;
+        border: 2px solid #2a3550;
+        border-radius: 12px;
+        outline: none;
+        margin-bottom: 0;
+      }
+      .codeinput:focus { border-color: #6ad0ff; }
+      .join-options {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .btn {
+        background: linear-gradient(180deg, #3a83d0 0%, #2563b0 100%);
+        color: white;
+        padding: 14px 28px;
+        border-radius: 12px;
+        border: none;
+        font-size: 18px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        margin-top: 6px;
+      }
+      .btn.secondary {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.14);
+      }
+      .btn:disabled { opacity: 0.5; }
+      .install-tip {
+        color: #8e9bb8;
+        font-size: 12px;
+        line-height: 1.35;
+        text-align: center;
+        max-width: 360px;
+      }
+      .scan-panel {
+        position: relative;
+        display: none;
+        width: min(92vw, 380px);
+        margin-top: 10px;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(20, 28, 48, 0.9);
+        border: 1px solid rgba(255,255,255,0.12);
+      }
+      .scan-panel.open { display: block; }
+      .scan-viewport {
+        position: relative;
+        width: 100%;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #05070d;
+      }
+      .scan-panel video {
+        display: block;
+        width: 100%;
+        max-height: 220px;
+        background: #05070d;
+        object-fit: cover;
+      }
+      .scan-reticle {
+        position: absolute;
+        inset: 12% 18%;
+        border: 2px solid rgba(255,209,102,0.85);
+        border-radius: 12px;
+        box-shadow: 0 0 0 9999px rgba(0,0,0,0.35) inset;
+        pointer-events: none;
+      }
+      .scan-panel .scan-status {
+        min-height: 1.2em;
+        margin-top: 8px;
+        color: #9aa6c0;
+        font-size: 13px;
+        text-align: center;
+      }
+      .scan-close {
+        position: absolute;
+        top: 6px; right: 6px;
+        width: 32px; height: 32px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(8, 11, 18, 0.7);
+        color: #e0e6f3;
+        font-size: 20px; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: manipulation;
+        z-index: 2;
+      }
+      .scan-file-btn {
+        width: 100%;
+        margin-top: 8px;
+        padding: 9px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.08);
+        color: #e0e6f3;
+        font-weight: 700;
+        touch-action: manipulation;
+      }
+      .scan-file-input { display: none; }
+      .err { color: #ff8a8a; margin-top: 10px; font-size: 14px; min-height: 1.2em; text-align: center; }
+
+      /* Controller surface */
+      #controller .badge {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        left: calc(env(safe-area-inset-left, 0px) + 16px);
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: rgba(20, 28, 48, 0.85);
+        border: 1px solid rgba(255,255,255,0.12);
+        font-weight: 600;
+        font-size: 12px;
+        z-index: 5;
+      }
+      #controller .badge .p { color: var(--p1); }
+      #controller .status {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 12px);
+        right: calc(env(safe-area-inset-right, 0px) + 16px);
+        font-size: 12px; color: #8e9bb8;
+        z-index: 5;
+      }
+      .joystick {
+        position: absolute;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+        left: calc(env(safe-area-inset-left, 0px) + 18px);
+        width: 168px; height: 168px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.06);
+        border: 2px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        touch-action: none;
+      }
+      .joystick .knob {
+        position: absolute; top: 50%; left: 50%;
+        width: 70px; height: 70px;
+        border-radius: 50%;
+        margin: -35px 0 0 -35px;
+        background: radial-gradient(circle at 35% 35%, #ffffff 0%, #b8c4dd 70%);
+        box-shadow: 0 6px 14px rgba(0,0,0,0.45);
+        pointer-events: none;
+      }
+      /* Diablo-Immortal-inspired diamond cluster:
+         attack at bottom-right, dash above attack, ability to the left of attack,
+         interact appears above ability when contextual. Each button is positioned
+         absolutely so layout never breaks at unusual aspect ratios. */
+      .action {
+        position: absolute;
+        border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.18);
+        background: linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 100%);
+        color: #fff;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: none;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        z-index: 3;
+      }
+      .action.attack {
+        right: calc(env(safe-area-inset-right, 0px) + 18px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+        width: 92px; height: 92px;
+        background: linear-gradient(180deg, rgba(255,138,138,0.55) 0%, rgba(220,80,80,0.4) 100%);
+        border-color: rgba(255,138,138,0.6);
+      }
+      .action.dash {
+        right: calc(env(safe-area-inset-right, 0px) + 26px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 124px);
+        width: 76px; height: 76px;
+        font-size: 26px;
+        background: linear-gradient(180deg, rgba(106,208,255,0.55) 0%, rgba(60,148,200,0.4) 100%);
+        border-color: rgba(106,208,255,0.6);
+      }
+      .action.ability {
+        right: calc(env(safe-area-inset-right, 0px) + 122px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 28px);
+        width: 84px; height: 84px;
+        font-size: 30px;
+        background: linear-gradient(180deg, rgba(173,138,255,0.55) 0%, rgba(126,86,212,0.4) 100%);
+        border-color: rgba(173,138,255,0.6);
+      }
+      .action.shop {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px; height: 56px;
+        font-size: 26px;
+        background: linear-gradient(180deg, rgba(255,209,102,0.6) 0%, rgba(212,160,42,0.45) 100%);
+        border-color: rgba(255,209,102,0.7);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      }
+      .action.shop.inventory-alert {
+        box-shadow: 0 0 18px rgba(255,209,102,0.65), 0 4px 12px rgba(0,0,0,0.4);
+      }
+      .action.ability.empty { opacity: 0.35; filter: grayscale(0.6); }
+      .action.ability.cooling { opacity: 0.7; }
+      .action.ability .ab-cd-text {
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px; font-weight: 800;
+        text-shadow: 0 1px 3px #000;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+      }
+      .action.ability .ab-cd-svg circle {
+        fill: none;
+        stroke: rgba(0,0,0,0.55);
+        stroke-width: 6;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+        transition: stroke-dashoffset 0.05s linear;
+      }
+      .action.interact {
+        position: absolute;
+        right: calc(env(safe-area-inset-right, 0px) + 130px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 124px);
+        width: 74px; height: 74px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,209,102,0.85);
+        background: linear-gradient(180deg, rgba(255,221,138,0.85) 0%, rgba(218,166,52,0.7) 100%);
+        color: #1a1206;
+        font-size: 28px;
+        font-weight: 800;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45);
+        animation: pulseInteract 1.2s ease-in-out infinite;
+        touch-action: none;
+        z-index: 4;
+      }
+      .action.interact.show { display: flex; }
+      .action.interact.pressed { transform: scale(0.9); filter: brightness(1.3); }
+      .action.interact .label {
+        position: absolute;
+        right: 100%;
+        top: 50%;
+        transform: translate(-10px, -50%);
+        white-space: nowrap;
+        background: rgba(20, 28, 48, 0.92);
+        color: #e0e6f3;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(255,209,102,0.5);
+        pointer-events: none;
+      }
+      @keyframes pulseInteract {
+        0%, 100% { box-shadow: 0 0 18px rgba(255,209,102,0.55), 0 4px 12px rgba(0,0,0,0.45); }
+        50% { box-shadow: 0 0 28px rgba(255,209,102,0.85), 0 4px 16px rgba(0,0,0,0.45); }
+      }
+      .item-bar {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 76px);
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        max-width: min(68vw, 420px);
+        max-height: calc(100dvh - 188px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        overflow: hidden;
+        justify-content: center;
+        pointer-events: auto;
+        align-content: flex-start;
+        z-index: 2;
+      }
+      .item-bar .item-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 34px; height: 32px;
+        padding: 0 7px;
+        background: rgba(20, 28, 48, 0.92);
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 8px;
+        font-size: 17px;
+        gap: 3px;
+        color: #e0e6f3;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.28);
+        touch-action: manipulation;
+      }
+      .item-bar .item-icon.more {
+        min-width: 46px;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        color: #ffd166;
+      }
+      .item-bar .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.45); }
+      .item-bar .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.55); }
+      .item-bar .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.7); }
+      .item-bar .item-icon .count { font-size: 12px; color: #cbd5ee; opacity: 0.92; font-weight: 800; }
+      .action.pressed { transform: scale(0.92); filter: brightness(1.4); }
+      .hint {
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -20%);
+        text-align: center; color: #6e7a96; font-size: 13px;
+        max-width: 280px; pointer-events: none;
+      }
+      .stats {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 42px);
+        left: calc(env(safe-area-inset-left, 0px) + 16px);
+        display: flex; gap: 12px; align-items: center;
+        font-size: 12px; color: #c0cce8;
+        background: rgba(20, 28, 48, 0.85);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 999px;
+        padding: 4px 12px;
+        z-index: 5;
+      }
+      .stats .gold { color: #ffd166; font-weight: 700; }
+      .stats .hp { color: #ff8a8a; font-weight: 700; }
+      .stats .dmg { color: #ffe28a; }
+      .shop-overlay {
+        position: fixed; inset: 0;
+        height: 100dvh;
+        max-height: 100dvh;
+        background: rgba(8, 11, 18, 0.96);
+        z-index: 50;
+        display: none;
+        flex-direction: column;
+        padding: 0;
+        touch-action: pan-y;
+      }
+      .shop-overlay.open { display: flex; }
+      .shop-overlay .top {
+        flex: 0 0 auto;
+        min-height: 44px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        padding: calc(env(safe-area-inset-top, 0px) + 6px)
+                 calc(env(safe-area-inset-right, 0px) + 16px)
+                 6px
+                 calc(env(safe-area-inset-left, 0px) + 16px);
+        gap: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        background: rgba(8, 11, 18, 0.96);
+      }
+      .shop-overlay h2 { display: none; }
+      .shop-stats {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .shop-stats .hp { color: #ff8a8a; }
+      .shop-overlay .gold { color: #ffd166; font-weight: 800; }
+      .shop-overlay .close-btn {
+        background: rgba(255,255,255,0.08);
+        color: #e0e6f3; padding: 7px 12px; border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 10px; font-size: 13px;
+        touch-action: manipulation;
+      }
+      #shopList {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 8px
+                 calc(env(safe-area-inset-right, 0px) + 12px)
+                 calc(env(safe-area-inset-bottom, 0px) + 16px)
+                 calc(env(safe-area-inset-left, 0px) + 12px);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        align-content: start;
+        -webkit-overflow-scrolling: touch;
+      }
+      #shopList, #inventoryBody { touch-action: pan-y; }
+      #shopList .upg-row, #shopList .inv-row, #shopList button,
+      #inventoryBody .inv-row, #inventoryBody button { touch-action: manipulation; }
+      #shopList #shopInventory {
+        grid-column: 1 / -1;
+      }
+      @media (max-width: 480px) {
+        #shopList { grid-template-columns: 1fr; }
+      }
+      .upg-row {
+        display: grid; grid-template-columns: 1fr auto;
+        gap: 8px; align-items: center;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px; padding: 7px 9px;
+        min-height: 56px;
+      }
+      .upg-row.locked { opacity: 0.45; }
+      .upg-row .name { font-weight: 700; font-size: 13px; }
+      .upg-row .desc { color: #8a96b6; font-size: 11px; margin-top: 2px; line-height: 1.25; }
+      .upg-row .lvl { color: #6ad0ff; font-weight: 600; font-size: 11px; }
+      .upg-row .price-btn {
+        background: linear-gradient(180deg, #d4a02a 0%, #a87a17 100%);
+        color: #1a1206; font-weight: 800;
+        border: none; border-radius: 10px;
+        padding: 7px 9px; font-size: 13px;
+        min-width: 62px; text-align: center;
+        touch-action: manipulation;
+      }
+      .upg-row.locked .price-btn { background: #2a3142; color: #6e7a96; }
+      .inventory-drawer {
+        position: absolute;
+        left: 50%;
+        top: calc(env(safe-area-inset-top, 0px) + 68px);
+        width: min(520px, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 20px));
+        max-height: calc(100dvh - 88px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        display: none;
+        flex-direction: column;
+        z-index: 12;
+        overflow: hidden;
+        background: rgba(9, 12, 20, 0.96);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 18px;
+        box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+      }
+      .inventory-drawer.open { display: flex; }
+      .inventory-top {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; padding: 10px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+      }
+      .inventory-title { font-size: 14px; font-weight: 800; letter-spacing: 0.2px; }
+      .inventory-close {
+        background: rgba(255,255,255,0.08); color: #e0e6f3;
+        border: 1px solid rgba(255,255,255,0.16); border-radius: 10px;
+        padding: 6px 10px; font-size: 13px; touch-action: manipulation;
+      }
+      #inventoryBody {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 10px 12px 12px;
+        touch-action: pan-y;
+      }
+      #shopInventory { padding: 4px 0 16px; }
+      #shopInventory .shop-items-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+      }
+      #shopInventory .shop-items-grid .inv-row {
+        margin: 0;
+        min-width: 0;
+        padding: 6px 7px;
+      }
+      #shopInventory .shop-items-grid .inv-row.open {
+        grid-column: 1 / -1;
+      }
+      #shopInventory .shop-items-grid .inv-row .inv-name {
+        gap: 6px;
+      }
+      #shopInventory .shop-items-grid .inv-row .inv-name > span:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .inv-header { font-size: 11px; opacity: 0.58; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 6px; }
+      .inv-row { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; margin: 5px 0; font-size: 12px; line-height: 1.35; cursor: pointer; user-select: none; touch-action: manipulation; }
+      .inv-row:active { background: rgba(255,255,255,0.08); }
+      .inv-row .inv-name { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 700; }
+      .inv-count { color: #cbd5ee; font-weight: 800; }
+      .detail-modal {
+        position: fixed; inset: 0;
+        display: none;
+        align-items: center; justify-content: center;
+        background: rgba(8, 11, 18, 0.55);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        z-index: 200;
+        padding: 20px;
+        touch-action: manipulation;
+      }
+      .detail-modal.open { display: flex; }
+      .detail-card {
+        position: relative;
+        background: rgba(20, 28, 48, 0.96);
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 18px;
+        padding: 28px 22px 22px;
+        width: min(360px, 92vw);
+        max-height: calc(100dvh - 40px);
+        overflow-y: auto;
+        text-align: center;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+        -webkit-overflow-scrolling: touch;
+      }
+      .detail-card[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 18px rgba(102,217,122,0.35), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-card[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 18px rgba(106,166,255,0.4), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-card[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 22px rgba(255,184,77,0.5), 0 24px 64px rgba(0,0,0,0.6); }
+      .detail-close {
+        position: absolute; top: 8px; right: 8px;
+        width: 36px; height: 36px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.06);
+        color: #e0e6f3;
+        font-size: 22px; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+        touch-action: manipulation;
+        cursor: pointer;
+      }
+      .detail-icon {
+        font-size: 56px;
+        line-height: 1.1;
+        margin: 4px 0 2px;
+        filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
+      }
+      .detail-name { font-size: 18px; font-weight: 800; margin-top: 6px; word-break: break-word; }
+      .detail-meta {
+        font-size: 11px;
+        color: #8a96b6;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        margin-top: 4px;
+        font-weight: 700;
+      }
+      .detail-card[data-rar="uncommon"] .detail-meta { color: #66d97a; }
+      .detail-card[data-rar="rare"] .detail-meta { color: #6aa6ff; }
+      .detail-card[data-rar="legendary"] .detail-meta { color: #ffb84d; }
+      .detail-desc {
+        font-size: 14px;
+        color: #cbd5ee;
+        line-height: 1.5;
+        margin-top: 14px;
+        text-align: left;
+      }
+      .detail-count {
+        display: inline-block;
+        margin-top: 10px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.14);
+        font-size: 12px;
+        font-weight: 800;
+        color: #cbd5ee;
+      }
+      :root { --p1: #6ad0ff; --p2: #ff8a8a; }
+      #controller.p1 .badge .p { color: var(--p1); }
+      #controller.p2 .badge .p { color: var(--p2); }
+      @media (orientation: landscape) and (max-height: 430px) {
+        #lobby { padding: 10px 16px; }
+        .lobby-card {
+          max-height: calc(100dvh - 20px);
+          display: grid;
+          grid-template-columns: minmax(140px, 0.9fr) minmax(280px, 1.2fr);
+          grid-template-areas:
+            "title code"
+            "sub controls"
+            "tip scan";
+          column-gap: 18px;
+          row-gap: 8px;
+          justify-items: center;
+          align-content: center;
+        }
+        .lobby-card h1 { grid-area: title; margin: 0; font-size: 24px; }
+        .lobby-card .sub { grid-area: sub; margin: 0; font-size: 13px; }
+        .lobby-card .codeinput { grid-area: code; padding: 10px; font-size: 28px; }
+        .lobby-card .join-options { grid-area: controls; margin: 0; }
+        .lobby-card .install-tip { grid-area: tip; font-size: 11px; }
+        .lobby-card .scan-panel { grid-area: scan; margin: 0; max-width: 320px; padding: 8px; }
+        .scan-panel video { max-height: 150px; }
+        .btn { padding: 10px 18px; font-size: 15px; }
+        #controller .badge { top: calc(env(safe-area-inset-top, 0px) + 8px); left: calc(env(safe-area-inset-left, 0px) + 10px); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #controller .status { top: calc(env(safe-area-inset-top, 0px) + 8px); right: calc(env(safe-area-inset-right, 0px) + 10px); }
+        .stats { top: calc(env(safe-area-inset-top, 0px) + 36px); left: calc(env(safe-area-inset-left, 0px) + 10px); gap: 8px; padding: 4px 9px; }
+        .joystick { width: 142px; height: 142px; left: calc(env(safe-area-inset-left, 0px) + 12px); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+        .joystick .knob { width: 60px; height: 60px; margin: -30px 0 0 -30px; }
+        .action.attack { width: 80px; height: 80px; right: calc(env(safe-area-inset-right, 0px) + 12px); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+        .action.dash { width: 64px; height: 64px; right: calc(env(safe-area-inset-right, 0px) + 20px); bottom: calc(env(safe-area-inset-bottom, 0px) + 98px); }
+        .action.ability { width: 70px; height: 70px; right: calc(env(safe-area-inset-right, 0px) + 98px); bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); }
+        .action.interact { width: 62px; height: 62px; right: calc(env(safe-area-inset-right, 0px) + 104px); bottom: calc(env(safe-area-inset-bottom, 0px) + 98px); }
+        .action.shop { top: calc(env(safe-area-inset-top, 0px) + 6px); width: 52px; height: 52px; }
+        .item-bar { top: calc(env(safe-area-inset-top, 0px) + 64px); max-width: calc(100vw - 352px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); max-height: calc(100dvh - 132px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+        .item-bar .item-icon { min-width: 31px; height: 29px; font-size: 16px; padding: 0 6px; }
+        .hint { font-size: 12px; max-width: 220px; }
+        .inventory-drawer { top: calc(env(safe-area-inset-top, 0px) + 62px); width: min(480px, calc(100vw - 190px)); max-height: calc(100dvh - 74px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+        .shop-overlay .top {
+          min-height: 36px;
+          padding-top: calc(env(safe-area-inset-top, 0px) + 4px);
+          padding-bottom: 4px;
+        }
+        .shop-stats { font-size: 13px; gap: 8px; }
+        .shop-overlay .close-btn { padding: 5px 10px; }
+        #shopList {
+          grid-template-columns: 1fr 1fr;
+          gap: 6px;
+          padding-top: 6px;
+          padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+        }
+        .upg-row {
+          min-height: 48px;
+          padding: 5px 7px;
+          gap: 6px;
+        }
+        .upg-row .name { font-size: 12px; }
+        .upg-row .desc { font-size: 10px; line-height: 1.15; }
+        .upg-row .price-btn { min-width: 56px; padding: 6px 7px; font-size: 12px; }
+        #shopInventory .inv-header { margin: 5px 0 4px; }
+        #shopInventory .inv-row { margin: 3px 0; padding: 6px 8px; line-height: 1.2; }
+        #shopInventory .shop-items-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+        #shopInventory .shop-items-grid .inv-row { margin: 0; padding: 5px 6px; font-size: 11px; }
+      }
+
+      /* ----- Layout edit mode -------------------------------------------------
+         The pencil button toggles a mode where every touch control becomes
+         draggable / resizable. Layout is persisted in localStorage so the
+         player only customizes once. While in edit mode, gameplay handlers
+         are suspended and the controls show a dashed outline plus a label.
+      */
+      .layout-edit-btn {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 8px);
+        right: calc(50% - 84px);
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        border: 1px solid rgba(255,255,255,0.25);
+        background: rgba(20, 28, 48, 0.85);
+        color: #cbd5ee;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 16px; line-height: 1;
+        z-index: 5;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #controller.editing .layout-edit-btn {
+        background: rgba(255,209,102,0.85);
+        border-color: rgba(255,209,102,1);
+        color: #1a1f2c;
+      }
+      .layout-toolbar {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: rgba(15, 22, 38, 0.94);
+        border: 1px solid rgba(255,209,102,0.45);
+        border-radius: 14px;
+        z-index: 6;
+        max-width: calc(100vw - 24px);
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      #controller.editing .layout-toolbar { display: flex; }
+      .layout-toolbar .lt-row { display: flex; align-items: center; gap: 6px; }
+      .layout-toolbar .sel-name { font-weight: 800; font-size: 13px; color: #ffd166; min-width: 90px; text-align: center; }
+      .layout-toolbar button {
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.2);
+        background: rgba(255,255,255,0.08);
+        color: #e0e6f3;
+        font-weight: 700; font-size: 12px;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .layout-toolbar button.primary { background: rgba(122,255,138,0.85); color: #0b1320; border-color: transparent; }
+      .layout-toolbar button.danger { background: rgba(255,118,118,0.7); color: #fff; border-color: transparent; }
+      .layout-toolbar .step { width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1; }
+      .layout-toolbar .hint-row { font-size: 11px; color: #9aa6c0; flex-basis: 100%; text-align: center; }
+
+      #controller.editing .joystick,
+      #controller.editing .action {
+        outline: 2px dashed rgba(255,209,102,0.65);
+        outline-offset: 3px;
+      }
+      #controller.editing .action.interact { display: flex !important; opacity: 0.85; }
+      #controller.editing .action.ability.empty { opacity: 0.7; filter: none; }
+      #controller.editing [data-edit-selected="true"] {
+        outline: 3px solid #ffd166 !important;
+        outline-offset: 3px;
+      }
+      #controller.editing .layout-edit-label {
+        position: absolute;
+        left: 50%;
+        bottom: 100%;
+        transform: translate(-50%, -4px);
+        padding: 2px 7px;
+        font-size: 10px;
+        font-weight: 800;
+        line-height: 1;
+        white-space: nowrap;
+        background: rgba(15, 22, 38, 0.92);
+        color: #ffd166;
+        border-radius: 6px;
+        pointer-events: none;
+      }
+      #controller:not(.editing) .layout-edit-label { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="lobby">
+      <div class="lobby-card">
+        <h1>Twin Hearts</h1>
+        <div class="sub">Отсканируй QR с экрана хоста или введи 4 цифры вручную.</div>
+        <input id="code" class="codeinput" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="1234" />
+        <div class="join-options">
+          <button id="join" class="btn">Подключиться</button>
+          <button id="scanQr" class="btn secondary" type="button">Сканировать QR</button>
+        </div>
+        <div class="install-tip">Для fullscreen на iPhone: открой эту страницу в Safari → Поделиться → На экран «Домой».</div>
+        <div id="scanPanel" class="scan-panel" aria-hidden="true">
+          <button id="scanClose" class="scan-close" type="button" aria-label="Закрыть сканер">×</button>
+          <div class="scan-viewport">
+            <video id="scanVideo" playsinline muted></video>
+            <div class="scan-reticle" aria-hidden="true"></div>
+          </div>
+          <button id="scanFileBtn" class="scan-file-btn" type="button">Загрузить фото QR</button>
+          <input id="scanFile" class="scan-file-input" type="file" accept="image/*" />
+          <div id="scanStatus" class="scan-status">Наведи камеру на QR-код комнаты.</div>
+        </div>
+      </div>
+      <div id="err" class="err"></div>
+    </div>
+
+    <div id="controller">
+      <div class="badge">Игрок <span class="p">?</span> · комната <span id="roomcode">····</span></div>
+      <div class="status" id="status">Жди старта игры…</div>
+      <div class="stats">
+        <span class="hp"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21C5 15 4 9 8 7c2-1 4 1 4 3 0-2 2-4 4-3 4 2 3 8-4 14z"/></svg> <span id="stHp">100</span>/<span id="stMaxHp">100</span></span>
+        <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="stGold">0</span></span>
+        <span class="dmg"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4L9 15"/><path d="M5 19l-2-2 4-4 4 4-4 4z"/><path d="M8 16l4 4"/></svg> <span id="stDmg">0</span></span>
+      </div>
+      <div class="joystick" id="stick"><div class="knob" id="knob"></div></div>
+      <div class="item-bar" id="itemBar"></div>
+      <div class="inventory-drawer" id="inventoryDrawer" aria-hidden="true">
+        <div class="inventory-top">
+          <div class="inventory-title">Инвентарь</div>
+          <button class="inventory-close" id="inventoryClose" type="button">Закрыть</button>
+        </div>
+        <div id="inventoryBody"></div>
+      </div>
+      <div class="action attack" id="btnAttack"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4L9 15"/><path d="M5 19l-2-2 4-4 4 4-4 4z"/><path d="M8 16l4 4"/></svg></div>
+      <div class="action dash" id="btnDash">⇢</div>
+      <div class="action ability empty" id="btnAbility">
+        <span class="ab-icon">·</span>
+        <svg class="ab-cd-svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="0"/></svg>
+        <span class="ab-cd-text"></span>
+      </div>
+      <div class="action shop" id="btnShop" aria-label="Магазин" title="Магазин">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg>
+      </div>
+      <div class="action interact" id="btnInteract">
+        <span class="label" id="interactLabel">Взять</span>
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11V6a1.5 1.5 0 0 1 3 0v5"/><path d="M10 11V4a1.5 1.5 0 0 1 3 0v7"/><path d="M13 11V5a1.5 1.5 0 0 1 3 0v6"/><path d="M16 11V7a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-2a7 7 0 0 1-7-7v-3l3 1"/></svg>
+      </div>
+      <div class="hint" id="hint">Стик — движение · удар · рывок · способность · магазин</div>
+
+      <button class="layout-edit-btn" id="layoutEditBtn" type="button" aria-label="Настроить расположение кнопок" title="Настроить расположение кнопок">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4l6 6-11 11H3v-6z"/><path d="M14 4l3-3 3 3-3 3z"/></svg>
+      </button>
+
+      <div class="layout-toolbar" id="layoutToolbar" aria-hidden="true">
+        <div class="lt-row">
+          <button id="layoutPrev" class="step" type="button" aria-label="Предыдущая">‹</button>
+          <span class="sel-name" id="layoutSelName">Кнопка</span>
+          <button id="layoutNext" class="step" type="button" aria-label="Следующая">›</button>
+        </div>
+        <div class="lt-row">
+          <button id="layoutShrink" class="step" type="button" aria-label="Уменьшить">−</button>
+          <button id="layoutGrow" class="step" type="button" aria-label="Увеличить">+</button>
+        </div>
+        <div class="lt-row">
+          <button id="layoutReset" class="danger" type="button">Сброс</button>
+          <button id="layoutSave" class="primary" type="button">Готово</button>
+        </div>
+        <div class="hint-row">Перетаскивай кнопки пальцем. − / + меняет размер.</div>
+      </div>
+
+      <div class="shop-overlay" id="shopOverlay">
+        <div class="top">
+          <h2>Магазин</h2>
+          <div class="shop-stats">
+            <span class="hp"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21C5 15 4 9 8 7c2-1 4 1 4 3 0-2 2-4 4-3 4 2 3 8-4 14z"/></svg> <span id="shopHp">100</span>/<span id="shopMaxHp">100</span></span>
+            <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shopGold">0</span></span>
+          </div>
+          <button class="close-btn" id="shopClose">Закрыть</button>
+        </div>
+        <div id="shopList"></div>
+      </div>
+
+      <div class="detail-modal" id="detailModal" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="detail-card" id="detailCard">
+          <button class="detail-close" id="detailClose" type="button" aria-label="Закрыть">×</button>
+          <div class="detail-icon" id="detailIcon"></div>
+          <div class="detail-name" id="detailName"></div>
+          <div class="detail-meta" id="detailMeta"></div>
+          <div class="detail-count" id="detailCount" style="display:none;"></div>
+          <div class="detail-desc" id="detailDesc"></div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/controller.js"></script>
+  </body>
+</html>
