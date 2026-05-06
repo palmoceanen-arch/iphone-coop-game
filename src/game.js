@@ -749,9 +749,15 @@ export class Game {
 
   // Rebuild a single fence's mesh with the current neighbour connection
   // mask. Detaches the old group from the chunk, builds a fresh one,
-  // re-parents at the same world position. Fence mesh is 4-way symmetric
-  // so yaw doesn't change the silhouette, but we still preserve the
-  // descriptor's yaw for consistency with non-symmetric kinds.
+  // re-parents at the same world position. The fence mesh is 4-way
+  // symmetric and its arms are placed in world cardinal directions
+  // (N/S/E/W) — so we MUST NOT apply struct.yaw here. If we did, a
+  // fence placed with yaw=π/2 would have its "N arm" rotated to face
+  // East after the group rotation, and the actual world-North
+  // neighbour would receive no arm at all (visible as a fence with a
+  // rail jutting into empty space). The descriptor's yaw is still
+  // kept for save-format consistency with non-symmetric kinds; it's
+  // just not honoured visually for fences.
   _rebuildFenceMesh(struct) {
     if (!struct || struct.kind !== 'fence' || !struct.alive || !struct.group) return;
     const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
@@ -759,7 +765,7 @@ export class Game {
     if (old && old.parent) old.parent.remove(old);
     const next = buildFenceMesh(conns);
     next.position.set(struct.pos.x, 0, struct.pos.z);
-    next.rotation.y = struct.yaw || 0;
+    next.rotation.y = 0;
     struct.group.add(next);
     struct.mesh = next;
     struct._restRotZ = next.rotation.z;
