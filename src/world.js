@@ -15,6 +15,217 @@ const SUN_PEAK    = 1.6;
 const SUN_HORIZON = 0.18;
 const SUN_FLOOR   = 0.005;
 
+// Cel-shaded water shader. Cheap (no displacement, no extra geometry,
+// no render targets): a single ShaderMaterial driven by a `uTime`
+// uniform. The fragment shader runs a 2D Voronoi over world XZ to get
+// a stationary network of irregular cells; the BORDERS between cells
+// are drawn as thin light-teal outlines (so the lake reads as a
+// connected web of bright lines on a base teal fill, like the
+// stylised 2D-water reference). Cells are flat-filled in two close
+// teal tones — most cells stay 'shallow', a clustered subset selected
+// by low-frequency noise + per-cell hash flips to 'deep'. Both the
+// dark/light boundary and the bright outline ride the SAME Voronoi
+// cell edge, so the dark fill reads as the same noisy pattern as the
+// light lines, just filled in solid. Per-cell pulses still breathe
+// the bright line thickness so the network doesn't sit static. Only
+// one material exists per Game (cached in `world._waterMaterial`);
+// the per-chunk geometry just references it. `uTime` is advanced
+// once per frame from `World.update(dt)`.
+// Three quality buckets driven by the player's video settings:
+//   0 = low    — flat shallow fill + thin shoreline outline
+//   1 = medium — Voronoi network + shoreline, no animation, no dark patches
+//   2 = high   — full pattern as authored (animated breathing + dark patches)
+// The shader compiles each tier with #if WATER_QUALITY blocks so the unused
+// work is dropped at compile time, not branched at runtime.
+//
+// The water material is a MeshToonMaterial, NOT a raw ShaderMaterial. This
+// is what wires the water into the scene's lighting pipeline: ambient,
+// directional sun, hemisphere moon, and the shared TOON_GRADIENT 3-band
+// ramp all apply automatically — exactly as they do for the ground and
+// props. Our cellular pattern is injected via onBeforeCompile by replacing
+// the diffuseColor in <color_fragment>; everything after that (the toon
+// lighting passes) runs unchanged. Without this routing the water would
+// stay at full brightness through the night while every other surface
+// darkens under low sun + ambient.
+const WATER_PATTERN_FN_GLSL = /* glsl */`
+  // 2D hashes used to scatter Voronoi feature points + give each
+  // cell a stable scalar id (drives per-cell pulse phase).
+  float waterHash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  vec2 waterHash22(vec2 p) {
+    vec2 q = vec2(dot(p, vec2(127.1, 311.7)),
+                  dot(p, vec2(269.5, 183.3)));
+    return fract(sin(q) * 43758.5453);
+  }
+  // Voronoi over a 3×3 neighbourhood. Returns:
+  //   .xy = lattice coords of the nearest feature point's grid cell
+  //         (constant within a Voronoi cell — used to derive a stable
+  //         per-cell id and to sample low-freq noise at the cell)
+  //   .z  = distance to the nearest feature point
+  //   .w  = distance to the second-nearest feature point
+  // (.w - .z) is small near a cell border and large at cell centres,
+  // so we drive the bright outline width off it directly.
+  vec4 waterVoronoi(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float d1 = 8.0, d2 = 8.0;
+    vec2 nearest = vec2(0.0);
+    for (int yi = -1; yi <= 1; yi++) {
+      for (int xi = -1; xi <= 1; xi++) {
+        vec2 g = vec2(float(xi), float(yi));
+        vec2 o = waterHash22(i + g);
+        vec2 r = g + o - f;
+        float d = dot(r, r);
+        if (d < d1) { d2 = d1; d1 = d; nearest = i + g; }
+        else if (d < d2) { d2 = d; }
+      }
+    }
+    return vec4(nearest, sqrt(d1), sqrt(d2));
+  }
+  // 2D value noise used as a domain-warp source — bends the input
+  // to the Voronoi by a small noise field so cell borders curve
+  // organically instead of meeting at sharp polygonal seams.
+  float waterVnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = waterHash21(i);
+    float b = waterHash21(i + vec2(1.0, 0.0));
+    float c = waterHash21(i + vec2(0.0, 1.0));
+    float d = waterHash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+`;
+
+export function buildWaterMaterial(quality = 'high') {
+  const Q = quality === 'low' ? 0 : quality === 'medium' ? 1 : 2;
+  // White base colour: the pattern overrides diffuseColor.rgb wholesale
+  // in <color_fragment>, so the material's `color` doesn't actually tint
+  // the water. Keeping it at white avoids any chance of double-multiply
+  // confusion if a future edit only patches part of the chain.
+  const mat = new THREE.MeshToonMaterial({
+    color: 0xffffff,
+    gradientMap: TOON_GRADIENT,
+    transparent: true,
+  });
+  // The shoreline uses `fwidth(vShore)` which requires the standard
+  // derivatives extension on WebGL1. three.js auto-enables it for
+  // ShaderMaterial when the source contains fwidth, but for a
+  // MeshToonMaterial patched via onBeforeCompile we have to flag it
+  // explicitly so the program prelude inserts
+  // `#extension GL_OES_standard_derivatives : enable`.
+  mat.extensions = { ...(mat.extensions || {}), derivatives: true };
+  // Three close-tone teal steps with deliberately gentle contrast so the
+  // cellular network reads as a single body of water rather than three
+  // sharply tinted patches. 'Shallow' is the base cell fill, 'deep' is
+  // the flat fill of the clustered dark cells, 'highlight' is the bright
+  // cell border / shoreline outline. uTime is advanced once per frame
+  // from World.update.
+  mat.userData.waterUniforms = {
+    uTime:      { value: 0 },
+    uDeep:      { value: new THREE.Color(0x44afca) },
+    uShallow:   { value: new THREE.Color(0x48b1cb) },
+    uHighlight: { value: new THREE.Color(0x80b1c6) },
+  };
+  // Stash the active quality on userData so setWaterQuality (and the
+  // program cache key below) can read the current bucket without
+  // closing over a snapshot.
+  mat.userData.waterQ = Q;
+  mat.defines = { WATER_QUALITY: Q };
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.waterUniforms);
+    // ---- Vertex: forward world XZ and the per-vertex shoreDist ---------
+    // shoreDist is a custom attribute set by the marching-squares mesher
+    // (geometry.setAttribute('shoreDist', ...)). We expose vWorldXZ /
+    // vShore varyings to the fragment so the pattern can sample world
+    // space (chunk-independent) and the shoreline edge can use fwidth.
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+attribute float shoreDist;
+varying vec2 vWorldXZ;
+varying float vShore;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vec4 _waterWp = modelMatrix * vec4(transformed, 1.0);
+vWorldXZ = _waterWp.xz;
+vShore = shoreDist;`,
+      );
+    // ---- Fragment: declare uniforms + helpers, override diffuseColor ---
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uTime;
+uniform vec3 uDeep;
+uniform vec3 uShallow;
+uniform vec3 uHighlight;
+varying vec2 vWorldXZ;
+varying float vShore;
+${WATER_PATTERN_FN_GLSL}`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+vec3 _waterCol;
+#if WATER_QUALITY >= 1
+// Domain-warped Voronoi network — see WATER_PATTERN_FN_GLSL for the
+// individual helpers. The warp breaks integer-grid alignment so cell
+// seams curve organically.
+vec2 _waterWarp = vec2(
+  waterVnoise(vWorldXZ * 1.10 + 11.0),
+  waterVnoise(vWorldXZ * 1.10 + 41.7)
+) - 0.5;
+vec2 _waterP = (vWorldXZ + _waterWarp * 1.0) * 1.10;
+vec4 _waterV = waterVoronoi(_waterP);
+float _waterBorderDist = _waterV.w - _waterV.z;
+float _waterCellId = waterHash21(_waterV.xy + 0.13);
+#if WATER_QUALITY >= 2
+// Per-cell pulse phase so the network breathes asynchronously — wide
+// amplitude (0.020-0.155) and a ~4s period read clearly at a glance.
+float _waterPulse = 0.5 + 0.5 * sin(uTime * 1.55 + _waterCellId * 6.2832);
+float _waterThickness = 0.020 + 0.135 * _waterPulse;
+#else
+// Medium tier pins thickness at the time-averaged value so the visual
+// weight matches the high tier's mean.
+float _waterThickness = 0.020 + 0.135 * 0.5;
+#endif
+float _waterLine = 1.0 - smoothstep(0.0, _waterThickness, _waterBorderDist);
+#if WATER_QUALITY >= 2
+// Dark patches: same Voronoi noise sampled at 1/1.3 the frequency and
+// shifted so dark cell boundaries don't align with the bright network.
+vec2 _waterPBig = (vWorldXZ + _waterWarp * 1.0) * (1.10 / 1.3) + vec2(5.7, 9.3);
+vec4 _waterVBig = waterVoronoi(_waterPBig);
+float _waterDarkPick = waterHash21(_waterVBig.xy + 3.7);
+float _waterDarkAmt = smoothstep(0.59, 0.61, _waterDarkPick);
+_waterCol = mix(uShallow, uDeep, _waterDarkAmt);
+#else
+_waterCol = uShallow;
+#endif
+_waterCol = mix(_waterCol, uHighlight, _waterLine);
+#else
+// Low tier: flat shallow fill, skips both Voronoi voices entirely.
+_waterCol = uShallow;
+#endif
+// Shoreline outline kept on every tier — costs one fwidth + one
+// smoothstep and is the visual seam between water and shore.
+float _waterWShore = fwidth(vShore);
+float _waterShoreLine = 1.0 - smoothstep(0.0, max(_waterWShore * 2.0, 0.004), vShore);
+_waterCol = mix(_waterCol, uHighlight, _waterShoreLine);
+diffuseColor.rgb = _waterCol;`,
+      );
+  };
+  // Pin the program cache key to the quality tier so swapping tiers
+  // recompiles cleanly. Without this, three.js could share a compiled
+  // program across tiers and ignore the WATER_QUALITY change.
+  mat.customProgramCacheKey = () => `water-pattern-toon-q${mat.userData.waterQ}`;
+  return mat;
+}
+
 // Smooth bell centred on `centre` (in dayTime units), 1 at the peak and 0
 // outside ±halfWidth, with a cosine taper. dayTime wraps mod 1 so the bell
 // works near the 0/1 boundary too. Used to drive the sunset/sunrise tint
@@ -67,12 +278,17 @@ const SYNC_LOAD_RADIUS = 1;
 const CHUNKS_PER_FRAME = 1;
 
 // Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
-// (WATER_GRID+1) grid of corners, then build a marching-squares mesh:
-// where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
+// (WATER_GRID+1) grid of corners, then build a marching-squares mesh.
+// WATER_GRID = 32 gives 1 m cells — fine enough that the noise's highest
+// fbm octave (~12 m wavelength) is sampled at ~12 cells per cycle, so
+// isolated "all-corners-just-barely-dry" cells inside an otherwise wet
+// region show up as at most a 1 m square notch in the shoreline rather
+// than the much more visible 2 m notches the previous 16-cell grid left.
+// Where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
 // crossing point, giving smooth curved shorelines instead of axis-aligned
 // blocks. WATER_NOISE_FREQ scales the noise input so lakes form large
 // connected basins rather than tiny specks.
-export const WATER_GRID = 16;
+export const WATER_GRID = 32;
 export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
 export const WATER_THRESHOLD = 0.30;
 export const WATER_NOISE_FREQ = 0.45;
@@ -86,6 +302,20 @@ function chunkSeed(worldSeed, cx, cz) {
   h ^= h >>> 15; h = Math.imul(h, 0x846ca68b);
   h ^= h >>> 16;
   return h >>> 0;
+}
+
+// Point-in-triangle test for the marching-squares-driven water collision
+// path. Triangle vertices are passed as [x, z] pairs in world space. Uses
+// the standard half-plane sign test; treats edges as inside (any zero
+// half-plane is OK) so points landing exactly on a shared triangle edge
+// register as wet rather than slipping into a sub-pixel gap.
+function _ptInTri(px, pz, a, b, c) {
+  const d1 = (px - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (pz - b[1]);
+  const d2 = (px - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (pz - c[1]);
+  const d3 = (px - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (pz - a[1]);
+  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+  return !(hasNeg && hasPos);
 }
 
 // 2D value noise — deterministic, derived from world seed.
@@ -193,6 +423,11 @@ export class World {
     this._nightCol = new THREE.Color(0x070b15);
     this._sunsetCol = new THREE.Color(0xff9a55);
     this._tmpSkyCol = new THREE.Color();
+    // Water shader quality bucket: 'low' | 'medium' | 'high'. Driven by
+    // the player's video settings (settings.applyVideo →
+    // world.setWaterQuality). Held here so the lazy-built water material
+    // picks up the right tier on first use.
+    this._waterQuality = 'high';
     this._buildSky();
     this._buildLights();
     this._buildGround();
@@ -353,6 +588,12 @@ export class World {
       for (const s of persisted) {
         this.structureSpawns.push({
           x: s.x, z: s.z, kind: s.kind, yaw: s.yaw, hp: s.hp,
+          // Forward the saved farming snapshot (planter only). The drainer
+          // hands this to Crop.loadFromDescriptor() so a re-streamed chunk
+          // resumes a half-grown crop at exactly the stage / progress it
+          // left off — including post-harvest "harvested" state that
+          // hasn't yet been reset.
+          farm: s.farm || null,
           chunkKey: key,
           group: chunk.group,
           colliderArray: chunk.colliders,
@@ -502,6 +743,46 @@ export class World {
     }
   }
 
+  // Persist the M3 farming snapshot on a planter's descriptor so a chunk
+  // reload mid-grow (player walked away and back) preserves the in-progress
+  // crop. `farm` is the JSON-clean object produced by Crop.toDescriptor()
+  // — null wipes the slot. Lookup uses the same eps tolerance as
+  // forgetStructure so float drift in (x,z) doesn't drop the match.
+  updateStructureFarm(chunkKey, x, z, farm) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    for (const d of arr) {
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        if (farm) d.farm = farm;
+        else delete d.farm;
+        return;
+      }
+    }
+  }
+
+  // Persist a gate's open state on its descriptor so a chunk reload
+  // after the player walked away leaves it exactly as they last
+  // toggled it. `openDir` is 0 (closed) / +1 / -1 (open, with direction
+  // = which side the door swung toward). Storing as a number lets the
+  // gate remember which way it was open after a reload.
+  updateStructureOpen(chunkKey, x, z, openDir) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    const dir = openDir | 0;
+    for (const d of arr) {
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        if (dir !== 0) d.openDir = dir;
+        else delete d.openDir;
+        // Also clear any legacy boolean `open` written by the previous
+        // gate version so reload sees the new descriptor cleanly.
+        delete d.open;
+        return;
+      }
+    }
+  }
+
   // Recompute which chunks are active (visible) and which actively simulate
   // their enemies, based on the centroid of all alive players. Cheap: just
   // walks the existing chunks Map and toggles group.visible. Also unloads
@@ -607,9 +888,11 @@ export class World {
     // 2. Water — marching-squares lake mesh. Sample noise at corners of a
     // (WATER_GRID+1)² grid covering this chunk; build a smooth curved
     // shoreline by interpolating where the noise crosses WATER_THRESHOLD on
-    // each cell edge. The origin chunk stays water-free so the campfire /
-    // starting area is always usable on land.
-    const waterMesh = isOrigin ? null : this._buildSmoothWaterMesh(minX, minZ);
+    // each cell edge. The origin chunk also gets a mesh — `_waterMaskAt`
+    // applies a radial bias around (0, 0) so the campfire / starting area
+    // ends up dry naturally, and any lake that crosses into origin fades
+    // smoothly instead of being chopped off at the chunk boundary.
+    const waterMesh = this._buildSmoothWaterMesh(minX, minZ);
     if (waterMesh) {
       group.add(waterMesh);
       // The water BufferGeometry is uniquely allocated for this chunk
@@ -887,12 +1170,102 @@ export class World {
     };
   }
 
-  // True if the world position (x, z) is currently under water. Sampled
-  // directly from the same low-frequency noise used to build lake meshes,
-  // so the lookup is exact (no per-chunk cache needed) and continuous —
-  // fine for sliding the player along curved shores.
+  // True if the world position (x, z) is currently under water. Mirrors the
+  // marching-squares classification used by `_buildSmoothWaterMesh` exactly
+  // (same per-chunk skip, same per-cell corner test, same edge-crossing
+  // interpolation, same saddle disambiguation) so collision can never
+  // disagree with what the player sees. Without this the fbm noise has
+  // sub-cell variation the mesh's straight-line interpolation can't
+  // capture, producing visible holes (collision wet, mesh dry — player
+  // gets stuck on grass) and phantom water (mesh wet, collision dry —
+  // player walks on rendered water).
+  // Water-mask noise sample at world position (x, z). Two pieces:
+  // 1. Domain warping of the underlying value-fbm so the threshold contour
+  //    no longer aligns with the integer noise grid (without it the lake
+  //    shores show weak axis-alignment).
+  // 2. A radial "campfire clearing" bias near (0, 0) that pushes the noise
+  //    above threshold inside SPAWN_CLEAR_R so the spawn area is reliably
+  //    dry. We apply this in the mask itself (rather than skipping the
+  //    origin chunk's mesh entirely) so any lake that naturally extends
+  //    toward origin fades out smoothly through partial cells instead of
+  //    being chopped at the origin chunk's hard cell boundary — which
+  //    used to leave a hard 90° corner in the shoreline at x = ±32 / z = ±32.
+  _waterMaskAt(x, z) {
+    const f = WATER_NOISE_FREQ;
+    const wx = (this.noise(x * f + 11.7, z * f + 5.3) - 0.5);
+    const wz = (this.noise(x * f + 41.1, z * f + 27.9) - 0.5);
+    const A = 1.5;
+    let n = this.noise((x + wx * A) * f, (z + wz * A) * f);
+    // Spawn clearing — full bias at distance 0, fades smoothly to zero at
+    // SPAWN_CLEAR_R. Smoothstep keeps the radial fade C¹-continuous so the
+    // threshold contour stays a smooth curve where the bias trails off
+    // (a linear fade would introduce a small kink right at the radius).
+    // 0.5 is large enough to push any cell above the 0.30 threshold from
+    // any underlying noise value in [0, 1].
+    const SPAWN_CLEAR_R = 14;
+    const d = Math.hypot(x, z);
+    if (d < SPAWN_CLEAR_R) {
+      const t = 1 - d / SPAWN_CLEAR_R;
+      const ts = t * t * (3 - 2 * t);
+      n += ts * 0.5;
+    }
+    return n;
+  }
+
   isWaterAt(x, z) {
-    return this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ) < WATER_THRESHOLD;
+    const STEP = WATER_CELL;
+    const i = Math.floor(x / STEP);
+    const j = Math.floor(z / STEP);
+    const x0 = i * STEP, z0 = j * STEP;
+    const x1 = x0 + STEP, z1 = z0 + STEP;
+    const nBL = this._waterMaskAt(x0, z0);
+    const nTL = this._waterMaskAt(x0, z1);
+    const nTR = this._waterMaskAt(x1, z1);
+    const nBR = this._waterMaskAt(x1, z0);
+    const wBL = nBL < WATER_THRESHOLD;
+    const wTL = nTL < WATER_THRESHOLD;
+    const wTR = nTR < WATER_THRESHOLD;
+    const wBR = nBR < WATER_THRESHOLD;
+    const c = (wBL ? 1 : 0) | (wTL ? 2 : 0) | (wTR ? 4 : 0) | (wBR ? 8 : 0);
+    if (c === 0) return false;
+    if (c === 15) return true;
+    // Same CCW corner walk as the mesh builder — produces a 3- to 6-vert
+    // polygon whose interior is the wet portion of the cell.
+    const corners = [
+      { wet: wBL, x: x0, z: z0, n: nBL },
+      { wet: wTL, x: x0, z: z1, n: nTL },
+      { wet: wTR, x: x1, z: z1, n: nTR },
+      { wet: wBR, x: x1, z: z0, n: nBR },
+    ];
+    const poly = [];
+    for (let k = 0; k < 4; k++) {
+      const a = corners[k], b = corners[(k + 1) % 4];
+      if (a.wet) poly.push([a.x, a.z]);
+      if (a.wet !== b.wet) {
+        const t = (WATER_THRESHOLD - a.n) / (b.n - a.n);
+        poly.push([a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t]);
+      }
+    }
+    if ((c === 5 || c === 10) && poly.length === 6) {
+      const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
+      const centerWet = this._waterMaskAt(cxw, czw) < WATER_THRESHOLD;
+      if (!centerWet) {
+        // Two disjoint corner triangles — same indexing as the mesh.
+        if (c === 5) {
+          return _ptInTri(x, z, poly[0], poly[1], poly[5])
+              || _ptInTri(x, z, poly[3], poly[4], poly[2]);
+        }
+        return _ptInTri(x, z, poly[1], poly[2], poly[0])
+            || _ptInTri(x, z, poly[4], poly[5], poly[3]);
+      }
+    }
+    if (poly.length < 3) return false;
+    // Fan-triangulate from poly[0] — matches the mesh's fan emission, so
+    // any point covered by a mesh triangle is reported as wet here too.
+    for (let k = 1; k < poly.length - 1; k++) {
+      if (_ptInTri(x, z, poly[0], poly[k], poly[k + 1])) return true;
+    }
+    return false;
   }
 
   // Build a smooth-shoreline lake mesh for a single chunk via marching
@@ -909,15 +1282,30 @@ export class World {
       for (let i = 0; i <= G; i++) {
         const wx = minX + i * STEP;
         const wz = minZ + j * STEP;
-        N[j * (G + 1) + i] = this.noise(wx * WATER_NOISE_FREQ, wz * WATER_NOISE_FREQ);
+        N[j * (G + 1) + i] = this._waterMaskAt(wx, wz);
       }
     }
 
     const positions = [];
     const indices = [];
+    // Per-vertex 'shore distance' — sampled from the same noise field
+    // that defines the water mask. 0 = right on the shoreline (where
+    // the noise crosses WATER_THRESHOLD), 1 = the deepest part of
+    // the lake. Drives the matching shoreline outline in the water
+    // shader so the lake silhouette is rimmed in the same colour as
+    // the cell borders.
+    const shoreDists = [];
     let nextIdx = 0;
+    const sampleShoreDist = (x, z) => {
+      // Use the same domain-warped mask as the corner classifier so the
+      // per-vertex shoreline outline lines up with the actual mesh edge.
+      const n = this._waterMaskAt(x, z);
+      const d = (WATER_THRESHOLD - n) / WATER_THRESHOLD;
+      return d > 0 ? d : 0;
+    };
     const pushVert = (x, z) => {
       positions.push(x, 0.04, z);
+      shoreDists.push(sampleShoreDist(x, z));
       return nextIdx++;
     };
     const pushTri = (a, b, c) => {
@@ -976,7 +1364,7 @@ export class World {
         // separately to avoid bridging across the dry middle).
         if ((c === 5 || c === 10) && poly.length === 6) {
           const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
-          const nC = this.noise(cxw * WATER_NOISE_FREQ, czw * WATER_NOISE_FREQ);
+          const nC = this._waterMaskAt(cxw, czw);
           const centerWet = nC < WATER_THRESHOLD;
           if (!centerWet) {
             const baseIdx = nextIdx;
@@ -1007,16 +1395,10 @@ export class World {
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setAttribute('shoreDist', new THREE.BufferAttribute(new Float32Array(shoreDists), 1));
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
-    if (!this._waterMaterial) {
-      this._waterMaterial = new THREE.MeshToonMaterial({
-        color: 0x3a86ff,
-        gradientMap: TOON_GRADIENT,
-        transparent: true,
-        opacity: 0.88,
-      });
-    }
+    if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial(this._waterQuality);
     const mesh = new THREE.Mesh(geo, this._waterMaterial);
     mesh.receiveShadow = true;
     return mesh;
@@ -1070,7 +1452,40 @@ export class World {
 
   isNight() { return this.dayTime < SUNRISE || this.dayTime >= SUNSET; }
 
+  // Switch the water shader's quality bucket. Called by Settings.applyVideo
+  // whenever the player picks a different water tier in the pause menu. If
+  // the material has already been built, we patch its `defines` and force a
+  // recompile; otherwise the new value is just stored and picked up on the
+  // first lazy build inside `_buildSmoothWaterMesh`.
+  setWaterQuality(quality) {
+    const q = quality === 'low' || quality === 'medium' || quality === 'high'
+      ? quality
+      : 'high';
+    if (this._waterQuality === q) return;
+    this._waterQuality = q;
+    if (this._waterMaterial) {
+      const Q = q === 'low' ? 0 : q === 'medium' ? 1 : 2;
+      this._waterMaterial.userData.waterQ = Q;
+      this._waterMaterial.defines = { ...this._waterMaterial.defines, WATER_QUALITY: Q };
+      // needsUpdate=true forces three.js to recompile the program; the
+      // customProgramCacheKey above keys on userData.waterQ so the new
+      // tier picks up its own compiled program rather than reusing the
+      // previous tier's.
+      this._waterMaterial.needsUpdate = true;
+    }
+  }
+
   update(dt) {
+    // Advance the water shader's time uniform — drives the per-cell
+    // breathing pulse on the high tier. Always runs (even while the day
+    // cycle is paused) so water keeps moving in menus. The water rides
+    // on MeshToonMaterial via onBeforeCompile, and our custom uniforms
+    // are stashed on userData; the shader.uniforms object holds the
+    // same reference, so mutating .value here propagates straight
+    // through on the GPU side.
+    if (this._waterMaterial && this._waterMaterial.userData.waterUniforms) {
+      this._waterMaterial.userData.waterUniforms.uTime.value += dt;
+    }
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
@@ -1183,8 +1598,12 @@ export class World {
   }
 
   // No map-edge wall — only resolve overlap with active-chunk prop colliders.
+  // Colliders flagged `disabled` (currently used by open gates) are skipped
+  // entirely so the player can walk through the cell without being pushed
+  // out by an oversized radial response.
   resolveCollisions(pos, radius) {
     for (const c of this.colliders) {
+      if (c.disabled) continue;
       const dx = pos.x - c.x, dz = pos.z - c.z;
       const d2 = dx * dx + dz * dz;
       const r = c.r + radius;
@@ -1199,6 +1618,7 @@ export class World {
 
   isClear(x, z, radius) {
     for (const c of this.colliders) {
+      if (c.disabled) continue;
       const dx = x - c.x, dz = z - c.z;
       const r = c.r + radius;
       if (dx * dx + dz * dz < r * r) return false;

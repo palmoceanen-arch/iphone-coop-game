@@ -1,34 +1,43 @@
-Bundled audio assets — Creative Commons Zero (CC0 1.0 Universal)
-================================================================
+Bundled audio assets — all under Creative Commons Zero (CC0 1.0 Universal)
+=========================================================================
 
-All `.ogg` files in this folder are sourced from the following CC0
-sound packs by Kenney Vleugels (kenney.nl). They are released into the
-public domain — free to use in personal and commercial projects with
-no attribution required, though credit is always appreciated.
+Every `.ogg` file in this folder is released into the public domain
+under CC0 — free to use in personal and commercial projects with no
+attribution required, though credit is always appreciated.
 
-  RPG Audio       https://kenney.nl/assets/rpg-audio
-  Impact Sounds   https://kenney.nl/assets/impact-sounds
+Sources:
+
+  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio
+  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds
+  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/
 
 License: Creative Commons Zero, CC0
          http://creativecommons.org/publicdomain/zero/1.0/
 
 File mapping
 ------------
-swing_blade_a/b.ogg   <- knifeSlice / knifeSlice2          (RPG Audio)
-swing_cloth_a/b.ogg   <- cloth1 / cloth3                   (RPG Audio)
-hit_flesh_a/b/c.ogg   <- impactPunch_medium_000..002       (Impact)
-hit_heavy_a/b.ogg     <- impactPunch_heavy_000..001        (Impact)
-hurt_armor_a/b.ogg    <- impactPlate_light_000 / 002       (Impact)
-enemy_die_a/b.ogg     <- impactGeneric_light_000 / 002     (Impact)
-wood_break_a/b.ogg    <- impactWood_medium_000 / 002       (Impact)
-wood_chop.ogg         <- chop                              (RPG Audio)
-pot_break_a/b.ogg     <- impactGlass_medium_000 / 002      (Impact)
-coin_a/b.ogg          <- handleCoins / handleCoins2        (RPG Audio)
-tree_creak_a/b.ogg    <- creak1 / creak2                   (RPG Audio)
+swing_whoosh_a.ogg    <- freesound.org/s/59992 (Swosh Sword Swing)        (qubodup)
+swing_whoosh_b.ogg    <- freesound.org/s/59988 (Swosh / Whoosh / Air Cut) (qubodup)
+swing_whoosh_c.ogg    <- freesound.org/s/59995 (swosh-08, stick cuts air) (qubodup)
+swing_whoosh_d.ogg    <- freesound.org/s/60023 (sharp swosh)              (qubodup)
+hit_flesh_a/b/c.ogg   <- impactPunch_medium_000..002       (Kenney Impact)
+hit_heavy_a/b.ogg     <- impactPunch_heavy_000..001        (Kenney Impact)
+hit_wood_a/b/c.ogg    <- impactPlank_medium_000 / 002 / 004 (Kenney Impact)
+hit_stone_a/b/c.ogg   <- impactMining_000 / 002 / 004      (Kenney Impact)
+hurt_armor_a/b.ogg    <- impactPlate_light_000 / 002       (Kenney Impact)
+enemy_die_a/b.ogg     <- impactGeneric_light_000 / 002     (Kenney Impact)
+wood_break_a/b/c.ogg  <- impactWood_heavy_000 / 002 / 004  (Kenney Impact)
+pot_break_a/b.ogg     <- impactGlass_medium_000 / 002      (Kenney Impact)
+coin_a/b.ogg          <- handleCoins / handleCoins2        (Kenney RPG)
+tree_creak_a/b.ogg    <- creak1 / creak2                   (Kenney RPG)
 
-Ambient layers (wind, water, forest hum, campfire crackle, crickets,
-distant birds) are generated procedurally in `src/sound.js` from
-shaped noise + low-frequency oscillators, so no looped audio file is
-shipped for them. This keeps the bundle small and lets the ambient
+The qubodup whoosh files were re-encoded from their original CC0
+preview MP3s on freesound.org to OGG Vorbis (mono, q=4, 44.1 kHz) so
+they match the rest of the bundle's encoding.
+
+Ambient layers (wind, water lap, forest hum, campfire crackle,
+crickets, distant birds) are generated procedurally in `src/sound.js`
+from shaped noise + low-frequency oscillators, so no looped audio file
+is shipped for them. This keeps the bundle small and lets the ambient
 texture vary continuously instead of repeating with a perceptible loop
 seam.

@@ -258,3 +258,21 @@ export function spawnHarvestDrops(scene, x, z, kind, amount) {
   }
   return drops;
 }
+
+// Spawn N individual food pickups around a point — used by the M3 farming
+// harvest path so a single mature crop fans out 2-4 healing pickups in a
+// small arc, matching the per-unit silhouette readout that breakable pots
+// already use. Each Pickup picks its own food sub-kind from FOOD_TYPES so
+// a harvest mixes flavours instead of dumping four identical apples.
+export function spawnFoodDrops(scene, x, z, count) {
+  const drops = [];
+  const total = Math.max(0, Math.floor(count));
+  for (let i = 0; i < total; i++) {
+    const a = (i / Math.max(1, total)) * Math.PI * 2;
+    // Slight ring layout so they don't all stack in one tile.
+    const px = x + Math.cos(a) * 0.45 + rand(-0.05, 0.05);
+    const pz = z + Math.sin(a) * 0.45 + rand(-0.05, 0.05);
+    drops.push(new Pickup(scene, px, pz, 'food', 0));
+  }
+  return drops;
+}

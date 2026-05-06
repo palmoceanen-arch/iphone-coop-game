@@ -161,6 +161,12 @@ export class Player {
     this.abilityCd = 0;     // remaining cooldown in seconds
     this._itemSpeedMult = 1;
     this._lastIntent = null;
+    // M3 farming: which crop to plant when the player taps interact on a
+    // tilled planter. Cycled with Q (P1) / U (P2). Default differs per
+    // player so a fresh coop run has variety without either player needing
+    // to touch the cycle key. Seeds are fungible in `world.resources.seeds`
+    // — this is purely a display-side selection.
+    this.selectedCropKind = (index === 0) ? 'wheat' : 'carrot';
 
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);

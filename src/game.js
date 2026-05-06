@@ -3,7 +3,7 @@ import { World } from './world.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Projectile } from './projectile.js';
-import { spawnDrops, spawnHarvestDrops } from './pickups.js';
+import { spawnDrops } from './pickups.js';
 import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
@@ -25,8 +25,13 @@ import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
-import { Structure, RECIPES, buildStructureMesh } from './structure.js';
+import {
+  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh,
+  GATE_OPEN_RADIUS,
+} from './structure.js';
 import { BuildController } from './buildMode.js';
+import { Crop, CROP_ORDER, cropLabel, cropColor } from './farming.js';
+import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { iconHTML } from './icons.js';
@@ -167,6 +172,12 @@ export class Game {
     this.altars = []; // rare item-management altars
     this.resources = []; // harvestable trees / rocks (damageable resource nodes)
     this.structures = []; // player-placed structures (fences / walls / gates / planters)
+    // Live Crop entities (M3 farming). One per planter that has been
+    // tilled-or-later — never spawned for an 'empty' planter on chunk
+    // load (we only build the Crop on first interact / on rehydrate from
+    // a non-empty descriptor). Indexed alongside `structures` by
+    // chunkKey for chunk-unload cleanup.
+    this.crops = [];
     // One BuildController per player, lazily activated when the player
     // presses a recipe-select key. Stays alive across the session so the
     // player's last-used recipe / yaw is preserved when they re-enter.
@@ -304,8 +315,15 @@ export class Game {
     // raw enemies list if the damageables snapshot hasn't been built yet
     // (e.g. when the player casts on the very first frame).
     const targets = this._damageables || this.enemies;
+    // `enemyList` carries every damageable (enemies + pots/crates + trees /
+    // rocks + player-built structures) so AoE explosions still break crates
+    // in their blast radius. `livingEnemies` is the strict subset that
+    // actually counts as a hostile creature — auto-aiming abilities (ice
+    // bolt, chain lightning, slow-time, wind-push, …) target through this
+    // list so player-placed walls / fences / trees never steal the lock-on.
     const ctx = {
       enemyList: targets,
+      livingEnemies: this.enemies,
       partner,
       effects: this.effects,
       sound: this.sound,
@@ -488,11 +506,14 @@ export class Game {
     // chunks don't carry stale wall geometry, and clear the persistent
     // placedStructures map so a fresh run starts with no fortress.
     for (const s of this.structures) { s.destroyMesh?.(); s.removeCollider?.(); }
+    // Crops are children of planter meshes; structure destroyMesh() above
+    // already detached the parent, so we just drop our references.
+    for (const c of this.crops) { c.destroy?.(); }
     if (this.world?.placedStructures) this.world.placedStructures.clear();
     if (this.world?.structureSpawns) this.world.structureSpawns.length = 0;
     // Exit any active build mode so ghost previews don't outlive the run.
     for (const b of this.builders || []) { b?.exit?.(); }
-    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = []; this.structures = [];
+    this.enemies = []; this.projectiles = []; this.abilityProjectiles = []; this.pickups = []; this.runes = []; this.chests = []; this.breakables = []; this.altars = []; this.resources = []; this.structures = []; this.crops = [];
     if (this.world?.resources) {
       this.world.resources.wood = 0;
       this.world.resources.stone = 0;
@@ -634,13 +655,19 @@ export class Game {
       if (!chunk) continue;
       const recipe = RECIPES[s.kind];
       if (!recipe) continue;
-      const mesh = buildStructureMesh(s.kind);
+      // Pass world (x,z) so the wall mesh can hash it for a deterministic
+      // crack pattern. Other kinds ignore the extra args.
+      const mesh = buildStructureMesh(s.kind, s.x, s.z);
       mesh.position.set(s.x, 0, s.z);
       mesh.rotation.y = s.yaw || 0;
       chunk.group.add(mesh);
       let collider = null;
       if (recipe.radius > 0) {
-        collider = { x: s.x, z: s.z, r: recipe.radius };
+        // `placed: true` lets the build-mode placement check skip its
+        // tree/rock clearance buffer for player-placed structures —
+        // structure-vs-structure spacing is governed separately so walls
+        // can sit flush on adjacent 1m grid cells without false rejects.
+        collider = { x: s.x, z: s.z, r: recipe.radius, placed: true };
         chunk.colliders.push(collider);
       }
       const struct = new Structure(
@@ -648,6 +675,153 @@ export class Game {
         collider, chunk.colliders, chunk.group,
       );
       this.structures.push(struct);
+      // Planters get an attached Crop entity (M3 farming). New planters
+      // start in the 'empty' state with no crop mesh; reloaded planters
+      // restore from the descriptor's persisted farm field. The Crop is
+      // associated with the Structure so chunk unload / structure
+      // destruction drops both at the same time.
+      if (s.kind === 'planter') {
+        const crop = new Crop(mesh, { x: s.x, z: s.z }, s.chunkKey);
+        if (s.farm) crop.loadFromDescriptor(s.farm);
+        struct.crop = crop;
+        this.crops.push(crop);
+      }
+      // Fence-connectable structures auto-link with their cardinal
+      // neighbours (Minecraft-style fence run). Rebuild the new entry's
+      // mesh with the right N/S/E/W arms, then refresh any already-
+      // spawned neighbour fence/gate so the connection is mutual.
+      // Neighbours that haven't drained yet pick up the connection
+      // naturally on their own first build below.
+      if (s.kind === 'fence') {
+        this._rebuildFenceMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'gate') {
+        // Restore persisted open state (chunk reload after the player
+        // toggled the gate, then walked away). Gate's `openDir` lives
+        // on the Structure so toggling doesn't have to round-trip the
+        // descriptor each frame; legacy `s.open` boolean (from the
+        // previous fence-style gate) maps to openDir = -1 if found.
+        if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
+        else struct.openDir = s.open ? -1 : 0;
+        this._rebuildGateMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'wall') {
+        // Walls don't render any connection arms themselves, but their
+        // presence flips a fence/gate neighbour's connection bit, so
+        // refresh those too.
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      }
+    }
+  }
+
+  // True if the persisted descriptor map records a fence-connectable
+  // structure at world (x,z). Fences hook up to other fences, stone walls
+  // and gates (gates are fence-style too) so a player can run a fence
+  // straight into the side of a wall or terminate it at a gate without an
+  // ugly stub. Planters are NOT connectable — they're walk-through farm
+  // plots and a fence rail visually dead-ending at one would look weird.
+  // Cheap O(n) scan of the chunk's descriptor list — typical chunk has
+  // <20 structures so this is fine inside a 4-neighbour loop.
+  _isFenceConnectableAt(x, z) {
+    const ck = this.world.chunkKeyOf(x, z);
+    const arr = this.world.placedStructures.get(ck);
+    if (!arr) return false;
+    const eps = 0.15;
+    for (const d of arr) {
+      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate')
+          && Math.abs(d.x - x) < eps
+          && Math.abs(d.z - z) < eps) return true;
+    }
+    return false;
+  }
+
+  // Compute the {N,S,E,W} connection mask for a fence at world (x,z) by
+  // probing the four cardinal neighbour cells. North is -Z (matches the
+  // facing-vector convention used elsewhere in the codebase).
+  _fenceConnectionsAt(x, z) {
+    return {
+      N: this._isFenceConnectableAt(x, z - 1),
+      S: this._isFenceConnectableAt(x, z + 1),
+      E: this._isFenceConnectableAt(x + 1, z),
+      W: this._isFenceConnectableAt(x - 1, z),
+    };
+  }
+
+  // Rebuild a single fence's mesh with the current neighbour connection
+  // mask. Detaches the old group from the chunk, builds a fresh one,
+  // re-parents at the same world position. The fence mesh is 4-way
+  // symmetric and its arms are placed in world cardinal directions
+  // (N/S/E/W) — so we MUST NOT apply struct.yaw here. If we did, a
+  // fence placed with yaw=π/2 would have its "N arm" rotated to face
+  // East after the group rotation, and the actual world-North
+  // neighbour would receive no arm at all (visible as a fence with a
+  // rail jutting into empty space). The descriptor's yaw is still
+  // kept for save-format consistency with non-symmetric kinds; it's
+  // just not honoured visually for fences.
+  _rebuildFenceMesh(struct) {
+    if (!struct || struct.kind !== 'fence' || !struct.alive || !struct.group) return;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildFenceMesh(conns);
+    next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
+  // Rebuild a single gate's mesh with the current open state. The gate's
+  // `openDir` (0/+1/-1) stays on the Structure between calls so the
+  // toggle interaction is the only place that flips it. Yaw is
+  // preserved so a gate placed at yaw=π/2 keeps its N-S orientation.
+  // Collider radius gets nudged to GATE_OPEN_RADIUS when openDir != 0
+  // so player movement can pass through the cell.
+  _rebuildGateMesh(struct) {
+    if (!struct || struct.kind !== 'gate' || !struct.alive || !struct.group) return;
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const dir = struct.openDir | 0;
+    const next = buildGateMesh(dir);
+    next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = struct.yaw || 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    if (struct.collider) {
+      // When the gate is open we *fully* disable the collider — a
+      // radial collider at the cell centre with radius small enough
+      // to "let the player through" still pushes a 0.55-radius
+      // player out by ~0.67m, so a non-zero r here always blocks.
+      // The closed gate keeps its normal radius. Mesh stays
+      // present in either state.
+      struct.collider.disabled = dir !== 0;
+      struct.collider.r = dir !== 0
+        ? GATE_OPEN_RADIUS
+        : (RECIPES.gate?.radius || 0.45);
+    }
+  }
+
+  // After ANY fence-connectable structure (fence/wall/gate) is placed or
+  // destroyed at (x,z), refresh the meshes of the four cardinal neighbour
+  // fences and gates so their arms reflect the new state. Walls don't
+  // need re-rendering — they're a static block — so we only rebuild
+  // fence/gate neighbours. Walks `this.structures` (live entities only);
+  // any descriptor-only entry still queued for spawn picks up the right
+  // connections when it drains.
+  _rebuildFenceNeighborsOf(x, z) {
+    const eps = 0.15;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      for (const s of this.structures) {
+        if (!s.alive) continue;
+        if (s.kind !== 'fence' && s.kind !== 'gate') continue;
+        if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
+          if (s.kind === 'fence') this._rebuildFenceMesh(s);
+          else this._rebuildGateMesh(s);
+          break;
+        }
+      }
     }
   }
 
@@ -703,6 +877,210 @@ export class Game {
       this.structures,
       s => s.chunkKey !== chunkKey,
     );
+    // Crops live in the planter's mesh group (chunk-owned), so chunk
+    // disposal already removed their visible meshes. We just drop the
+    // references — the persisted farm state stays in the placedStructures
+    // descriptor and is rehydrated on chunk reload.
+    compactInPlace(
+      this.crops,
+      c => c.chunkKey !== chunkKey,
+      c => { c.destroy?.(); },
+    );
+  }
+
+  // ---- Farming interaction (M3) -----------------------------------
+  // Find the planter closest to `player` within INTERACT_RADIUS and
+  // dispatch the player's interact press to it. Returns true if anything
+  // was consumed (mirrors _tryOpenAltar's contract). Build-mode is checked
+  // by the caller — interact in build mode is already swallowed for ghost
+  // rotation so we never reach here while the BuildController is active.
+  _tryFarmInteract(player) {
+    if (!player || !player.alive || this.crops.length === 0) return false;
+    const FARM_INTERACT_RADIUS = 1.4;
+    let target = null, bestD = FARM_INTERACT_RADIUS;
+    for (const c of this.crops) {
+      if (!c.hasPendingAction()) continue;
+      const d = Math.hypot(c.pos.x - player.pos.x, c.pos.z - player.pos.z);
+      if (d <= bestD) { bestD = d; target = c; }
+    }
+    if (!target) return false;
+    const outcome = target.interact(player.selectedCropKind, this.world.resources);
+    switch (outcome.kind) {
+      case 'till':
+        this.sound.till?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0x6e4a2a, 0.9, 0.25);
+        break;
+      case 'plant':
+        this.sound.plant?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0x9ad36b, 0.9, 0.25);
+        this.effects.toast?.(`Посажено: ${cropLabel(outcome.cropKind)}`, '#9ad36b');
+        break;
+      case 'noseed':
+        if (outcome.toast) this.effects.toast?.(outcome.toast, '#ff7a7a');
+        break;
+      case 'harvest': {
+        this.sound.harvest?.();
+        this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xffd166, 1.4, 0.4);
+        this.effects.burst(target.pos.x, 0.6, target.pos.z, 0xffd166, 12, 4, 0.4);
+        const food = Math.max(0, outcome.food | 0);
+        const seeds = Math.max(0, outcome.seeds | 0);
+        if (food > 0) {
+          const drops = spawnFoodDrops(this.scene, target.pos.x, target.pos.z, food);
+          for (const d of drops) this.pickups.push(d);
+        }
+        if (seeds > 0) {
+          const drops = spawnHarvestDrops(this.scene, target.pos.x, target.pos.z, 'seed', seeds);
+          for (const d of drops) this.pickups.push(d);
+        }
+        const summary = (seeds > 0)
+          ? `${cropLabel(outcome.cropKind)}: +${food} еды, +${seeds} семян`
+          : `${cropLabel(outcome.cropKind)}: +${food} еды`;
+        this.effects.toast?.(summary, '#7aff8a');
+        break;
+      }
+      case 'reset':
+        this.sound.till?.();
+        break;
+      default:
+        return false;
+    }
+    if (target.chunkKey) {
+      this.world.updateStructureFarm(target.chunkKey, target.pos.x, target.pos.z, target.toDescriptor());
+    }
+    return true;
+  }
+
+  // Render context-sensitive prompts above the closest pending planter
+  // for each player. Cheap: each frame finds the nearest farmable planter
+  // within prompt range and forwards the localised label to the toast
+  // overlay. Skipped while a player is in build mode — they're focused on
+  // ghost placement, not crop maintenance.
+  _showFarmPrompts() {
+    if (this.crops.length === 0) return;
+    const PROMPT_RADIUS = 1.8;
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const builder = this.builders[p.index];
+      if (builder && builder.active) continue;
+      let target = null, bestD = PROMPT_RADIUS;
+      for (const c of this.crops) {
+        const d = Math.hypot(c.pos.x - p.pos.x, c.pos.z - p.pos.z);
+        if (d <= bestD) { bestD = d; target = c; }
+      }
+      if (!target) {
+        // Player walked away from every planter — clear the cached
+        // prompt key so the next approach re-emits a fresh toast.
+        p._farmPromptKey = null;
+        continue;
+      }
+      // Only re-emit a fresh prompt when the closest planter, its state, or
+      // the player's selected crop changes — otherwise the toast spams every
+      // frame the player stands next to a planter. selectedCropKind is part
+      // of the key so pressing Q/U mid-prompt re-renders the
+      // "E: посадить — <crop>" line with the freshly chosen crop.
+      const cycleKey = (target.state === 'tilled') ? p.selectedCropKind : '';
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.state}|${cycleKey}`;
+      if (p._farmPromptKey === stateKey) continue;
+      p._farmPromptKey = stateKey;
+      const key = (p.index === 0) ? 'E' : 'J';
+      const cycleHintKey = (p.index === 0) ? 'Q' : 'U';
+      const verb = target.promptLabel();
+      if (!verb) continue;
+      let text = `${key}: ${verb}`;
+      if (target.state === 'tilled') {
+        text = `${key}: ${verb} — ${cropLabel(p.selectedCropKind)} (${this.world.resources.seeds || 0} сем.) · ${cycleHintKey}: сменить`;
+      } else if (target.state === 'mature' && target.cropKind) {
+        text = `${key}: ${verb} — ${cropLabel(target.cropKind)}`;
+      }
+      this.effects.toast?.(text, '#9ad36b');
+    }
+  }
+
+  // ---- Gate interaction (open / close) -----------------------------
+  // Find the gate closest to `player` within GATE_INTERACT_RADIUS and
+  // toggle its open/closed state. Mirrors the contract of
+  // `_tryFarmInteract` / `_tryOpenAltar`: returns true if anything was
+  // consumed so the caller can clear the player's interact-press intent
+  // and not double-fire downstream interactions on the same E press.
+  _tryGateInteract(player) {
+    if (!player || !player.alive || this.structures.length === 0) return false;
+    const GATE_INTERACT_RADIUS = 1.4;
+    let target = null, bestD = GATE_INTERACT_RADIUS;
+    for (const s of this.structures) {
+      if (!s.alive || s.kind !== 'gate') continue;
+      const d = Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z);
+      if (d <= bestD) { bestD = d; target = s; }
+    }
+    if (!target) return false;
+    const wasOpen = (target.openDir | 0) !== 0;
+    if (wasOpen) {
+      target.openDir = 0;
+    } else {
+      // Open AWAY from the player. Compute the player's z in the gate's
+      // local frame (yaw = θ → world→local: rotate by -θ around Y), then
+      // pick the sign that puts the door on the opposite side.
+      const dx = player.pos.x - target.pos.x;
+      const dz = player.pos.z - target.pos.z;
+      const yaw = target.yaw || 0;
+      const localZ = -dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      // localZ > 0 → player on +Z side → swing door to -Z (openDir = -1)
+      // localZ <= 0 → player on -Z side → swing door to +Z (openDir = +1)
+      target.openDir = (localZ > 0) ? -1 : +1;
+    }
+    this._rebuildGateMesh(target);
+    if (target.chunkKey) {
+      this.world.updateStructureOpen(
+        target.chunkKey, target.pos.x, target.pos.z, target.openDir,
+      );
+    }
+    // Sound + ring effect cribbed from the farming verbs so the toggle
+    // has audible weight without a new asset. Toast announces the new
+    // state in Russian (matching the rest of the prompt copy).
+    this.sound.till?.();
+    this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xc8a060, 0.9, 0.25);
+    this.effects.toast?.(
+      (target.openDir | 0) !== 0 ? 'Калитка открыта' : 'Калитка закрыта',
+      '#c8a060',
+    );
+    // Force a fresh prompt re-emit on the next frame so the "open /
+    // close" label flips immediately instead of waiting for the prompt
+    // dedup to expire.
+    player._gatePromptKey = null;
+    return true;
+  }
+
+  // Render an interact prompt above the closest open-able gate for each
+  // player. Same shape as `_showFarmPrompts` — one per player, deduped
+  // on a (gate, state, builder-mode) key so we don't spam the toast
+  // queue every frame the player stands next to a gate.
+  _showGatePrompts() {
+    if (this.structures.length === 0) return;
+    const PROMPT_RADIUS = 1.8;
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const builder = this.builders[p.index];
+      if (builder && builder.active) {
+        p._gatePromptKey = null;
+        continue;
+      }
+      let target = null, bestD = PROMPT_RADIUS;
+      for (const s of this.structures) {
+        if (!s.alive || s.kind !== 'gate') continue;
+        const d = Math.hypot(s.pos.x - p.pos.x, s.pos.z - p.pos.z);
+        if (d <= bestD) { bestD = d; target = s; }
+      }
+      if (!target) {
+        p._gatePromptKey = null;
+        continue;
+      }
+      const isOpen = (target.openDir | 0) !== 0;
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${isOpen ? 'o' : 'c'}`;
+      if (p._gatePromptKey === stateKey) continue;
+      p._gatePromptKey = stateKey;
+      const key = (p.index === 0) ? 'E' : 'J';
+      const verb = isOpen ? 'закрыть' : 'открыть';
+      this.effects.toast?.(`${key}: ${verb} калитку`, '#c8a060');
+    }
   }
 
   // ---- Altar interaction ------------------------------------------
@@ -1181,11 +1559,19 @@ export class Game {
         // gathering loop has weight. Damage is the player's current melee
         // damage so combat upgrades carry over.
         const dmg = Math.max(1, Math.round(player.stats?.damage || 10));
+        const wasAlive = target.alive;
         target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
         // Tag killer's weapon so the harvest yield can grant the axe bonus
         // even though the alive→dead transition is processed below in the
         // breakable-style compaction pass.
         target._lastDmgWeapon = player._weaponKind || null;
+        // Per-swing material impact — only on hits that *don't* fell the
+        // resource, so the killing blow gets to play its own treeFall /
+        // rockBreak cue without doubling up.
+        if (wasAlive && target.alive) {
+          if (target.kind === 'tree') this.sound.hitWood?.();
+          else if (target.kind === 'rock') this.sound.hitStone?.();
+        }
       } else if (target.isStructure) {
         // Friendly damage — a player can chop down their own walls if
         // they really want to. Reduced damage so a stray accidental swing
@@ -1213,6 +1599,64 @@ export class Game {
     }
     // Altar idle update (proximity prompt, crystal bob, halo).
     for (const a of this.altars) a.update(dt, this.players, this.sound, this.effects);
+
+    // Seed-kind cycle (M3 farming). Press Q (P1) / U (P2) to rotate the
+    // crop kind that gets planted on the next interact-on-tilled-planter.
+    // Done after altar handling so an altar interaction doesn't accidentally
+    // skip the cycle key for the same frame.
+    for (const p of this.players) {
+      if (!p.alive || !p._lastIntent || !p._lastIntent.seedCycle) continue;
+      const idx = CROP_ORDER.indexOf(p.selectedCropKind);
+      const next = CROP_ORDER[(idx + 1) % CROP_ORDER.length];
+      p.selectedCropKind = next;
+      const k = (p.index === 0) ? 'P1' : 'P2';
+      this.effects.toast?.(`${k}: посадим — ${cropLabel(next)}`, '#9ad36b');
+    }
+
+    // Planter farming interaction. Players in build mode have already had
+    // their interact stripped above (build.update consumes it for ghost
+    // rotation), so we won't double-fire. We still allow growth ticks for
+    // every alive Crop in a sim-loaded chunk regardless of build mode.
+    if (!this.altarOpen) {
+      // Gate toggle takes precedence over farming if both a gate and a
+      // planter are within interact range — a planter rarely sits
+      // directly under a gate in practice, but if it does the gate
+      // matters more for traversal.
+      for (const p of this.players) {
+        if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
+        if (this._tryGateInteract(p)) p._lastIntent.interact = false;
+      }
+      for (const p of this.players) {
+        if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
+        if (this._tryFarmInteract(p)) p._lastIntent.interact = false;
+      }
+    }
+    // Tick crops — only those whose chunk is in SIM_RADIUS so off-screen
+    // farms don't progress at full clock. Crop.update guards by state so
+    // an empty / mature / harvested planter is a no-op. Snapshot the
+    // pre-tick state per crop so the growing→mature transition surfaces a
+    // toast exactly once instead of every frame past maturity.
+    for (const c of this.crops) {
+      if (c.state !== 'growing') continue;
+      if (!this.world.simKeys.has(c.chunkKey)) continue;
+      const prevState = c.state;
+      c.update(dt);
+      if (c.state === 'mature' && prevState === 'growing') {
+        this.effects.toast?.(`Урожай созрел: ${cropLabel(c.cropKind)}`, '#7aff8a');
+      }
+      // Persist progress + state once a frame so a chunk unload mid-grow
+      // captures the latest progress value.
+      if (c.chunkKey) this.world.updateStructureFarm(c.chunkKey, c.pos.x, c.pos.z, c.toDescriptor());
+    }
+    // Render an interact prompt above the closest farmable planter for
+    // each player. Same UX as chest "press E to open" — keeps the rest of
+    // the planter logic out of the player module.
+    this._showFarmPrompts();
+    // Gate prompt sits in the same prompt overlay; runs after the farm
+    // prompt so a player who's between a planter and a gate sees the
+    // farm hint (the more-frequent action) — the gate hint replaces it
+    // only when the planter is out of range.
+    this._showGatePrompts();
 
     // Update enemies
     const ctx = {
@@ -1261,7 +1705,14 @@ export class Game {
     // self-destroys we record its position in the world's consumed-set
     // so a later regeneration of the same chunk doesn't spawn a fresh
     // chest in the same spot.
-    for (const c of this.chests) c.update(dt, this.players, this.sound, this.effects, (rune) => this.runes.push(rune));
+    for (const c of this.chests) c.update(
+      dt, this.players, this.sound, this.effects,
+      (rune) => this.runes.push(rune),
+      // Seed pouch drops route into the existing pickup list so the
+      // gravitate-to-player + shared-resources deposit path handles them
+      // exactly like wood / stone pickups.
+      (pickup) => this.pickups.push(pickup),
+    );
     compactInPlace(this.chests, c => c.alive, c => {
       if (c.chunkKey) this.world.markChestConsumed(c.chunkKey, c.pos.x, c.pos.z);
     });
@@ -1307,8 +1758,25 @@ export class Game {
         s.removeCollider();
         s.destroyMesh();
         if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
+        // Auto-disconnect: any fence-connectable death (fence/wall/gate)
+        // empties its cell, so the 4-cardinal fence/gate neighbours need
+        // their arms refreshed to stop pointing at it. forgetStructure
+        // above has already removed this entry's descriptor, so the
+        // rebuild sees the correct post-death state.
+        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate') {
+          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
+        }
+        // Drop any attached Crop too — the planter mesh is gone so no
+        // visible mesh remains, but the Crop entry would otherwise linger
+        // in this.crops and try to find a deleted descriptor each tick.
+        if (s.crop) {
+          s.crop.destroy?.();
+          s.crop._destroyed = true;
+        }
       },
     );
+    // Compact out any crops whose planter was destroyed this frame.
+    compactInPlace(this.crops, c => !c._destroyed);
 
     // Resources: idle hit-shake / regrow timer, then catch newly-dead ones
     // and route to the harvest path. Trees stay in the list as walk-through
@@ -1426,6 +1894,13 @@ export class Game {
       set('stone', res.stone || 0);
       set('seed', res.seeds || 0);
     }
+    // Seed selector chip — one per player. Surfaces the cycle key (Q for
+    // P1, U for P2) and the crop they'll plant on the next E/J. Without
+    // this chip the cycle is invisible and players default to wheat
+    // forever. Hidden if neither seeds nor planters exist yet (so M1/M2
+    // runs don't see a stray empty chip), and suppressed while the
+    // player is in build mode so the buildbar reads cleanly.
+    this._updateSeedBar();
     // Build-mode banner — one strip per active player. Hidden when not
     // building. Shows recipe label, cost (red when unaffordable), and a
     // small key-hint reminder so players don't need to memorise the
@@ -1460,6 +1935,37 @@ export class Game {
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);
     const greyEl = document.getElementById('grey');
     if (greyEl) greyEl.style.backdropFilter = `grayscale(${this.leashRatio * 100}%) brightness(${1 - this.leashRatio * 0.3})`;
+  }
+
+  // Show / hide the per-player seed-selector chip and refresh the crop
+  // label + colour swatch. Called once per UI tick from _updateUI(). Cheap:
+  // a couple of `dataset.sig` checks short-circuit the DOM writes when
+  // nothing changed.
+  _updateSeedBar() {
+    const haveSeeds = (this.world.resources?.seeds || 0) > 0;
+    const havePlanters = this.crops.length > 0;
+    const farmingActive = haveSeeds || havePlanters;
+    for (let pi = 0; pi < this.players.length; pi++) {
+      const p = this.players[pi];
+      const slot = pi === 0 ? '1' : '2';
+      const bar = document.getElementById(`seedbar${slot}`);
+      if (!bar) continue;
+      const builder = this.builders[pi];
+      const inBuild = !!(builder && builder.active);
+      const visible = p.alive && farmingActive && !inBuild;
+      bar.classList.toggle('active', visible);
+      if (!visible) continue;
+      const kind = p.selectedCropKind;
+      // Mature-stage colour doubles as the swatch fill so a glance at the
+      // chip tells you "the next harvest will be orange/yellow/green".
+      const hex = `#${cropColor(kind).toString(16).padStart(6, '0')}`;
+      const sig = `${kind}|${hex}`;
+      const nameEl = document.getElementById(`sb${slot}-name`);
+      if (nameEl && nameEl.dataset.sig !== sig) {
+        nameEl.dataset.sig = sig;
+        nameEl.innerHTML = `Сажаем: <span class="swatch" style="background:${hex}"></span>${cropLabel(kind)}`;
+      }
+    }
   }
 
   _renderItemBar(player, elId) {
