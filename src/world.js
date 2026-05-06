@@ -48,42 +48,46 @@ function buildWaterMaterial() {
     varying vec2 vWorldXZ;
     varying float vShore;
 
-    // Three angled sin waves at differing frequencies — sums to a
-    // travelling pattern that reads as wind ripples on the surface.
-    // Wavelengths are ~3-6 m so a player-scale view shows a few bands
-    // at once rather than a couple of giant blobs. World-space coords
-    // keep the pattern stable across chunk boundaries (no seams).
-    float waves(vec2 p, float t) {
-      float w1 = sin(p.x * 1.05 + p.y * 0.75 + t * 0.55);
-      float w2 = sin(p.x * 0.42 - p.y * 1.30 + t * 0.42 + 1.7);
-      float w3 = sin(p.x * 1.80 + p.y * 0.30 + t * 0.95 + 3.1);
-      return (w1 + w2 + w3) * (1.0 / 3.0);
+    // 'Caustics'-style cel water: three angled abs(sin) ripples
+    // overlaid at different directions and frequencies. abs(sin) has
+    // sharp valleys at sin=0, so where two or three of these valleys
+    // line up you get thin, network-like bright lines (the same idea
+    // as the reference 2D-art water tile the player linked). High
+    // frequencies (wavelengths ~0.8-1.6 m) so the camera sees fine
+    // surface detail rather than a couple of giant blobs.
+    float caustics(vec2 p, float t) {
+      float a = abs(sin(p.x * 1.85 + p.y * 1.10 + t * 0.55));
+      float b = abs(sin(p.x * -1.30 + p.y * 1.95 + t * 0.45 + 1.2));
+      float c = abs(sin(p.x * 1.60 - p.y * 1.45 + t * 0.35 + 2.7));
+      // Network of bright lines where all three abs(sin)s are small
+      // simultaneously. min() then 1- means "1 at intersections, 0
+      // away from any line".
+      return 1.0 - min(a, min(b, c));
     }
 
     void main() {
-      float w = waves(vWorldXZ, uTime);
-      // Cel bands: most of the surface is the mid 'shallow' tone; the
-      // deep + highlight tones only show as narrow streaks at the
-      // troughs / peaks. Without this skew the highlight covers huge
-      // patches and reads as 'pools of white' rather than 'glints'.
+      float c = caustics(vWorldXZ, uTime);
+      // Three close-tone bands — most of the surface stays the mid
+      // 'shallow' colour, the slightly darker 'deep' fills the wide
+      // gaps between caustics, and the highlight is reserved for
+      // narrow line intersections so it reads as bright glints, not
+      // big puddles of white.
       vec3 col;
-      if (w > 0.78) col = uHighlight;
-      else if (w > -0.10) col = uShallow;
+      if (c > 0.92) col = uHighlight;
+      else if (c > 0.55) col = uShallow;
       else col = uDeep;
 
-      // Shore foam — driven by world coords + time so it's sampled
-      // smoothly per fragment. A vertex attribute would be faster but
-      // the marching-squares mesh has ~2 m vertex spacing, so any
-      // pattern keyed off a vertex varying ends up linearly
-      // interpolated across huge bands. Driving it off vWorldXZ keeps
-      // the stripes crisp; vShore is only used as a mask so foam
-      // shows up only near the waterline.
-      float shoreLine = 1.0 - smoothstep(0.0, 0.018, vShore);
-      float stripe = sin(vWorldXZ.x * 1.40 + vWorldXZ.y * 0.65 - uTime * 1.20);
-      float surfMask = 1.0 - smoothstep(0.020, 0.080, vShore);
-      float surf = step(0.70, stripe) * surfMask;
-      float foam = max(shoreLine, surf);
-      col = mix(col, uFoam, foam);
+      // Thin shoreline foam that 'breathes' — the foam mask radius
+      // varies in time as a sin of the world position along the
+      // shore, so the line widens and narrows in slow patches like a
+      // tide washing in/out. Sampled per fragment so the band stays
+      // crisp regardless of marching-squares vertex spacing.
+      float breath = 0.5 + 0.5 * sin(
+        vWorldXZ.x * 0.55 + vWorldXZ.y * 0.40 + uTime * 0.85
+      );
+      float band = 0.010 + 0.022 * breath;
+      float shoreLine = 1.0 - smoothstep(0.0, band, vShore);
+      col = mix(col, uFoam, shoreLine);
 
       gl_FragColor = vec4(col, uOpacity);
     }
@@ -91,11 +95,17 @@ function buildWaterMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0 },
-      uDeep:      { value: new THREE.Color(0x2257b8) },
-      uShallow:   { value: new THREE.Color(0x6cb6ff) },
-      uHighlight: { value: new THREE.Color(0xffffff) },
-      uFoam:      { value: new THREE.Color(0xffffff) },
-      uOpacity:   { value: 0.92 },
+      // Close-tone palette — three steps of cyan-blue close in
+      // luminosity (the deep / shallow contrast is gentle so the
+      // caustics network reads as ripples rather than tile cracks),
+      // plus a near-white highlight reserved for the rare line
+      // intersections. Foam is a soft off-white so the shore reads
+      // as wet sand / foam, not pure paint.
+      uDeep:      { value: new THREE.Color(0x4a9bc6) },
+      uShallow:   { value: new THREE.Color(0x6db8dc) },
+      uHighlight: { value: new THREE.Color(0xeaf5fb) },
+      uFoam:      { value: new THREE.Color(0xdfeef5) },
+      uOpacity:   { value: 0.94 },
     },
     vertexShader: vert,
     fragmentShader: frag,
