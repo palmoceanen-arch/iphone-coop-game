@@ -239,12 +239,17 @@ const SYNC_LOAD_RADIUS = 1;
 const CHUNKS_PER_FRAME = 1;
 
 // Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
-// (WATER_GRID+1) grid of corners, then build a marching-squares mesh:
-// where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
+// (WATER_GRID+1) grid of corners, then build a marching-squares mesh.
+// WATER_GRID = 32 gives 1 m cells — fine enough that the noise's highest
+// fbm octave (~12 m wavelength) is sampled at ~12 cells per cycle, so
+// isolated "all-corners-just-barely-dry" cells inside an otherwise wet
+// region show up as at most a 1 m square notch in the shoreline rather
+// than the much more visible 2 m notches the previous 16-cell grid left.
+// Where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
 // crossing point, giving smooth curved shorelines instead of axis-aligned
 // blocks. WATER_NOISE_FREQ scales the noise input so lakes form large
 // connected basins rather than tiny specks.
-export const WATER_GRID = 16;
+export const WATER_GRID = 32;
 export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
 export const WATER_THRESHOLD = 0.30;
 export const WATER_NOISE_FREQ = 0.45;
