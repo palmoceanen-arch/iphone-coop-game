@@ -19,14 +19,19 @@ const SUN_FLOOR   = 0.005;
 // no render targets): a single ShaderMaterial driven by a `uTime`
 // uniform. The fragment shader runs a 2D Voronoi over world XZ to get
 // a stationary network of irregular cells; the BORDERS between cells
-// are drawn as thin light-cyan outlines (so the lake reads as a
+// are drawn as thin light-teal outlines (so the lake reads as a
 // connected web of bright lines on a base teal fill, like the
-// stylised 2D-water reference). Per-cell pulses breathe the border
-// thickness and gate occasional darker interior blobs so the network
-// doesn't sit static. Only one material exists per Game (cached in
-// `world._waterMaterial`); the per-chunk geometry just references it.
-// `uTime` is advanced once per frame from `World.update(dt)`.
-function buildWaterMaterial() {
+// stylised 2D-water reference). Cells are flat-filled in two close
+// teal tones — most cells stay 'shallow', a clustered subset selected
+// by low-frequency noise + per-cell hash flips to 'deep'. Both the
+// dark/light boundary and the bright outline ride the SAME Voronoi
+// cell edge, so the dark fill reads as the same noisy pattern as the
+// light lines, just filled in solid. Per-cell pulses still breathe
+// the bright line thickness so the network doesn't sit static. Only
+// one material exists per Game (cached in `world._waterMaterial`);
+// the per-chunk geometry just references it. `uTime` is advanced
+// once per frame from `World.update(dt)`.
+export function buildWaterMaterial() {
   const vert = /* glsl */`
     attribute float shoreDist;
     varying vec2 vWorldXZ;
@@ -60,13 +65,14 @@ function buildWaterMaterial() {
     }
 
     // Voronoi over a 3×3 neighbourhood. Returns:
-    //   .x = distance to the nearest feature point (centre of the cell
-    //        the fragment is in)
-    //   .y = distance to the second-nearest feature point
-    //   .z = a stable [0,1) id for the cell's feature (used for phase)
-    // (.y - .x) is small near a cell border and large at cell centres,
+    //   .xy = lattice coords of the nearest feature point's grid cell
+    //         (constant within a Voronoi cell — used to derive a stable
+    //         per-cell id and to sample low-freq noise at the cell)
+    //   .z  = distance to the nearest feature point
+    //   .w  = distance to the second-nearest feature point
+    // (.w - .z) is small near a cell border and large at cell centres,
     // so we drive the bright outline width off it directly.
-    vec3 voronoi(vec2 p) {
+    vec4 voronoi(vec2 p) {
       vec2 i = floor(p);
       vec2 f = fract(p);
       float d1 = 8.0, d2 = 8.0;
@@ -86,7 +92,7 @@ function buildWaterMaterial() {
           }
         }
       }
-      return vec3(sqrt(d1), sqrt(d2), hash21(nearest + 0.13));
+      return vec4(nearest, sqrt(d1), sqrt(d2));
     }
 
     // 2D value noise used as a domain-warp source — bends the input
@@ -116,9 +122,10 @@ function buildWaterMaterial() {
       // are smaller — ~0.9-1.5 m wide, finer network at view distance.
       vec2 p = (vWorldXZ + warp * 1.0) * 1.10;
 
-      vec3 v = voronoi(p);
-      float borderDist = v.y - v.x;
-      float cellId = v.z;
+      vec4 v = voronoi(p);
+      vec2 lat = v.xy;
+      float borderDist = v.w - v.z;
+      float cellId = hash21(lat + 0.13);
 
       // Border thickness 'breathes' per-cell — each cell has its own
       // phase so neighbouring borders pulse a bit out of step (the
@@ -129,31 +136,38 @@ function buildWaterMaterial() {
       float thickness = 0.020 + 0.135 * pulse;
       float line = 1.0 - smoothstep(0.0, thickness, borderDist);
 
-      // Occasional darker interior blob — fades smoothly in and out
-      // per-cell using smoothstep on the gate sin (no abrupt step).
-      // The blob sits at the cell centre (small v.x), so cells whose
-      // gate is currently above the smoothstep range get a soft dark
-      // pool; everywhere else stays flat fill. Even at peak the dark
-      // tone only mixes 55% so cells never read as 'voids'.
-      float darkGate = 0.5 + 0.5 * sin(uTime * 0.65 + cellId * 17.0 + 1.7);
-      float darkMask = 1.0 - smoothstep(0.05, 0.30, v.x);
-      float darkAmt = smoothstep(0.40, 0.85, darkGate) * darkMask;
+      // Dark patches use the SAME Voronoi shape as the bright lines but
+      // at a coarser scale and shifted, so a single dark cell spans
+      // several bright cells and the bright network passes straight
+      // through it. The deeper-cell boundaries therefore look like the
+      // same noisy pattern as the bright lines, just larger / offset
+      // and filled in solid instead of outlined.
+      // Use a low-frequency warp for the big voronoi so the warp's
+      // wavelength is comparable to the big-cell size — same curvy
+      // character as the bright lines, just at the bigger scale.
+      vec2 warpBig = vec2(
+        vnoise(vWorldXZ * 0.42 + 73.1),
+        vnoise(vWorldXZ * 0.42 + 18.9)
+      ) - 0.5;
+      vec2 pBig = (vWorldXZ + warpBig * 3.2) * 0.36 + vec2(7.3, 11.9);
+      vec4 vBig = voronoi(pBig);
+      vec2 latBig = vBig.xy;
+      float darkPick = hash21(latBig + 3.7);
+      // smoothstep over a tiny range gives a hard fill (big cells are
+      // either dark or not) while still antialiasing the threshold
+      // crossing at sub-pixel cell boundaries.
+      float darkAmt = smoothstep(0.59, 0.61, darkPick);
 
-      vec3 col = uShallow;
-      col = mix(col, uDeep, darkAmt * 0.55);
+      vec3 col = mix(uShallow, uDeep, darkAmt);
       col = mix(col, uHighlight, line);
 
-      // Shoreline outline — same colour as cell borders, drawn as a
-      // thin band where vShore is small (close to the water/land
-      // seam). Has its own coherent pulse driven by world position
-      // along the shore (so the breathing runs as a wave along the
-      // lake silhouette instead of patchy per-cell). Independent of
-      // the per-cell pulse but at the same temporal frequency.
-      float shorePulse = 0.5 + 0.5 * sin(
-        uTime * 1.55 + vWorldXZ.x * 0.45 + vWorldXZ.y * 0.30
-      );
-      float shoreThickness = 0.020 + 0.030 * shorePulse;
-      float shoreLine = 1.0 - smoothstep(0.0, shoreThickness, vShore);
+      // Shoreline outline — thin highlight line at the water/land
+      // seam. fwidth keeps the line at constant pixel-width even
+      // though the underlying noise gradient varies along the bank,
+      // so the rim reads as a clean stylised outline (no soft falloff
+      // band) and matches the cell borders in look.
+      float wShore = fwidth(vShore);
+      float shoreLine = 1.0 - smoothstep(0.0, max(wShore * 2.0, 0.004), vShore);
       col = mix(col, uHighlight, shoreLine);
 
       gl_FragColor = vec4(col, uOpacity);
@@ -162,20 +176,21 @@ function buildWaterMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0 },
-      // Three close-tone cyan-blue steps with deliberately gentle
-      // contrast so the cellular network reads as a single body of
-      // water rather than three sharply tinted patches. 'Shallow'
-      // is the cell fill (most of the surface), 'highlight' is the
-      // border / shoreline outline (only one step lighter than the
-      // fill), 'deep' is the soft per-cell interior pool.
-      uDeep:      { value: new THREE.Color(0x4080ad) },
-      uShallow:   { value: new THREE.Color(0x5fadd2) },
-      uHighlight: { value: new THREE.Color(0x95cae6) },
+      // Three close-tone teal steps with deliberately gentle contrast
+      // so the cellular network reads as a single body of water
+      // rather than three sharply tinted patches. 'Shallow' is the
+      // base cell fill, 'deep' is the flat fill of the clustered
+      // dark cells (one step darker than shallow), 'highlight' is
+      // the bright cell border / shoreline outline.
+      uDeep:      { value: new THREE.Color(0x2a8a82) },
+      uShallow:   { value: new THREE.Color(0x47a8a0) },
+      uHighlight: { value: new THREE.Color(0xb3e2d8) },
       uOpacity:   { value: 0.94 },
     },
     vertexShader: vert,
     fragmentShader: frag,
     transparent: true,
+    extensions: { derivatives: true },
   });
 }
 
