@@ -136,20 +136,13 @@ export function buildWaterMaterial() {
       float thickness = 0.020 + 0.135 * pulse;
       float line = 1.0 - smoothstep(0.0, thickness, borderDist);
 
-      // Dark patches use the SAME Voronoi shape as the bright lines but
-      // at a coarser scale and shifted, so a single dark cell spans
-      // several bright cells and the bright network passes straight
-      // through it. The deeper-cell boundaries therefore look like the
-      // same noisy pattern as the bright lines, just larger / offset
-      // and filled in solid instead of outlined.
-      // Use a low-frequency warp for the big voronoi so the warp's
-      // wavelength is comparable to the big-cell size — same curvy
-      // character as the bright lines, just at the bigger scale.
-      vec2 warpBig = vec2(
-        vnoise(vWorldXZ * 0.42 + 73.1),
-        vnoise(vWorldXZ * 0.42 + 18.9)
-      ) - 0.5;
-      vec2 pBig = (vWorldXZ + warpBig * 3.2) * 0.36 + vec2(7.3, 11.9);
+      // Dark patches: identical Voronoi noise to the bright lines —
+      // same domain-warped lattice, just sampled at 1/1.3 the
+      // frequency (so cells are 1.3× larger) and shifted by a
+      // constant world-space offset so dark cell boundaries don't
+      // align with the bright network. The dark fill is solid (not
+      // an outline), so the cell shape itself reads as the noise.
+      vec2 pBig = (vWorldXZ + warp * 1.0) * (1.10 / 1.3) + vec2(5.7, 9.3);
       vec4 vBig = voronoi(pBig);
       vec2 latBig = vBig.xy;
       float darkPick = hash21(latBig + 3.7);
