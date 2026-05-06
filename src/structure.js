@@ -97,6 +97,22 @@ const BURST_COLOR = {
   planter: 0x4b3522,
 };
 
+// What a structure is *made of* — used by combat-side code to pick the
+// matching impact / break sound and the matching dropped resource. Wooden
+// structures (fences, gates, planters) play the wood-impact SFX and drop
+// `wood` on break; stone structures (walls) play the stone-impact SFX and
+// drop `stone`. Kept here so kind→material is a one-line lookup instead of
+// an inline switch sprinkled across game.js.
+const MATERIAL_BY_KIND = {
+  fence: 'wood',
+  gate: 'wood',
+  planter: 'wood',
+  wall: 'stone',
+};
+export function structureMaterial(kind) {
+  return MATERIAL_BY_KIND[kind] || 'wood';
+}
+
 // True if `world.resources` currently has enough of every ingredient to
 // afford the given recipe. Pure read — does NOT mutate the pool.
 export function canAfford(resources, recipeKind) {

@@ -18,10 +18,30 @@
 
 import { RECIPES, RECIPE_ORDER, canAfford, spendCost, makeGhostMesh } from './structure.js';
 
-// Distance from the player at which the ghost preview floats. Combined
-// with grid snapping this keeps the cursor consistently a tile-or-two
-// in front of the character regardless of facing.
-const CURSOR_DISTANCE = 1.5;
+// Initial distance from the player at which the ghost preview spawns when
+// the player first enters build mode. After that the cursor is freely
+// driven by WASD/stick (player movement is muted while build is active),
+// so this value only matters as a non-zero starting offset.
+const CURSOR_INIT_DISTANCE = 1.5;
+
+// Max chebyshev distance (tiles) from the player at which the ghost can
+// roam. Sized so the player can comfortably wall off a 9x9 area around
+// themselves without leaving build mode, but small enough that they
+// can't sneak a wall into a chunk they're not standing in.
+const MAX_REACH_TILES = 4;
+
+// Speed (m/s) at which holding WASD / pushing the stick advances the
+// floating cursor offset. Matches the player's base walk speed (6 m/s)
+// so the cursor's tile-to-tile rhythm reads as familiar.
+const CURSOR_MOVE_SPEED = 6.0;
+
+// Vertical step (m) between two stacked stone walls. The wall mesh is a
+// 1.05 m × ~0.95 sy ≈ 1.0 m tall block sitting flush on the ground, so
+// stacking by exactly 1.0 m lands the upper block's base on the lower
+// block's top with no visible gap. (`RECIPES.wall.height` reads 1.6 m
+// because that's the *gameplay* height used for vision/collider sizing
+// elsewhere; the visible mesh is shorter.)
+const WALL_STACK_STEP = 1.0;
 
 // Yaw step when the player presses interact. 90° matches a 1m grid wall
 // orientation (axis-aligned looks tidy; finer angles risk visible
@@ -46,7 +66,13 @@ export class BuildController {
     this.yaw = 0;
     // Cached cursor position so the HUD readout and the place check use
     // the same value the ghost was last drawn at.
-    this.cursor = { x: 0, z: 0 };
+    this.cursor = { x: 0, z: 0, y: 0 };
+    // Floating offset (m) from the player at which the cursor currently
+    // sits. WASD / stick advances this each tick; the snapped
+    // `this.cursor` is recomputed from `player.pos + cursorOffset` so
+    // the cursor stays anchored relative to the (frozen, while building)
+    // player. Re-initialised each time build mode is freshly entered.
+    this.cursorOffset = { x: 0, z: 0 };
     this.ghost = null;
     this.ghostKind = null;
     this.ghostAffordable = true;
@@ -65,8 +91,19 @@ export class BuildController {
       this.exit();
       return;
     }
+    const wasActive = this.active;
     this.active = true;
     this.recipeIdx = clamped;
+    // First-time activation: seed the cursor one tile ahead of the player
+    // in their current facing so the ghost spawns somewhere visible
+    // instead of right under the player's feet. Switching recipe while
+    // already active keeps the cursor where the player parked it.
+    if (!wasActive) {
+      const f = this.player.facing || { x: 0, z: -1 };
+      const fl = Math.hypot(f.x, f.z) || 1;
+      this.cursorOffset.x = (f.x / fl) * CURSOR_INIT_DISTANCE;
+      this.cursorOffset.z = (f.z / fl) * CURSOR_INIT_DISTANCE;
+    }
     this._rebuildGhost();
   }
 
@@ -111,15 +148,28 @@ export class BuildController {
     return RECIPE_ORDER[this.recipeIdx];
   }
 
-  // Compute the target tile in front of the player, snapped to a 1m grid.
-  _computeCursor() {
-    const f = this.player.facing || { x: 0, z: -1 };
-    const fl = Math.hypot(f.x, f.z) || 1;
-    const fx = f.x / fl, fz = f.z / fl;
-    const cx = Math.round(this.player.pos.x + fx * CURSOR_DISTANCE);
-    const cz = Math.round(this.player.pos.z + fz * CURSOR_DISTANCE);
-    this.cursor.x = cx;
-    this.cursor.z = cz;
+  // Advance the floating cursor offset by `(dx, dz) * dt * speed`, clamp
+  // it to the per-axis reach limit, then snap the world target to the
+  // integer 1m grid. The clamp uses chebyshev (per-axis abs) so a
+  // straight WASD push and a diagonal push reach the same row/col limit.
+  _computeCursor(dt, dx, dz) {
+    if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+      const len = Math.hypot(dx, dz) || 1;
+      const step = CURSOR_MOVE_SPEED * dt;
+      this.cursorOffset.x += (dx / len) * step;
+      this.cursorOffset.z += (dz / len) * step;
+    }
+    // Clamp the floating offset to a square reach window. Doing this on
+    // the float (not the snapped grid) keeps the offset stable when the
+    // player switches direction at the edge — otherwise the cursor would
+    // "stick" one tile inside the limit because the grid round'd in.
+    const lim = MAX_REACH_TILES;
+    if (this.cursorOffset.x > lim) this.cursorOffset.x = lim;
+    else if (this.cursorOffset.x < -lim) this.cursorOffset.x = -lim;
+    if (this.cursorOffset.z > lim) this.cursorOffset.z = lim;
+    else if (this.cursorOffset.z < -lim) this.cursorOffset.z = -lim;
+    this.cursor.x = Math.round(this.player.pos.x + this.cursorOffset.x);
+    this.cursor.z = Math.round(this.player.pos.z + this.cursorOffset.z);
     return this.cursor;
   }
 
@@ -191,20 +241,32 @@ export class BuildController {
       this.yaw = (this.yaw + YAW_STEP) % (Math.PI * 2);
       if (this.ghost) this.ghost.rotation.y = this.yaw;
     }
-    const c = this._computeCursor();
-    const recipe = RECIPES[this.currentRecipe()];
-    const affordable = canAfford(this.world.resources, this.currentRecipe()) && this._spotFree(c.x, c.z);
+    const c = this._computeCursor(dt, intent.moveX || 0, intent.moveZ || 0);
+    const kind = this.currentRecipe();
+    const recipe = RECIPES[kind];
+    // Stack support: stone walls can be placed on top of an existing
+    // wall in the same cell. Find the topmost wall at (cx, cz); if it's
+    // a wall and we're holding the wall recipe, the new wall sits on a
+    // raised Y (recipe.height per stack level) and the spot-free check
+    // is bypassed for that one cell. Other recipes still get the
+    // standard "no two structures on the same tile" rule.
+    const stackBase = (kind === 'wall') ? this._topWallAt(c.x, c.z) : null;
+    const stackY = stackBase ? ((stackBase.y || 0) + WALL_STACK_STEP) : 0;
+    const spotOK = stackBase ? true : this._spotFree(c.x, c.z);
+    const affordable = canAfford(this.world.resources, kind) && spotOK;
     this._setGhostAffordable(affordable);
     if (this.ghost) {
-      // Ground-snap so the ghost sits on the terrain plane.
-      this.ghost.position.set(c.x, 0, c.z);
+      // Ground-snap so the ghost sits on the terrain plane (or stacked
+      // on top of an existing wall when targeting one).
+      this.ghost.position.set(c.x, stackY, c.z);
       this.ghost.rotation.y = this.yaw;
     }
+    this.cursor.y = stackY;
     // Place — attack press, gated by affordability and spacing check.
     if (intent.attack && this._placeCooldown <= 0) {
       if (affordable) {
-        spendCost(this.world.resources, this.currentRecipe());
-        this.world.placeStructure(c.x, c.z, this.currentRecipe(), this.yaw, recipe.hp);
+        spendCost(this.world.resources, kind);
+        this.world.placeStructure(c.x, c.z, kind, this.yaw, recipe.hp, stackY);
         this._placeCooldown = 0.12;
         return true;
       } else {
@@ -216,4 +278,25 @@ export class BuildController {
     }
     return true;            // active build mode always consumes the tick
   }
+
+  // Find the highest-y wall descriptor at (x,z), or null if no wall sits
+  // there. Used for the stack-walls feature: a new wall placed on the
+  // same tile lands on top of this base. Only `wall` is stackable —
+  // wood structures (fence/gate/planter) can't carry weight.
+  _topWallAt(x, z) {
+    const ck = this.world.chunkKeyOf(x, z);
+    const arr = this.world.placedStructures.get(ck);
+    if (!arr) return null;
+    const eps = 0.15;
+    let top = null;
+    for (const d of arr) {
+      if (d.kind !== 'wall') continue;
+      if (Math.abs(d.x - x) >= eps || Math.abs(d.z - z) >= eps) continue;
+      const y = d.y || 0;
+      if (!top || y > (top.y || 0)) top = d;
+    }
+    return top;
+  }
 }
+
+

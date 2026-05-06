@@ -27,7 +27,7 @@ import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import {
   Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh,
-  GATE_OPEN_RADIUS,
+  GATE_OPEN_RADIUS, structureMaterial,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
 import { Crop, CROP_ORDER, cropLabel } from './farming.js';
@@ -658,11 +658,16 @@ export class Game {
       // Pass world (x,z) so the wall mesh can hash it for a deterministic
       // crack pattern. Other kinds ignore the extra args.
       const mesh = buildStructureMesh(s.kind, s.x, s.z);
-      mesh.position.set(s.x, 0, s.z);
+      const stackY = s.y || 0;
+      mesh.position.set(s.x, stackY, s.z);
       mesh.rotation.y = s.yaw || 0;
       chunk.group.add(mesh);
       let collider = null;
-      if (recipe.radius > 0) {
+      // Stacked walls (y > 0) skip the ground collider — the wall on the
+      // ground in the same cell already blocks horizontal movement, so a
+      // second collider at the same (x,z) would just duplicate work.
+      // Players can't walk on top of stacked walls anyway (no jump/climb).
+      if (recipe.radius > 0 && stackY <= 0.01) {
         // `placed: true` lets the build-mode placement check skip its
         // tree/rock clearance buffer for player-placed structures —
         // structure-vs-structure spacing is governed separately so walls
@@ -674,6 +679,7 @@ export class Game {
         this.scene, s.x, s.z, s.kind, s.yaw || 0, s.hp, mesh, s.chunkKey,
         collider, chunk.colliders, chunk.group,
       );
+      struct.y = stackY;
       this.structures.push(struct);
       // Planters get an attached Crop entity (M3 farming). New planters
       // start in the 'empty' state with no crop mesh; reloaded planters
@@ -1544,6 +1550,13 @@ export class Game {
         intent.dash = false;
         intent.dashHeld = false;
         intent.interact = false;
+        // While in build mode the WASD/stick axes drive the ghost cursor
+        // (consumed inside builder.update above); blank them on the
+        // intent so the player's kinematic update doesn't *also* slide
+        // the character around. The character is effectively frozen in
+        // place until the player exits build (dash / re-press recipe).
+        intent.moveX = 0;
+        intent.moveZ = 0;
       }
     }
 
@@ -1583,7 +1596,17 @@ export class Game {
         // they really want to. Reduced damage so a stray accidental swing
         // doesn't immediately ruin a fortress.
         const dmg = Math.max(1, Math.round((player.stats?.damage || 10) * 0.5));
+        const wasAlive = target.alive;
         target.takeDamage(dmg, player.pos.x, player.pos.z, 0);
+        // Per-swing material impact — only on hits that *don't* break
+        // the structure, so the killing blow gets to play its own
+        // wood-snap / rock-shatter cue (handled in the death-compact
+        // pass below) without doubling up.
+        if (wasAlive && target.alive) {
+          const mat = structureMaterial(target.kind);
+          if (mat === 'stone') this.sound.hitStone?.();
+          else this.sound.hitWood?.();
+        }
       } else {
         this._onPlayerHitsEnemy(player, target);
       }
@@ -1750,7 +1773,7 @@ export class Game {
         // Cheap save-system stub: keep the persisted descriptor's HP in
         // sync with the live entity. The Map lookup is O(n) per chunk; in
         // typical play n stays under ~20 per chunk so this is fine.
-        this.world.updateStructureHP(s.chunkKey, s.pos.x, s.pos.z, s.hp);
+        this.world.updateStructureHP(s.chunkKey, s.pos.x, s.pos.z, s.hp, s.y || 0);
       }
     }
     compactInPlace(
@@ -1758,12 +1781,27 @@ export class Game {
       s => s.alive,
       s => {
         const color = s.burstColor();
-        this.effects.burst(s.pos.x, 0.6, s.pos.z, color, 14, 4, 0.55);
+        // Burst at the structure's vertical centre so a stacked wall up
+        // on a tower bursts where the wall actually was, not at ground
+        // level. Ground ring stays on the floor either way.
+        const burstY = 0.6 + (s.y || 0);
+        this.effects.burst(s.pos.x, burstY, s.pos.z, color, 14, 4, 0.55);
         this.effects.ring(s.pos.x, 0.05, s.pos.z, color, 1.0, 0.32);
-        this.sound.bomb?.();
+        // Material-specific break cue + 50% chance to drop the matching
+        // resource. Wooden structures (fence/gate/planter) splinter into
+        // a wood pickup; stone walls crumble into a stone pickup. The
+        // 50% drop rate is intentionally lower than the recipe cost so a
+        // build/break loop is a *resource sink*, not a no-op generator.
+        const mat = structureMaterial(s.kind);
+        if (mat === 'stone') this.sound.rockBreak?.();
+        else this.sound.woodBreak?.();
+        if (Math.random() < 0.5) {
+          const drops = spawnHarvestDrops(this.scene, s.pos.x, s.pos.z, mat, 1);
+          for (const d of drops) this.pickups.push(d);
+        }
         s.removeCollider();
         s.destroyMesh();
-        if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
+        if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z, s.y || 0);
         // Auto-disconnect: any fence-connectable death (fence/wall/gate)
         // empties its cell, so the 4-cardinal fence/gate neighbours need
         // their arms refreshed to stop pointing at it. forgetStructure

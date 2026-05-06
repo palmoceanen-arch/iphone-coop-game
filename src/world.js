@@ -588,6 +588,10 @@ export class World {
       for (const s of persisted) {
         this.structureSpawns.push({
           x: s.x, z: s.z, kind: s.kind, yaw: s.yaw, hp: s.hp,
+          // Stack height for tower-style stone walls. Defaults to 0 for
+          // legacy descriptors that predate the stacking feature so an
+          // older save still slots its walls onto the ground correctly.
+          y: s.y || 0,
           // Forward the saved farming snapshot (planter only). The drainer
           // hands this to Crop.loadFromDescriptor() so a re-streamed chunk
           // resumes a half-grown crop at exactly the stage / progress it
@@ -691,16 +695,21 @@ export class World {
   // the structure, and (if the chunk is currently loaded) also queues a
   // `structureSpawn` so Game._drainStructureSpawns can mount it this frame.
   // Returns the descriptor object for caller convenience.
-  placeStructure(x, z, kind, yaw = 0, hp = null) {
+  placeStructure(x, z, kind, yaw = 0, hp = null, y = 0) {
     const chunkKey = this.chunkKeyOf(x, z);
+    // `y` is the stack height (m) above the base tile. Only walls (the
+    // single stackable kind) ever pass a non-zero value; everything else
+    // sits flush on the ground. Stored on the descriptor so chunk reload
+    // re-instantiates a stacked tower at the correct heights.
     const desc = { x, z, kind, yaw, hp };
+    if (y && y > 0) desc.y = y;
     let arr = this.placedStructures.get(chunkKey);
     if (!arr) { arr = []; this.placedStructures.set(chunkKey, arr); }
     arr.push(desc);
     const chunk = this.chunks.get(chunkKey);
     if (chunk) {
       this.structureSpawns.push({
-        x, z, kind, yaw, hp,
+        x, z, kind, yaw, hp, y: desc.y || 0,
         chunkKey,
         group: chunk.group,
         colliderArray: chunk.colliders,
@@ -713,10 +722,27 @@ export class World {
   // position so we don't leak descriptors after a wall is broken. Uses the
   // same 0.1m rounding as the consumed-set helpers so floating-point drift
   // doesn't prevent the match.
-  forgetStructure(chunkKey, x, z) {
+  forgetStructure(chunkKey, x, z, y = null) {
     const arr = this.placedStructures.get(chunkKey);
     if (!arr) return;
     const eps = 0.15;
+    // Stacked walls share an (x,z) tile, so when `y` is supplied prefer
+    // the descriptor with the matching stack height; falling back to the
+    // generic any-match path keeps legacy callers (which omit y because
+    // their structure type can't stack) working unchanged.
+    const yEps = 0.20;
+    if (y !== null) {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const d = arr[i];
+        if (Math.abs(d.x - x) >= eps || Math.abs(d.z - z) >= eps) continue;
+        const dy = d.y || 0;
+        if (Math.abs(dy - y) < yEps) {
+          arr.splice(i, 1);
+          if (arr.length === 0) this.placedStructures.delete(chunkKey);
+          return;
+        }
+      }
+    }
     for (let i = arr.length - 1; i >= 0; i--) {
       const d = arr[i];
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
@@ -731,10 +757,20 @@ export class World {
   // later in the session continues from mid-damage rather than full health.
   // Caller passes the current chunkKey + position; we tolerate small float
   // drift the same way as `forgetStructure`.
-  updateStructureHP(chunkKey, x, z, hp) {
+  updateStructureHP(chunkKey, x, z, hp, y = null) {
     const arr = this.placedStructures.get(chunkKey);
     if (!arr) return;
     const eps = 0.15;
+    const yEps = 0.20;
+    // Same y-disambiguation as forgetStructure so a stacked wall tower
+    // doesn't keep writing all its tower mates' HPs onto descriptor[0].
+    if (y !== null) {
+      for (const d of arr) {
+        if (Math.abs(d.x - x) >= eps || Math.abs(d.z - z) >= eps) continue;
+        const dy = d.y || 0;
+        if (Math.abs(dy - y) < yEps) { d.hp = hp; return; }
+      }
+    }
     for (const d of arr) {
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
         d.hp = hp;
