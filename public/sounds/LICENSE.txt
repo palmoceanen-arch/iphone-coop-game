@@ -10,6 +10,7 @@ Sources:
   Kenney RPG Audio          https://kenney.nl/assets/rpg-audio
   Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds
   qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/
+  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx
 
 License: Creative Commons Zero, CC0
          http://creativecommons.org/publicdomain/zero/1.0/
@@ -30,6 +31,15 @@ wood_break_a/b/c.ogg  <- impactWood_heavy_000 / 002 / 004  (Kenney Impact)
 pot_break_a/b.ogg     <- impactGlass_medium_000 / 002      (Kenney Impact)
 coin_a/b.ogg          <- handleCoins / handleCoins2        (Kenney RPG)
 tree_creak_a/b.ogg    <- creak1 / creak2                   (Kenney RPG)
+enemy_voice_a.ogg     <- cute_02      (rubberduck, 80 CC0 creature SFX)
+enemy_voice_b.ogg     <- cute_07      (rubberduck, 80 CC0 creature SFX)
+enemy_voice_c.ogg     <- grunt_02     (rubberduck, 80 CC0 creature SFX)
+enemy_voice_d.ogg     <- hurt_03      (rubberduck, 80 CC0 creature SFX)
+
+The four enemy_voice_*.ogg files were normalised to roughly -18 LUFS
+peak so they sit ~6 dB under the hit_flesh impact (which leads on the
+combat-hit voice mix in src/sound.js). Source clips were re-encoded to
+mono, 44.1 kHz OGG Vorbis q=4 to match the rest of the bundle.
 
 The qubodup whoosh files were re-encoded from their original CC0
 preview MP3s on freesound.org to OGG Vorbis (mono, q=4, 44.1 kHz) so
