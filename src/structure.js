@@ -252,10 +252,11 @@ export function buildGateMesh(openDir) {
   // Slim hinge pin at the door's west edge — sits flush with the cell
   // boundary so a neighbouring fence's east arm meets it without a
   // gap. Slimmer than a fence post (0.06 vs 0.20) so it reads as part
-  // of the door panel, not a standalone post.
+  // of the door panel, not a standalone post. Same wood material as
+  // the rails / latch so the gate reads as one uniform piece.
   const hingePin = new THREE.Mesh(
     new THREE.BoxGeometry(0.06, 0.85, 0.06),
-    MATERIALS.woodDark,
+    MATERIALS.wood,
   );
   hingePin.position.set(0.03, 0.575, 0);
   hingePin.castShadow = true; hingePin.receiveShadow = true;
