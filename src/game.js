@@ -783,6 +783,13 @@ export class Game {
     struct.mesh = next;
     struct._restRotZ = next.rotation.z;
     if (struct.collider) {
+      // When the gate is open we *fully* disable the collider — a
+      // radial collider at the cell centre with radius small enough
+      // to "let the player through" still pushes a 0.55-radius
+      // player out by ~0.67m, so a non-zero r here always blocks.
+      // The closed gate keeps its normal radius. Mesh stays
+      // present in either state.
+      struct.collider.disabled = dir !== 0;
       struct.collider.r = dir !== 0
         ? GATE_OPEN_RADIUS
         : (RECIPES.gate?.radius || 0.45);

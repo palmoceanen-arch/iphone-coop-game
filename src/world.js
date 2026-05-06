@@ -1229,8 +1229,12 @@ export class World {
   }
 
   // No map-edge wall — only resolve overlap with active-chunk prop colliders.
+  // Colliders flagged `disabled` (currently used by open gates) are skipped
+  // entirely so the player can walk through the cell without being pushed
+  // out by an oversized radial response.
   resolveCollisions(pos, radius) {
     for (const c of this.colliders) {
+      if (c.disabled) continue;
       const dx = pos.x - c.x, dz = pos.z - c.z;
       const d2 = dx * dx + dz * dz;
       const r = c.r + radius;
@@ -1245,6 +1249,7 @@ export class World {
 
   isClear(x, z, radius) {
     for (const c of this.colliders) {
+      if (c.disabled) continue;
       const dx = x - c.x, dz = z - c.z;
       const r = c.r + radius;
       if (dx * dx + dz * dz < r * r) return false;

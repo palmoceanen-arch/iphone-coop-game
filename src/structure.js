@@ -54,7 +54,13 @@ export const RECIPES = {
     name: 'Стена',
     cost: { stone: 4 },
     hp: 100,
-    radius: 0.70,
+    // Inscribed-circle radius for a 1m square block. With player
+    // radius 0.55 this leaves a small clearance at cell edges so two
+    // walls flanking a 1m gate gap don't pinch the player out of the
+    // gap — the gate cell at x=0 between walls at x=±1 has 0.10m of
+    // breathing room (sum of radii 0.95 vs centre-to-centre distance
+    // 1.0). Visually the player still touches the wall surface.
+    radius: 0.40,
     height: 1.6,
   },
   gate: {
