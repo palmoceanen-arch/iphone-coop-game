@@ -17,23 +17,21 @@ const SUN_FLOOR   = 0.005;
 
 // Cel-shaded water shader. Cheap (no displacement, no extra geometry,
 // no render targets): a single ShaderMaterial driven by a `uTime`
-// uniform plus a per-vertex `shoreDist` attribute computed at chunk
-// gen. The fragment shader quantises a 3-octave sin wave into three
-// flat colour bands (deep blue → light blue → white highlight), and
-// fades a fourth band (foam white) in close to shore using a
-// time-modulated stripe so the waterline reads as moving foam rather
-// than a static white edge. Only one material exists per Game (cached
+// uniform. The fragment shader samples a stationary 2D value-noise
+// field in world coordinates and quantises it into three close-tone
+// cyan-blue bands using two thresholds that BREATHE over time — so
+// dark and light blobs grow and shrink IN PLACE rather than drifting
+// sideways. A per-region phase offset (sampled from a slow noise
+// layer) decorrelates the pulse across the lake so the whole surface
+// doesn't beat in unison. Only one material exists per Game (cached
 // in `world._waterMaterial`); the per-chunk geometry just references
 // it. `uTime` is advanced once per frame from `World.update(dt)`.
 function buildWaterMaterial() {
   const vert = /* glsl */`
-    attribute float shoreDist;
     varying vec2 vWorldXZ;
-    varying float vShore;
     void main() {
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vWorldXZ = wp.xz;
-      vShore = shoreDist;
       gl_Position = projectionMatrix * viewMatrix * wp;
     }
   `;
@@ -43,51 +41,50 @@ function buildWaterMaterial() {
     uniform vec3 uDeep;
     uniform vec3 uShallow;
     uniform vec3 uHighlight;
-    uniform vec3 uFoam;
     uniform float uOpacity;
     varying vec2 vWorldXZ;
-    varying float vShore;
 
-    // 'Caustics'-style cel water: three angled abs(sin) ripples
-    // overlaid at different directions and frequencies. abs(sin) has
-    // sharp valleys at sin=0, so where two or three of these valleys
-    // line up you get thin, network-like bright lines (the same idea
-    // as the reference 2D-art water tile the player linked). High
-    // frequencies (wavelengths ~0.8-1.6 m) so the camera sees fine
-    // surface detail rather than a couple of giant blobs.
-    float caustics(vec2 p, float t) {
-      float a = abs(sin(p.x * 1.85 + p.y * 1.10 + t * 0.55));
-      float b = abs(sin(p.x * -1.30 + p.y * 1.95 + t * 0.45 + 1.2));
-      float c = abs(sin(p.x * 1.60 - p.y * 1.45 + t * 0.35 + 2.7));
-      // Network of bright lines where all three abs(sin)s are small
-      // simultaneously. min() then 1- means "1 at intersections, 0
-      // away from any line".
-      return 1.0 - min(a, min(b, c));
+    // 2D value noise — hash + smooth-step interpolation between four
+    // grid corners. Pure function of position, no time term, so the
+    // noise field is stationary in world space (blobs don't drift).
+    float hash21(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
     }
 
     void main() {
-      float c = caustics(vWorldXZ, uTime);
-      // Three close-tone bands — most of the surface stays the mid
-      // 'shallow' colour, the slightly darker 'deep' fills the wide
-      // gaps between caustics, and the highlight is reserved for
-      // narrow line intersections so it reads as bright glints, not
-      // big puddles of white.
-      vec3 col;
-      if (c > 0.92) col = uHighlight;
-      else if (c > 0.55) col = uShallow;
-      else col = uDeep;
+      // Two-octave noise for organic, irregular blob shapes that
+      // still tile cleanly across chunk boundaries (world-space
+      // sample). The frequencies (0.55 + 1.30) give patches around
+      // 1.5-3 m across at the camera's typical view distance.
+      vec2 p = vWorldXZ * 0.55;
+      float n = vnoise(p) * 0.65 + vnoise(p * 2.35 + 7.0) * 0.35;
 
-      // Thin shoreline foam that 'breathes' — the foam mask radius
-      // varies in time as a sin of the world position along the
-      // shore, so the line widens and narrows in slow patches like a
-      // tide washing in/out. Sampled per fragment so the band stays
-      // crisp regardless of marching-squares vertex spacing.
-      float breath = 0.5 + 0.5 * sin(
-        vWorldXZ.x * 0.55 + vWorldXZ.y * 0.40 + uTime * 0.85
-      );
-      float band = 0.010 + 0.022 * breath;
-      float shoreLine = 1.0 - smoothstep(0.0, band, vShore);
-      col = mix(col, uFoam, shoreLine);
+      // Two thresholds that 'breathe' over time. The noise FIELD
+      // itself doesn't move — only the cutoffs slide up and down,
+      // so a blob grows and shrinks IN PLACE rather than drifting
+      // sideways. A per-region phase (slow noise) decorrelates the
+      // pulse across the lake so neighbouring blobs share a phase
+      // but distant ones don't beat in unison. Dark and light
+      // populations get independent speeds + offsets.
+      float regionPhase = vnoise(vWorldXZ * 0.18) * 6.2832;
+      float pulseDark  = 0.5 + 0.5 * sin(uTime * 0.55 + regionPhase);
+      float pulseLight = 0.5 + 0.5 * sin(uTime * 0.40 + regionPhase + 2.4);
+      float threshDark  = 0.22 + 0.20 * pulseDark;
+      float threshLight = 0.78 - 0.20 * pulseLight;
+
+      vec3 col = uShallow;
+      if (n < threshDark) col = uDeep;
+      else if (n > threshLight) col = uHighlight;
 
       gl_FragColor = vec4(col, uOpacity);
     }
@@ -95,16 +92,15 @@ function buildWaterMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0 },
-      // Close-tone palette — three steps of cyan-blue close in
-      // luminosity (the deep / shallow contrast is gentle so the
-      // caustics network reads as ripples rather than tile cracks),
-      // plus a near-white highlight reserved for the rare line
-      // intersections. Foam is a soft off-white so the shore reads
-      // as wet sand / foam, not pure paint.
-      uDeep:      { value: new THREE.Color(0x4a9bc6) },
-      uShallow:   { value: new THREE.Color(0x6db8dc) },
-      uHighlight: { value: new THREE.Color(0xeaf5fb) },
-      uFoam:      { value: new THREE.Color(0xdfeef5) },
+      // Three close-tone steps of cyan-blue. The 'shallow' tone is
+      // the lake's base colour (most of the surface), 'deep' fills
+      // the dark blob population, 'highlight' fills the light blob
+      // population. Contrast is intentionally gentle so the blobs
+      // read as ripples on a single body of water rather than three
+      // separately tinted patches.
+      uDeep:      { value: new THREE.Color(0x3d8db8) },
+      uShallow:   { value: new THREE.Color(0x5fadd2) },
+      uHighlight: { value: new THREE.Color(0x9fd4ec) },
       uOpacity:   { value: 0.94 },
     },
     vertexShader: vert,
@@ -1059,24 +1055,9 @@ export class World {
 
     const positions = [];
     const indices = [];
-    // Per-vertex shore distance, sampled from the same noise that defines
-    // the water mask. Edge-crossing verts (shoreline) get exactly 0;
-    // interior verts get a small positive value scaling with depth. The
-    // water shader uses this to drive a white foam band right at the
-    // shore + wave-direction stripes inside the lake.
-    const shoreDists = [];
     let nextIdx = 0;
-    const sampleShoreDist = (x, z) => {
-      const n = this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ);
-      // Normalise so 0 = on the threshold (shore) and ~1 = deepest. Since
-      // n can dip below 0 we clamp the upper bound — the shader only uses
-      // the [0, ~0.4] range for foam and treats anything bigger as "deep".
-      const d = (WATER_THRESHOLD - n) / WATER_THRESHOLD;
-      return d > 0 ? d : 0;
-    };
     const pushVert = (x, z) => {
       positions.push(x, 0.04, z);
-      shoreDists.push(sampleShoreDist(x, z));
       return nextIdx++;
     };
     const pushTri = (a, b, c) => {
@@ -1166,7 +1147,6 @@ export class World {
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-    geo.setAttribute('shoreDist', new THREE.BufferAttribute(new Float32Array(shoreDists), 1));
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
     if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial();
