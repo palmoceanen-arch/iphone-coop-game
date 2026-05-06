@@ -91,12 +91,6 @@ export function cropLabel(kind) {
   return CROPS[kind]?.name || kind;
 }
 
-// Quick visual reference shown in the seed-selector HUD chip and the
-// planter interact prompt. Returns the mature-stage primary colour.
-export function cropColor(kind) {
-  return CROPS[kind]?.mature || 0x9ad36b;
-}
-
 // Hold-time before a single weapon swing on grass tills the soil. Short
 // enough that "press and release E" feels instant; long enough that
 // brushing past a planter while running doesn't accidentally till.
@@ -339,7 +333,7 @@ export class Crop {
   promptLabel() {
     switch (this.state) {
       case 'empty':    return 'Вспахать землю';
-      case 'tilled':   return 'Посадить семя';
+      case 'tilled':   return 'Посадить';
       case 'growing':  return null;   // no prompt while growing
       case 'mature':   return 'Собрать урожай';
       case 'harvested':return 'Очистить грядку';

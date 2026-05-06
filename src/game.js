@@ -30,7 +30,7 @@ import {
   GATE_OPEN_RADIUS,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
-import { Crop, CROP_ORDER, cropLabel, cropColor } from './farming.js';
+import { Crop, CROP_ORDER, cropLabel } from './farming.js';
 import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
@@ -977,7 +977,8 @@ export class Game {
       // the player's selected crop changes — otherwise the toast spams every
       // frame the player stands next to a planter. selectedCropKind is part
       // of the key so pressing Q/U mid-prompt re-renders the
-      // "E: посадить — <crop>" line with the freshly chosen crop.
+      // "E: Посадить — <crop> (Q: сменить · N сем.)" prompt with the
+      // freshly chosen crop.
       const cycleKey = (target.state === 'tilled') ? p.selectedCropKind : '';
       const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.state}|${cycleKey}`;
       if (p._farmPromptKey === stateKey) continue;
@@ -988,7 +989,12 @@ export class Game {
       if (!verb) continue;
       let text = `${key}: ${verb}`;
       if (target.state === 'tilled') {
-        text = `${key}: ${verb} — ${cropLabel(p.selectedCropKind)} (${this.world.resources.seeds || 0} сем.) · ${cycleHintKey}: сменить`;
+        // The "<key>: сменить" hint moved into the prompt brackets so the
+        // standalone seed-selector chip in the corner could go away — the
+        // crop pick is now only relevant when you're actually next to a
+        // planter, and showing it here keeps it discoverable without a
+        // permanent piece of HUD.
+        text = `${key}: ${verb} — ${cropLabel(p.selectedCropKind)} (${cycleHintKey}: сменить · ${this.world.resources.seeds || 0} сем.)`;
       } else if (target.state === 'mature' && target.cropKind) {
         text = `${key}: ${verb} — ${cropLabel(target.cropKind)}`;
       }
@@ -1894,13 +1900,6 @@ export class Game {
       set('stone', res.stone || 0);
       set('seed', res.seeds || 0);
     }
-    // Seed selector chip — one per player. Surfaces the cycle key (Q for
-    // P1, U for P2) and the crop they'll plant on the next E/J. Without
-    // this chip the cycle is invisible and players default to wheat
-    // forever. Hidden if neither seeds nor planters exist yet (so M1/M2
-    // runs don't see a stray empty chip), and suppressed while the
-    // player is in build mode so the buildbar reads cleanly.
-    this._updateSeedBar();
     // Build-mode banner — one strip per active player. Hidden when not
     // building. Shows recipe label, cost (red when unaffordable), and a
     // small key-hint reminder so players don't need to memorise the
@@ -1935,37 +1934,6 @@ export class Game {
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);
     const greyEl = document.getElementById('grey');
     if (greyEl) greyEl.style.backdropFilter = `grayscale(${this.leashRatio * 100}%) brightness(${1 - this.leashRatio * 0.3})`;
-  }
-
-  // Show / hide the per-player seed-selector chip and refresh the crop
-  // label + colour swatch. Called once per UI tick from _updateUI(). Cheap:
-  // a couple of `dataset.sig` checks short-circuit the DOM writes when
-  // nothing changed.
-  _updateSeedBar() {
-    const haveSeeds = (this.world.resources?.seeds || 0) > 0;
-    const havePlanters = this.crops.length > 0;
-    const farmingActive = haveSeeds || havePlanters;
-    for (let pi = 0; pi < this.players.length; pi++) {
-      const p = this.players[pi];
-      const slot = pi === 0 ? '1' : '2';
-      const bar = document.getElementById(`seedbar${slot}`);
-      if (!bar) continue;
-      const builder = this.builders[pi];
-      const inBuild = !!(builder && builder.active);
-      const visible = p.alive && farmingActive && !inBuild;
-      bar.classList.toggle('active', visible);
-      if (!visible) continue;
-      const kind = p.selectedCropKind;
-      // Mature-stage colour doubles as the swatch fill so a glance at the
-      // chip tells you "the next harvest will be orange/yellow/green".
-      const hex = `#${cropColor(kind).toString(16).padStart(6, '0')}`;
-      const sig = `${kind}|${hex}`;
-      const nameEl = document.getElementById(`sb${slot}-name`);
-      if (nameEl && nameEl.dataset.sig !== sig) {
-        nameEl.dataset.sig = sig;
-        nameEl.innerHTML = `Сажаем: <span class="swatch" style="background:${hex}"></span>${cropLabel(kind)}`;
-      }
-    }
   }
 
   _renderItemBar(player, elId) {

@@ -88,23 +88,6 @@
       .buildbar .hint { opacity: 0.55; font-size: 11px; }
       #buildbar1 { left: 14px; }
       #buildbar2 { right: 14px; }
-      /* Per-player seed selector chip — sits just above the buildbar so the
-         farming cycle key (Q for P1, U for P2) is always discoverable. Only
-         shown once a planter exists in the world or seeds are in the pool, so
-         it doesn't clutter pre-farming runs. */
-      .seedbar {
-        position: absolute; bottom: 132px;
-        background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
-        padding: 5px 10px; border-radius: 8px; font-size: 12px;
-        display: none; gap: 8px; align-items: center; max-width: 280px;
-        pointer-events: none;
-      }
-      .seedbar.active { display: flex; }
-      .seedbar .crop { font-weight: 700; letter-spacing: 0.02em; }
-      .seedbar .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; vertical-align: middle; margin-right: 4px; }
-      .seedbar .hint { opacity: 0.55; font-size: 11px; }
-      #seedbar1 { left: 14px; }
-      #seedbar2 { right: 14px; }
       #leash {
         position: absolute; inset: 0; pointer-events: none;
         background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%);
@@ -456,14 +439,6 @@
           <span class="recipe" id="bb2-name">—</span>
           <span class="cost" id="bb2-cost"></span>
           <span class="hint">L:поставить · K:отмена · J:поворот</span>
-        </div>
-        <div class="seedbar" id="seedbar1">
-          <span class="crop" id="sb1-name">Сажаем: —</span>
-          <span class="hint">Q сменить</span>
-        </div>
-        <div class="seedbar" id="seedbar2">
-          <span class="crop" id="sb2-name">Сажаем: —</span>
-          <span class="hint">U сменить</span>
         </div>
         <div id="toast"></div>
         <div id="shop">

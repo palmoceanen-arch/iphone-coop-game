@@ -61,10 +61,11 @@ the danger after dark.
 Planters built in build-mode (`Грядка` recipe — slot `4` for P1, slot `0` for
 P2) accept any seed from the shared `seeds` pool and grow whatever crop the
 planting player has currently selected: **пшеница → морковь → тыква →
-капуста**. Press `Q` (P1) or `U` (P2) to cycle — the seed-bar chip in the
-bottom corner shows the current pick and updates live. Each crop has its own
-grow time, food yield and seed return on harvest; see `src/farming.js`'s
-`CROPS` map for the exact numbers.
+капуста**. The current pick + the cycle key sit inside the planter's interact
+prompt — walk up to a tilled planter and the toast reads
+`E: Посадить — морковь (Q: сменить · 12 сем.)`; press `Q` (P1) / `U`
+(P2) to rotate. Each crop has its own grow time, food yield and seed return
+on harvest; see `src/farming.js`'s `CROPS` map for the exact numbers.
 
 ## Running
 
