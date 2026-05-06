@@ -49,30 +49,39 @@ function buildWaterMaterial() {
     varying float vShore;
 
     // Three angled sin waves at differing frequencies — sums to a
-    // travelling caustic-like pattern. World-space coords keep the
-    // pattern stable across chunk boundaries (no seams).
+    // travelling pattern that reads as wind ripples on the surface.
+    // Wavelengths are ~3-6 m so a player-scale view shows a few bands
+    // at once rather than a couple of giant blobs. World-space coords
+    // keep the pattern stable across chunk boundaries (no seams).
     float waves(vec2 p, float t) {
-      float w1 = sin(p.x * 0.55 + p.y * 0.40 + t * 0.65);
-      float w2 = sin(p.x * 0.22 - p.y * 0.50 + t * 0.45 + 1.7);
-      float w3 = sin(p.x * 0.95 + p.y * 0.15 + t * 1.10 + 3.1);
+      float w1 = sin(p.x * 1.05 + p.y * 0.75 + t * 0.55);
+      float w2 = sin(p.x * 0.42 - p.y * 1.30 + t * 0.42 + 1.7);
+      float w3 = sin(p.x * 1.80 + p.y * 0.30 + t * 0.95 + 3.1);
       return (w1 + w2 + w3) * (1.0 / 3.0);
     }
 
     void main() {
       float w = waves(vWorldXZ, uTime);
-      // Quantise into 3 cel bands: deep / shallow / highlight.
+      // Cel bands: most of the surface is the mid 'shallow' tone; the
+      // deep + highlight tones only show as narrow streaks at the
+      // troughs / peaks. Without this skew the highlight covers huge
+      // patches and reads as 'pools of white' rather than 'glints'.
       vec3 col;
-      if (w > 0.55) col = uHighlight;
+      if (w > 0.78) col = uHighlight;
       else if (w > -0.10) col = uShallow;
       else col = uDeep;
 
-      // Shore foam: a static thin white band right at the waterline so
-      // the lake outline is always crisp, plus a moving stripe a bit
-      // further inland that washes back and forth like surf.
-      float shoreLine = 1.0 - smoothstep(0.0, 0.04, vShore);
-      float stripe = sin(vShore * 22.0 - uTime * 1.6);
-      float surfMask = 1.0 - smoothstep(0.04, 0.20, vShore);
-      float surf = step(0.55, stripe) * surfMask;
+      // Shore foam — driven by world coords + time so it's sampled
+      // smoothly per fragment. A vertex attribute would be faster but
+      // the marching-squares mesh has ~2 m vertex spacing, so any
+      // pattern keyed off a vertex varying ends up linearly
+      // interpolated across huge bands. Driving it off vWorldXZ keeps
+      // the stripes crisp; vShore is only used as a mask so foam
+      // shows up only near the waterline.
+      float shoreLine = 1.0 - smoothstep(0.0, 0.018, vShore);
+      float stripe = sin(vWorldXZ.x * 1.40 + vWorldXZ.y * 0.65 - uTime * 1.20);
+      float surfMask = 1.0 - smoothstep(0.020, 0.080, vShore);
+      float surf = step(0.70, stripe) * surfMask;
       float foam = max(shoreLine, surf);
       col = mix(col, uFoam, foam);
 
