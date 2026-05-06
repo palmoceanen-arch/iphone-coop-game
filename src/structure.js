@@ -26,12 +26,8 @@ function ensureMaterials() {
   MATERIALS = {
     wood: new THREE.MeshToonMaterial({ color: 0x8c5a2c, gradientMap: TOON_GRADIENT }),
     woodDark: new THREE.MeshToonMaterial({ color: 0x6b4023, gradientMap: TOON_GRADIENT }),
-    stone: new THREE.MeshToonMaterial({ color: 0x9aa0a8, gradientMap: TOON_GRADIENT }),
+    stone: new THREE.MeshToonMaterial({ color: 0xa6acb6, gradientMap: TOON_GRADIENT }),
     stoneDark: new THREE.MeshToonMaterial({ color: 0x6e7280, gradientMap: TOON_GRADIENT }),
-    // Thin crack veins on stone walls. Distinctly darker than `stoneDark`
-    // so even a glancing camera angle reads the lines as cracks, not just
-    // shadow. Shared across every wall — no per-instance materials.
-    stoneCrack: new THREE.MeshToonMaterial({ color: 0x363840, gradientMap: TOON_GRADIENT }),
     soil: new THREE.MeshToonMaterial({ color: 0x4b3522, gradientMap: TOON_GRADIENT }),
   };
 }
@@ -202,133 +198,104 @@ export function buildFenceMesh(connections) {
   return g;
 }
 
-// Build a Minecraft-style fence gate mesh: two fence-style posts at the
-// E/W cell boundaries (gate's local x=±0.5) plus a swinging door panel
-// hinged on the west post. The whole gate is later rotated by `yaw`
-// from the calling code, so a yaw=π/2 gate has its posts at world N/S
-// edges and the door swings perpendicular.
+// Build a Minecraft-style fence gate mesh. The gate has NO posts of its
+// own — the player puts fences/walls in the adjacent cells, and those
+// neighbour structures provide the visible end-caps that the gate's
+// door appears to hang between. The gate cell itself contains only the
+// door panel: 2 horizontal rails + a centre vertical bridge + slim
+// hinge / latch pins at each end. The whole gate is later rotated by
+// `yaw` from the calling code, so a yaw=π/2 gate has its door axis
+// flipped 90° and swings perpendicular.
 //
 // `openDir`:
-//   0  → closed (door spans the gap between the two posts)
-//   +1 → open, door swings toward gate-local +Z (the door tucks against
-//        the south side of the gate when yaw = 0)
-//   -1 → open, door swings toward gate-local -Z (north side)
+//   0  → closed (door spans the full cell width)
+//   +1 → open, door swings toward gate-local +Z
+//   -1 → open, door swings toward gate-local -Z
 //
 // The caller (game.js's gate-interact handler) picks the sign so the
 // door always opens AWAY from the player who pressed E, exactly like
 // Minecraft. Collider radius is shrunk to GATE_OPEN_RADIUS in game.js
-// when openDir != 0.
+// when openDir != 0 so the player can walk through.
 export function buildGateMesh(openDir) {
   ensureMaterials();
   const g = new THREE.Group();
-  // Two posts at the cell's E/W boundaries. Slightly chunkier than fence
-  // posts (0.18 vs 0.20 — actually 0.18 is a tad slimmer so the door
-  // panel between them reads cleanly without overcrowding the cell).
-  // Post tops sit at y=1.10 to match the fence's top-rail height.
-  const postGeo = new THREE.BoxGeometry(0.18, 1.10, 0.18);
-  const leftPost = new THREE.Mesh(postGeo, MATERIALS.woodDark);
-  leftPost.position.set(-0.50, 0.55, 0);
-  leftPost.castShadow = true; leftPost.receiveShadow = true;
-  g.add(leftPost);
-  const rightPost = new THREE.Mesh(postGeo, MATERIALS.woodDark);
-  rightPost.position.set(+0.50, 0.55, 0);
-  rightPost.castShadow = true; rightPost.receiveShadow = true;
-  g.add(rightPost);
-  // Door panel — a Group whose pivot sits at the west-post hinge. Its
-  // children extend from local x=0 (at the hinge) rightward toward the
-  // east post. Closed → rotation.y = 0, door spans the gap between the
-  // posts. Open → rotation.y = -π/2, door rotates clockwise (viewed
-  // from above) into the cell so the player can walk through.
+  // Door panel hinged on the gate cell's west boundary. The hinge sits
+  // exactly at gate-local x=-0.50 so a fence arm coming in from the
+  // west cell meets it flush. Children of `door` use door-local
+  // coordinates: x=0 at the hinge, x=1 at the latch end.
   const door = new THREE.Group();
-  door.position.set(-0.41, 0, 0);
-  // Top + bottom rails span almost the full inter-post gap. 0.78 leaves
-  // a 0.04m latch gap so the door doesn't look fused to the right post.
-  const railGeo = new THREE.BoxGeometry(0.78, 0.08, 0.05);
+  door.position.set(-0.50, 0, 0);
+  // Two horizontal rails span the full cell width when closed.
+  const railGeo = new THREE.BoxGeometry(1.00, 0.10, 0.06);
   const topRail = new THREE.Mesh(railGeo, MATERIALS.wood);
-  topRail.position.set(0.39, 0.85, 0);
+  topRail.position.set(0.50, 0.85, 0);
   topRail.castShadow = true; topRail.receiveShadow = true;
   door.add(topRail);
   const botRail = new THREE.Mesh(railGeo, MATERIALS.wood);
-  botRail.position.set(0.39, 0.30, 0);
+  botRail.position.set(0.50, 0.30, 0);
   botRail.castShadow = true; botRail.receiveShadow = true;
   door.add(botRail);
-  // Centre vertical bar bridges the two rails — Minecraft's gate has it.
+  // Centre vertical bar bridges the rails — Minecraft's gate has it.
   const centerBar = new THREE.Mesh(
-    new THREE.BoxGeometry(0.06, 0.49, 0.05),
+    new THREE.BoxGeometry(0.06, 0.50, 0.06),
     MATERIALS.wood,
   );
-  centerBar.position.set(0.39, 0.575, 0);
+  centerBar.position.set(0.50, 0.575, 0);
   centerBar.castShadow = true; centerBar.receiveShadow = true;
   door.add(centerBar);
-  // End vertical bar at the latch end — a recognisable detail and a
-  // visual cue for which side the gate "closes" toward.
-  const latchBar = new THREE.Mesh(
-    new THREE.BoxGeometry(0.06, 0.62, 0.05),
+  // Slim hinge pin at the door's west edge — sits flush with the cell
+  // boundary so a neighbouring fence's east arm meets it without a
+  // gap. Slimmer than a fence post (0.06 vs 0.20) so it reads as part
+  // of the door panel, not a standalone post.
+  const hingePin = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.85, 0.06),
+    MATERIALS.woodDark,
+  );
+  hingePin.position.set(0.03, 0.575, 0);
+  hingePin.castShadow = true; hingePin.receiveShadow = true;
+  door.add(hingePin);
+  // Slim latch pin at the door's east edge — same role on the other
+  // side. Slightly lighter wood so the latch silhouette is readable.
+  const latchPin = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.85, 0.06),
     MATERIALS.wood,
   );
-  latchBar.position.set(0.75, 0.575, 0);
-  latchBar.castShadow = true; latchBar.receiveShadow = true;
-  door.add(latchBar);
+  latchPin.position.set(0.97, 0.575, 0);
+  latchPin.castShadow = true; latchPin.receiveShadow = true;
+  door.add(latchPin);
   if (openDir > 0) door.rotation.y = -Math.PI / 2;
   else if (openDir < 0) door.rotation.y = +Math.PI / 2;
   g.add(door);
   return g;
 }
 
-// Deterministic uint32 hash from integer (x,z). Used to seed crack-pattern
-// variation on stone walls so two walls at different cells don't share
-// the exact same crack layout but each individual wall is stable across
-// chunk reloads (no Math.random churn).
+// Deterministic uint32 hash from integer (x,z). Used to seed the
+// per-wall vertex displacement on the stone geometry below so two
+// walls at different cells don't look identical but each individual
+// wall is stable across chunk reloads (no Math.random churn).
 function _stoneHash(x, z) {
   let h = ((x | 0) * 374761393 + (z | 0) * 668265263) | 0;
   h = (h ^ (h >>> 13)) * 1274126177;
   return ((h ^ (h >>> 16)) >>> 0);
 }
 
-// Decorate a wall group with 3-4 thin dark crack veins on its outer
-// faces, picked deterministically from `(x,z)`. Cracks are pure visuals
-// — no collider impact. Each crack is a single flat box (~0.025m thin)
-// embedded just outside the main mesh face so it reads as a dark line
-// when the camera grazes the wall. Skipped on ghost-preview meshes
-// where (x,z) isn't known so the preview stays clean.
-function _addStoneCracks(group, x, z) {
-  let state = _stoneHash(x, z) || 1;
+// Per-cell stone variation params keyed off (x,z) — gives each wall
+// slightly different proportions and yaw so a row of walls doesn't
+// look like clones, while staying stable across reloads. Returns
+// { sx, sy, sz, yaw } where the scales sit in [~0.92..0.98] and yaw
+// is one of 0 / π/2 / π / 3π/2 (so the chamfer corners read as
+// straight edges, not diagonals).
+function _stoneVariation(x, z) {
+  let seed = _stoneHash(x | 0, z | 0) || 1;
   const rand = () => {
-    state = ((state * 1664525) + 1013904223) | 0;
-    return ((state >>> 0) / 0x100000000);
+    seed = ((seed * 1664525) + 1013904223) | 0;
+    return ((seed >>> 0) / 0x100000000);
   };
-  const numCracks = 3 + (rand() < 0.5 ? 0 : 1);  // 3 or 4 per wall
-  for (let i = 0; i < numCracks; i++) {
-    const face = Math.floor(rand() * 4);   // 0 = +Z, 1 = -Z, 2 = +X, 3 = -X
-    const length = 0.30 + rand() * 0.40;
-    const thickness = 0.025 + rand() * 0.015;
-    const yPos = 0.30 + rand() * 1.00;
-    const lateralPos = (rand() - 0.5) * 0.60;
-    const tiltZ = (rand() - 0.5) * 0.40;
-    let geom, px, py = yPos, pz, ry = 0;
-    const FACE_OFF = 0.476;     // just outside the 0.95-wide main mesh
-    if (face === 0) {           // +Z face
-      geom = new THREE.BoxGeometry(thickness, length, 0.02);
-      px = lateralPos; pz = +FACE_OFF;
-    } else if (face === 1) {    // -Z face
-      geom = new THREE.BoxGeometry(thickness, length, 0.02);
-      px = lateralPos; pz = -FACE_OFF;
-    } else if (face === 2) {    // +X face
-      geom = new THREE.BoxGeometry(0.02, length, thickness);
-      px = +FACE_OFF; pz = lateralPos;
-      ry = Math.PI / 2;
-    } else {                    // -X face
-      geom = new THREE.BoxGeometry(0.02, length, thickness);
-      px = -FACE_OFF; pz = lateralPos;
-      ry = Math.PI / 2;
-    }
-    const m = new THREE.Mesh(geom, MATERIALS.stoneCrack);
-    m.position.set(px, py, pz);
-    m.rotation.set(0, ry, tiltZ);
-    m.castShadow = false;
-    m.receiveShadow = true;
-    group.add(m);
-  }
+  const sx = 0.92 + rand() * 0.06;   // 0.92..0.98
+  const sy = 0.92 + rand() * 0.06;
+  const sz = 0.92 + rand() * 0.06;
+  const yaw = (Math.floor(rand() * 4) | 0) * (Math.PI / 2);
+  return { sx, sy, sz, yaw };
 }
 
 // Build a procedural mesh for one structure. Geometry is per-call so
@@ -354,32 +321,28 @@ export function buildStructureMesh(kind, x, z) {
     return buildFenceMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'wall') {
-    // Stone block with chamfered edges via RoundedBoxGeometry — 12
-    // beveled edges + 8 rounded corners off a 0.06m radius. Reads as a
-    // hewn block at any camera distance; much better silhouette than a
-    // raw cube. 2 segments per axis is the cheapest setting that still
-    // produces visible bevels.
-    const main = new THREE.Mesh(
-      new RoundedBoxGeometry(0.95, 1.6, 0.95, 2, 0.06),
+    // One chunky stone block per cell. Reads as a cube with subtle
+    // chamfered edges (RoundedBoxGeometry r=0.04 — small enough that
+    // each face still looks flat, big enough that grazing light
+    // catches the bevel). Per-cell deterministic variation in scale
+    // + yaw so a row of walls doesn't look like clones; ghost
+    // preview falls back to (0,0).
+    const wx = (typeof x === 'number') ? x : 0;
+    const wz = (typeof z === 'number') ? z : 0;
+    const v = _stoneVariation(wx, wz);
+    const stone = new THREE.Mesh(
+      new RoundedBoxGeometry(0.95, 1.00, 0.95, 2, 0.04),
       MATERIALS.stone,
     );
-    main.position.set(0, 0.80, 0);
-    main.castShadow = true; main.receiveShadow = true;
-    g.add(main);
-    // Cap on top — slightly larger footprint, also chamfered, in a
-    // darker stone. Gives the silhouette a hint of capstone overhang.
-    const cap = new THREE.Mesh(
-      new RoundedBoxGeometry(1.00, 0.10, 1.00, 1, 0.04),
-      MATERIALS.stoneDark,
-    );
-    cap.position.set(0, 1.65, 0);
-    cap.castShadow = true; cap.receiveShadow = true;
-    g.add(cap);
-    // Deterministic crack veins keyed off the wall's world position.
-    // Skipped for ghost previews so the placement preview stays clean.
-    if (typeof x === 'number' && typeof z === 'number') {
-      _addStoneCracks(g, x, z);
-    }
+    stone.scale.set(v.sx, v.sy, v.sz);
+    stone.rotation.y = v.yaw;
+    // Lift so the stone bottom sits at the ground. Half-height = 0.5
+    // × sy ≈ 0.46 — set to 0.5 and let `sy` keep the bbox slightly
+    // above ground (a hair of dirt margin avoids z-fighting on the
+    // ground plane).
+    stone.position.set(0, 0.50, 0);
+    stone.castShadow = true; stone.receiveShadow = true;
+    g.add(stone);
     return g;
   }
   if (kind === 'gate') {
