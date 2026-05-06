@@ -175,9 +175,9 @@ export function buildWaterMaterial() {
       // base cell fill, 'deep' is the flat fill of the clustered
       // dark cells (one step darker than shallow), 'highlight' is
       // the bright cell border / shoreline outline.
-      uDeep:      { value: new THREE.Color(0x46aac3) },
+      uDeep:      { value: new THREE.Color(0x44afca) },
       uShallow:   { value: new THREE.Color(0x48b1cb) },
-      uHighlight: { value: new THREE.Color(0x78b8d9) },
+      uHighlight: { value: new THREE.Color(0x80b1c6) },
       uOpacity:   { value: 1.00 },
     },
     vertexShader: vert,
