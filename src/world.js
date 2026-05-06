@@ -28,10 +28,13 @@ const SUN_FLOOR   = 0.005;
 // `uTime` is advanced once per frame from `World.update(dt)`.
 function buildWaterMaterial() {
   const vert = /* glsl */`
+    attribute float shoreDist;
     varying vec2 vWorldXZ;
+    varying float vShore;
     void main() {
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vWorldXZ = wp.xz;
+      vShore = shoreDist;
       gl_Position = projectionMatrix * viewMatrix * wp;
     }
   `;
@@ -43,6 +46,7 @@ function buildWaterMaterial() {
     uniform vec3 uHighlight;
     uniform float uOpacity;
     varying vec2 vWorldXZ;
+    varying float vShore;
 
     // 2D hashes used to scatter Voronoi feature points + give each
     // cell a stable scalar id (drives per-cell pulse phase).
@@ -105,10 +109,12 @@ function buildWaterMaterial() {
       // is still Voronoi (network of cells), but the seams are no
       // longer straight polygon edges.
       vec2 warp = vec2(
-        vnoise(vWorldXZ * 0.85 + 11.0),
-        vnoise(vWorldXZ * 0.85 + 41.7)
+        vnoise(vWorldXZ * 1.10 + 11.0),
+        vnoise(vWorldXZ * 1.10 + 41.7)
       ) - 0.5;
-      vec2 p = (vWorldXZ + warp * 1.6) * 0.65;
+      // Higher voronoi frequency (1.10 vs the previous 0.65) so cells
+      // are smaller — ~0.9-1.5 m wide, finer network at view distance.
+      vec2 p = (vWorldXZ + warp * 1.0) * 1.10;
 
       vec3 v = voronoi(p);
       float borderDist = v.y - v.x;
@@ -117,10 +123,10 @@ function buildWaterMaterial() {
       // Border thickness 'breathes' per-cell — each cell has its own
       // phase so neighbouring borders pulse a bit out of step (the
       // network as a whole shimmers in and out instead of beating
-      // uniformly). Thickness is the smoothstep edge distance, so
-      // pulse=0 → very thin lines, pulse=1 → noticeably thicker.
-      float pulse = 0.5 + 0.5 * sin(uTime * 0.65 + cellId * 6.2832);
-      float thickness = 0.04 + 0.07 * pulse;
+      // uniformly). Wide amplitude (0.020-0.155) and a quick pulse
+      // (~4s period) so the breathing reads at a glance.
+      float pulse = 0.5 + 0.5 * sin(uTime * 1.55 + cellId * 6.2832);
+      float thickness = 0.020 + 0.135 * pulse;
       float line = 1.0 - smoothstep(0.0, thickness, borderDist);
 
       // Occasional darker interior blob — fades smoothly in and out
@@ -128,14 +134,27 @@ function buildWaterMaterial() {
       // The blob sits at the cell centre (small v.x), so cells whose
       // gate is currently above the smoothstep range get a soft dark
       // pool; everywhere else stays flat fill. Even at peak the dark
-      // tone only mixes 65% so cells never read as 'voids'.
-      float darkGate = 0.5 + 0.5 * sin(uTime * 0.40 + cellId * 17.0 + 1.7);
-      float darkMask = 1.0 - smoothstep(0.05, 0.32, v.x);
+      // tone only mixes 55% so cells never read as 'voids'.
+      float darkGate = 0.5 + 0.5 * sin(uTime * 0.65 + cellId * 17.0 + 1.7);
+      float darkMask = 1.0 - smoothstep(0.05, 0.30, v.x);
       float darkAmt = smoothstep(0.40, 0.85, darkGate) * darkMask;
 
       vec3 col = uShallow;
-      col = mix(col, uDeep, darkAmt * 0.65);
+      col = mix(col, uDeep, darkAmt * 0.55);
       col = mix(col, uHighlight, line);
+
+      // Shoreline outline — same colour as cell borders, drawn as a
+      // thin band where vShore is small (close to the water/land
+      // seam). Has its own coherent pulse driven by world position
+      // along the shore (so the breathing runs as a wave along the
+      // lake silhouette instead of patchy per-cell). Independent of
+      // the per-cell pulse but at the same temporal frequency.
+      float shorePulse = 0.5 + 0.5 * sin(
+        uTime * 1.55 + vWorldXZ.x * 0.45 + vWorldXZ.y * 0.30
+      );
+      float shoreThickness = 0.020 + 0.030 * shorePulse;
+      float shoreLine = 1.0 - smoothstep(0.0, shoreThickness, vShore);
+      col = mix(col, uHighlight, shoreLine);
 
       gl_FragColor = vec4(col, uOpacity);
     }
@@ -143,14 +162,15 @@ function buildWaterMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0 },
-      // Three close-tone cyan-blue steps. 'Shallow' is the cell fill
-      // (most of the surface), 'highlight' is the bright thin border
-      // outline that makes the cellular network read, and 'deep' is
-      // the optional darker pool inside cells that the per-cell
-      // phase gate winks on/off.
-      uDeep:      { value: new THREE.Color(0x2f7ba5) },
+      // Three close-tone cyan-blue steps with deliberately gentle
+      // contrast so the cellular network reads as a single body of
+      // water rather than three sharply tinted patches. 'Shallow'
+      // is the cell fill (most of the surface), 'highlight' is the
+      // border / shoreline outline (only one step lighter than the
+      // fill), 'deep' is the soft per-cell interior pool.
+      uDeep:      { value: new THREE.Color(0x4080ad) },
       uShallow:   { value: new THREE.Color(0x5fadd2) },
-      uHighlight: { value: new THREE.Color(0xc9eaf5) },
+      uHighlight: { value: new THREE.Color(0x95cae6) },
       uOpacity:   { value: 0.94 },
     },
     vertexShader: vert,
@@ -1105,9 +1125,22 @@ export class World {
 
     const positions = [];
     const indices = [];
+    // Per-vertex 'shore distance' — sampled from the same noise field
+    // that defines the water mask. 0 = right on the shoreline (where
+    // the noise crosses WATER_THRESHOLD), 1 = the deepest part of
+    // the lake. Drives the matching shoreline outline in the water
+    // shader so the lake silhouette is rimmed in the same colour as
+    // the cell borders.
+    const shoreDists = [];
     let nextIdx = 0;
+    const sampleShoreDist = (x, z) => {
+      const n = this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ);
+      const d = (WATER_THRESHOLD - n) / WATER_THRESHOLD;
+      return d > 0 ? d : 0;
+    };
     const pushVert = (x, z) => {
       positions.push(x, 0.04, z);
+      shoreDists.push(sampleShoreDist(x, z));
       return nextIdx++;
     };
     const pushTri = (a, b, c) => {
@@ -1197,6 +1230,7 @@ export class World {
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setAttribute('shoreDist', new THREE.BufferAttribute(new Float32Array(shoreDists), 1));
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
     if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial();
