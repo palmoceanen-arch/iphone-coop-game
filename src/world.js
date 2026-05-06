@@ -56,6 +56,7 @@ export function buildWaterMaterial(quality = 'high') {
     uniform vec3 uDeep;
     uniform vec3 uShallow;
     uniform vec3 uHighlight;
+    uniform vec3 uLight;
     uniform float uOpacity;
     varying vec2 vWorldXZ;
     varying float vShore;
@@ -188,7 +189,11 @@ export function buildWaterMaterial(quality = 'high') {
       float shoreLine = 1.0 - smoothstep(0.0, max(wShore * 2.0, 0.004), vShore);
       col = mix(col, uHighlight, shoreLine);
 
-      gl_FragColor = vec4(col, uOpacity);
+      // Day-night tint: matches the rest of the scene's lighting (toon
+      // ground / props darken under low ambient + low sun intensity).
+      // Driven by World.update from dayWeight + sky tint blend, so at
+      // noon this is ~(1,1,1) and at midnight ~(0.15,0.18,0.25).
+      gl_FragColor = vec4(col * uLight, uOpacity);
     }
   `;
   return new THREE.ShaderMaterial({
@@ -204,6 +209,8 @@ export function buildWaterMaterial(quality = 'high') {
       uDeep:      { value: new THREE.Color(0x44afca) },
       uShallow:   { value: new THREE.Color(0x48b1cb) },
       uHighlight: { value: new THREE.Color(0x80b1c6) },
+      // Per-frame day/night tint multiplier. Updated by World.update.
+      uLight:     { value: new THREE.Color(1, 1, 1) },
       uOpacity:   { value: 1.00 },
     },
     vertexShader: vert,
@@ -1549,6 +1556,33 @@ export class World {
     // without going pitch-black (silhouettes still readable).
     this.ambient.intensity = THREE.MathUtils.lerp(0.06, 0.22, dayWeight);
     this.moonHelper.intensity = THREE.MathUtils.lerp(0.18, 0.0, dayWeight);
+
+    // Day-night tint for the water shader. The water uses a custom
+    // ShaderMaterial without lights, so without an explicit term it
+    // would stay at full brightness all night. We pass an RGB
+    // multiplier mirroring the lighting the rest of the scene gets
+    // (toon-shaded ground / props): flat horizontal surface lit by
+    // ambient + moon hemisphere + a sun lambertian (clamped at the
+    // horizon since water normal is +Y and sun below the horizon
+    // contributes nothing).
+    if (this._waterMaterial) {
+      // Sun contribution: warm-white (0xfff4d8 ≈ 1.000, 0.957, 0.847)
+      // scaled by intensity and clamped lambertian (max(sunY, 0)).
+      const sunDot = Math.max(0, sunY);
+      const sunI = this.sun.intensity * sunDot;
+      // Moon hemisphere sky colour 0x7aa6ff ≈ (0.478, 0.651, 1.000),
+      // weighted by moonHelper.intensity (0 day, ~0.18 deep night).
+      const mI = this.moonHelper.intensity;
+      const aI = this.ambient.intensity;
+      // Raw irradiance peaks near 1.82 at solar noon. Normalise so noon
+      // lands at ~1.0 (water keeps its authored colour at full sun) and
+      // clamp at 1 so a future ambient bump can't blow out highlights.
+      const NORM = 0.55;
+      const r = Math.min(1, NORM * (aI + sunI * 1.000 + mI * 0.478));
+      const g = Math.min(1, NORM * (aI + sunI * 0.957 + mI * 0.651));
+      const b = Math.min(1, NORM * (aI + sunI * 0.847 + mI * 1.000));
+      this._waterMaterial.uniforms.uLight.value.setRGB(r, g, b);
+    }
 
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
