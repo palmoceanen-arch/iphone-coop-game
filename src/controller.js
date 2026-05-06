@@ -47,6 +47,7 @@ const btnDash = document.getElementById('btnDash');
 const btnShop = document.getElementById('btnShop');
 const btnAbility = document.getElementById('btnAbility');
 const btnInteract = document.getElementById('btnInteract');
+const btnBuild = document.getElementById('btnBuild');
 const interactLabelEl = document.getElementById('interactLabel');
 const itemBarEl = document.getElementById('itemBar');
 const inventoryDrawer = document.getElementById('inventoryDrawer');
@@ -440,6 +441,26 @@ const interactRelease = () => btnInteract.classList.remove('pressed');
 btnInteract.addEventListener('pointerup', interactRelease);
 btnInteract.addEventListener('pointercancel', interactRelease);
 btnInteract.addEventListener('pointerleave', interactRelease);
+
+// Build-wheel toggle (mobile mirror of KeyB / KeyM on desktop). Just
+// fires a one-shot 'buildMenu' event to the host, which opens or closes
+// the radial picker. We don't track open-state here — that's the host's
+// job — but we do flash the button visually for ~150ms so the player
+// gets immediate tactile feedback that the press registered.
+if (btnBuild) {
+  btnBuild.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btnBuild.classList.add('active');
+    if (btnBuild.setPointerCapture) btnBuild.setPointerCapture(e.pointerId);
+    if (navigator.vibrate) navigator.vibrate(20);
+    if (assignedSlot >= 0) socket.emit('input:event', { type: 'buildMenu' });
+    setTimeout(() => btnBuild.classList.remove('active'), 150);
+  });
+  const buildRelease = () => btnBuild.classList.remove('active');
+  btnBuild.addEventListener('pointerup', buildRelease);
+  btnBuild.addEventListener('pointercancel', buildRelease);
+  btnBuild.addEventListener('pointerleave', buildRelease);
+}
 
 function closeShop(e) {
   e.preventDefault();

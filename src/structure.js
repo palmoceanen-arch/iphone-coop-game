@@ -29,6 +29,16 @@ function ensureMaterials() {
     stone: new THREE.MeshToonMaterial({ color: 0xa6acb6, gradientMap: TOON_GRADIENT }),
     stoneDark: new THREE.MeshToonMaterial({ color: 0x6e7280, gradientMap: TOON_GRADIENT }),
     soil: new THREE.MeshToonMaterial({ color: 0x4b3522, gradientMap: TOON_GRADIENT }),
+    // Charred / burnt-log surface for campfire crossbeams. Slightly
+    // darker than woodDark so a campfire reads as "already lit" even
+    // when the procedural flame mesh is paused mid-flicker.
+    woodCharred: new THREE.MeshToonMaterial({ color: 0x2a1d12, gradientMap: TOON_GRADIENT }),
+    // Flame-orange. MeshBasicMaterial is unlit (no shading) so the
+    // flame always glows the same colour day/night — the closest the
+    // toon stack gets to an emissive without dragging in a full
+    // PBR material per-fire.
+    flame: new THREE.MeshBasicMaterial({ color: 0xff8a3a }),
+    flameCore: new THREE.MeshBasicMaterial({ color: 0xfff0a3 }),
   };
 }
 
@@ -81,12 +91,38 @@ export const RECIPES = {
     radius: 0.0,                  // walk-through; M3 farming uses E to till / plant
     height: 0.35,
   },
+  campfire: {
+    name: 'Костёр',
+    // Cheap to put up: 2 wood for the logs, 2 stone for the ring. The
+    // build-and-warm-yourself loop should be approachable, not a
+    // resource sink.
+    cost: { wood: 2, stone: 2 },
+    hp: 25,
+    // Small footprint — player can walk right up to it but can't stand
+    // *inside* the fire (which would be visually wrong).
+    radius: 0.40,
+    height: 0.55,
+  },
+  torch: {
+    name: 'Факел',
+    // Cheapest light source: one wood for the stick. No stone — a
+    // player should be able to plant a torch row to mark a path home
+    // without hoarding minerals first.
+    cost: { wood: 1 },
+    hp: 12,
+    // Thin enough to walk past at near-flush distance, so a row of
+    // torches lining a path doesn't shoulder-check the player.
+    radius: 0.18,
+    height: 1.50,
+  },
 };
 
 // Catalog ordering controls the recipe-cycling order in build mode and the
-// number-key bindings (1..4 for P1, 7..0 for P2). Keep the cheapest /
-// quickest builds first so a new player can spam fences immediately.
-export const RECIPE_ORDER = ['fence', 'wall', 'gate', 'planter'];
+// number-key bindings (1..4 for P1, 7..0 for P2 — only the first 4 still
+// have number-key fast paths; the rest live behind the build-wheel UI).
+// Keep the cheapest / quickest builds first so a new player can spam
+// fences immediately.
+export const RECIPE_ORDER = ['fence', 'wall', 'gate', 'planter', 'campfire', 'torch'];
 
 // Burst colour shown when a structure is destroyed — matches its primary
 // material. Reused by Game._onStructureDestroyed for the death VFX.
@@ -95,6 +131,8 @@ const BURST_COLOR = {
   wall: 0x9aa0a8,
   gate: 0x6b4023,
   planter: 0x4b3522,
+  campfire: 0xff8a3a,             // flame-orange so the death burst reads as "poof"
+  torch: 0xff8a3a,
 };
 
 // What a structure is *made of* — used by combat-side code to pick the
@@ -108,6 +146,12 @@ const MATERIAL_BY_KIND = {
   gate: 'wood',
   planter: 'wood',
   wall: 'stone',
+  // Campfire is a hybrid (logs + stone ring) but "chop the logs" is the
+  // dominant impact, and dropping wood matches the player's mental model
+  // ("I built a fire, I broke it, I get my logs back"). Torch is pure
+  // wood (a stick).
+  campfire: 'wood',
+  torch: 'wood',
 };
 export function structureMaterial(kind) {
   return MATERIAL_BY_KIND[kind] || 'wood';
@@ -374,6 +418,89 @@ export function buildStructureMesh(kind, x, z) {
     // `buildGateMesh()` from game.js when their open state is toggled.
     return buildGateMesh(0);
   }
+  if (kind === 'campfire') {
+    // A small ring of stones with two charred logs crossing the centre
+    // and a procedural orange flame on top. The flame mesh is named
+    // `flame` so Game's per-frame structure update can flicker its
+    // scale; the rest of the group sits still.
+    const ring = 6;
+    for (let i = 0; i < ring; i++) {
+      const ang = (i / ring) * Math.PI * 2;
+      const px = Math.cos(ang) * 0.40;
+      const pz = Math.sin(ang) * 0.40;
+      const stone = new THREE.Mesh(
+        new RoundedBoxGeometry(0.22, 0.18, 0.22, 1, 0.05),
+        i % 2 === 0 ? MATERIALS.stone : MATERIALS.stoneDark,
+      );
+      stone.position.set(px, 0.09, pz);
+      stone.rotation.y = ang;
+      stone.castShadow = true; stone.receiveShadow = true;
+      g.add(stone);
+    }
+    // Two crossed half-charred logs sitting on the inner soil patch.
+    const logGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.65, 7);
+    for (const yaw of [Math.PI / 4, -Math.PI / 4]) {
+      const log = new THREE.Mesh(logGeo, MATERIALS.woodCharred);
+      log.rotation.set(0, yaw, Math.PI / 2);
+      log.position.set(0, 0.08, 0);
+      log.castShadow = true; log.receiveShadow = true;
+      g.add(log);
+    }
+    // Outer orange flame envelope + brighter inner core. The procedural
+    // animation in game.js scales these on a sin so they breathe.
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.45, 8),
+      MATERIALS.flame,
+    );
+    flame.position.set(0, 0.32, 0);
+    flame.name = 'flame';
+    g.add(flame);
+    const core = new THREE.Mesh(
+      new THREE.ConeGeometry(0.10, 0.28, 6),
+      MATERIALS.flameCore,
+    );
+    core.position.set(0, 0.28, 0);
+    core.name = 'flameCore';
+    g.add(core);
+    return g;
+  }
+  if (kind === 'torch') {
+    // Tall thin stick with a small flame on top. The stick is sunk a
+    // hair into the ground so the bottom doesn't z-fight on slopes;
+    // the flame sits centred above the stick's tip.
+    const stickH = 1.20;
+    const stick = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.06, stickH, 7),
+      MATERIALS.woodDark,
+    );
+    stick.position.set(0, stickH / 2 - 0.02, 0);
+    stick.castShadow = true; stick.receiveShadow = true;
+    g.add(stick);
+    // A wrapped rag at the top (slightly wider, charred colour) so the
+    // flame visually \"catches\" something instead of floating off the
+    // bare wood.
+    const head = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.07, 0.14, 7),
+      MATERIALS.woodCharred,
+    );
+    head.position.set(0, stickH + 0.02, 0);
+    g.add(head);
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.13, 0.36, 8),
+      MATERIALS.flame,
+    );
+    flame.position.set(0, stickH + 0.27, 0);
+    flame.name = 'flame';
+    g.add(flame);
+    const core = new THREE.Mesh(
+      new THREE.ConeGeometry(0.07, 0.22, 6),
+      MATERIALS.flameCore,
+    );
+    core.position.set(0, stickH + 0.23, 0);
+    core.name = 'flameCore';
+    g.add(core);
+    return g;
+  }
   if (kind === 'planter') {
     // Low rectangular wooden frame around a square of dark soil. Empty
     // for M2 — M3 farming will swap in crop meshes per growth stage.
@@ -468,7 +595,25 @@ export class Structure {
   }
 
   update(dt) {
-    if (!this.mesh || this._shake <= 0.0001) return;
+    if (!this.mesh) return;
+    // Flame flicker for campfire / torch: cheap procedural scale
+    // breathing on the named `flame` and `flameCore` children. Cached
+    // on first call so we don't re-traverse every frame for non-fire
+    // structures (which have no children matching either name).
+    if (this.kind === 'campfire' || this.kind === 'torch') {
+      if (!this._flameCached) {
+        this._flameOuter = this.mesh.getObjectByName('flame') || null;
+        this._flameInner = this.mesh.getObjectByName('flameCore') || null;
+        this._flameT = Math.random() * Math.PI * 2;
+        this._flameCached = true;
+      }
+      this._flameT += dt * 7.5;
+      const wobO = 0.85 + 0.18 * Math.sin(this._flameT);
+      const wobI = 0.80 + 0.22 * Math.sin(this._flameT * 1.6 + 1.1);
+      if (this._flameOuter) this._flameOuter.scale.set(wobO, 0.9 + 0.18 * Math.sin(this._flameT * 1.3), wobO);
+      if (this._flameInner) this._flameInner.scale.set(wobI, 0.85 + 0.20 * Math.sin(this._flameT * 1.9), wobI);
+    }
+    if (this._shake <= 0.0001) return;
     this._shakeT += dt * 22;
     const offset = Math.sin(this._shakeT) * this._shake;
     this.mesh.rotation.z = this._restRotZ + offset;

@@ -34,6 +34,7 @@ import { Crop, CROP_ORDER, cropLabel } from './farming.js';
 import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
+import { BuildWheel } from './buildWheel.js';
 import { iconHTML } from './icons.js';
 
 const LEASH_WARN = 14;
@@ -194,6 +195,11 @@ export class Game {
     this.altarUI = new AltarUI();
     this.altarOpen = false;
 
+    // One build-wheel UI per player so a couch-coop pair can each have
+    // their own picker open. Constructed up front so the DOM nodes are
+    // ready before the first hotkey press.
+    this.buildWheels = [new BuildWheel(0), new BuildWheel(1)];
+
     // When the world streams a chunk out we need to despawn any
     // entities that lived inside it so their THREE meshes are
     // released alongside the chunk's group. Living-but-unloaded
@@ -283,6 +289,11 @@ export class Game {
         // Esc closes the altar UI before falling through to the pause menu
         // so it works as the universal "back" key.
         if (this.altarOpen) { this.altarUI.close(); return; }
+        // Same for any open build-wheel: prefer dismissing the picker
+        // over opening pause when the player is mid-pick.
+        for (const w of this.buildWheels || []) {
+          if (w?.isOpen) { w.close(); return; }
+        }
         this._togglePauseMenu();
       }
       if (e.code === 'KeyG') this._tryCastAbility(0);
@@ -502,6 +513,9 @@ export class Game {
     // when the player walks back into the area.
     if (this.altarUI?.isOpen) this.altarUI.close();
     this.altarOpen = false;
+    // Drop any open build-wheel UI when the run is reset so the picker
+    // doesn't outlive the player it was bound to.
+    for (const w of this.buildWheels || []) w?.close?.();
     // Structures: detach their meshes from chunk groups so the rebuilt
     // chunks don't carry stale wall geometry, and clear the persistent
     // placedStructures map so a fresh run starts with no fortress.
@@ -1542,6 +1556,30 @@ export class Game {
       const intent = intents[pi];
       const builder = this.builders[pi];
       if (!builder) continue;
+      const wheel = this.buildWheels[pi];
+      // Build-wheel: open / close on KeyB (P1) / KeyM (P2). While the
+      // wheel is open it eats every other intent for this player so
+      // pressing B doesn't also fire a sword-swing or step into a
+      // direction key.
+      if (intent.buildMenu) {
+        if (wheel.isOpen) wheel.close();
+        else wheel.open(this.world, {
+          onPick: (idx) => builder.selectRecipe(idx),
+        });
+      }
+      if (wheel.isOpen) {
+        intent.attack = false;
+        intent.attackHeld = false;
+        intent.dash = false;
+        intent.dashHeld = false;
+        intent.interact = false;
+        intent.moveX = 0;
+        intent.moveZ = 0;
+        // Don't fall through into builder.update — the player is busy
+        // picking a recipe. A previously-active builder ghost stays
+        // frozen wherever it was last seen until the wheel closes.
+        continue;
+      }
       if (intent.buildSelect >= 0) builder.selectRecipe(intent.buildSelect);
       if (builder.active) {
         builder.update(dt, intent);
@@ -1967,6 +2005,11 @@ export class Game {
         costEl.textContent = parts.join(' · ');
       }
     }
+    // Live affordability re-paint for any open build-wheel — without
+    // this the slices stay coloured according to the resource snapshot
+    // at open() time and don't react to the player picking up wood
+    // while the picker is up.
+    for (const w of this.buildWheels || []) w?.refresh?.();
     // leash overlay
     const leashEl = document.getElementById('leash');
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);

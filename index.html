@@ -154,6 +154,26 @@
       .altar-empty { padding: 14px 12px; text-align: center; opacity: 0.6; font-size: 13px; font-style: italic; }
       .altar-footer { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; opacity: 0.7; font-size: 11px; }
       .altar-hint { font-style: italic; }
+      /* Build wheel — circular recipe picker. Opened by B (P1) / M (P2)
+         or by tapping the build button on mobile. Per-player so two
+         couch-coop players can have their own picker open at once. */
+      .build-wheel { position: absolute; inset: 0; display: none; pointer-events: none; z-index: 55; }
+      .build-wheel.open { display: block; }
+      .build-wheel .ring { position: absolute; pointer-events: auto; width: 280px; height: 280px; border-radius: 50%; background: radial-gradient(circle, rgba(8,12,18,0.85) 0%, rgba(8,12,18,0.55) 70%, rgba(8,12,18,0) 100%); box-shadow: 0 6px 28px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.06); }
+      .build-wheel.p1 .ring { left: 80px; bottom: 80px; }
+      .build-wheel.p2 .ring { right: 80px; bottom: 80px; }
+      .build-wheel .ring-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; font-size: 12px; opacity: 0.85; line-height: 1.4; pointer-events: none; }
+      .build-wheel .ring-title b { display: block; font-size: 14px; opacity: 1; letter-spacing: 0.4px; margin-bottom: 2px; }
+      .build-wheel .ring-title .dim { font-size: 10px; opacity: 0.55; margin-top: 4px; font-style: italic; }
+      .build-wheel .slice { position: absolute; left: 50%; top: 50%; width: 90px; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 9px 8px; background: #1a2029; border: 1px solid rgba(255,255,255,0.14); border-radius: 12px; cursor: pointer; user-select: none; transition: transform 90ms ease, border-color 90ms ease, background 90ms ease; }
+      .build-wheel .slice:hover { background: #232b35; border-color: rgba(255,209,102,0.6); transform: translate(-50%, -50%) scale(1.06); }
+      .build-wheel .slice.unaffordable { opacity: 0.55; border-color: rgba(255,91,91,0.45); }
+      .build-wheel .slice .ic { font-size: 22px; line-height: 1; }
+      .build-wheel .slice .nm { font-size: 11.5px; font-weight: 600; letter-spacing: 0.2px; text-align: center; }
+      .build-wheel .slice .ct { font-size: 10px; opacity: 0.7; text-align: center; }
+      .build-wheel.p1 .slice { border-left: 2px solid #6ad0ff; }
+      .build-wheel.p2 .slice { border-left: 2px solid #ff8a8a; }
+      .build-wheel .close-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); font-size: 11px; opacity: 0.6; font-style: italic; pointer-events: none; }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
       #help .row + .row { margin-top: 4px; }
       #help .who.p1 { color: #6ad0ff; font-weight: 700; }
