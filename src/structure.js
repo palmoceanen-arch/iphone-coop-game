@@ -291,9 +291,9 @@ function _stoneVariation(x, z) {
     seed = ((seed * 1664525) + 1013904223) | 0;
     return ((seed >>> 0) / 0x100000000);
   };
-  const sx = 0.92 + rand() * 0.06;   // 0.92..0.98
-  const sy = 0.92 + rand() * 0.06;
-  const sz = 0.92 + rand() * 0.06;
+  const sx = 0.97 + rand() * 0.03;   // 0.97..1.00
+  const sy = 0.95 + rand() * 0.05;
+  const sz = 0.97 + rand() * 0.03;
   const yaw = (Math.floor(rand() * 4) | 0) * (Math.PI / 2);
   return { sx, sy, sz, yaw };
 }
@@ -321,26 +321,27 @@ export function buildStructureMesh(kind, x, z) {
     return buildFenceMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'wall') {
-    // One chunky stone block per cell. Reads as a cube with subtle
-    // chamfered edges (RoundedBoxGeometry r=0.04 — small enough that
-    // each face still looks flat, big enough that grazing light
-    // catches the bevel). Per-cell deterministic variation in scale
-    // + yaw so a row of walls doesn't look like clones; ghost
-    // preview falls back to (0,0).
+    // One chunky stone block per cell. Reads as a cube with clearly
+    // visible chamfered edges (RoundedBoxGeometry r=0.10 — still
+    // cube-shaped, but the bevel reads at any camera distance).
+    // Geometry fills the full 1m grid cell so a row of walls leaves
+    // only a thin shadow gap between blocks. Per-cell deterministic
+    // variation in scale + yaw keeps a row from looking cloned;
+    // ghost preview falls back to (0,0).
     const wx = (typeof x === 'number') ? x : 0;
     const wz = (typeof z === 'number') ? z : 0;
     const v = _stoneVariation(wx, wz);
     const stone = new THREE.Mesh(
-      new RoundedBoxGeometry(0.95, 1.00, 0.95, 2, 0.04),
+      new RoundedBoxGeometry(1.00, 1.05, 1.00, 2, 0.10),
       MATERIALS.stone,
     );
     stone.scale.set(v.sx, v.sy, v.sz);
     stone.rotation.y = v.yaw;
-    // Lift so the stone bottom sits at the ground. Half-height = 0.5
-    // × sy ≈ 0.46 — set to 0.5 and let `sy` keep the bbox slightly
-    // above ground (a hair of dirt margin avoids z-fighting on the
-    // ground plane).
-    stone.position.set(0, 0.50, 0);
+    // Lift so the stone bottom sits at the ground. Half-height ≈
+    // 0.525 × sy; setting y=0.525 lets the slight `sy<1` keep the
+    // bbox a hair above ground (avoids z-fighting on the ground
+    // plane).
+    stone.position.set(0, 0.525, 0);
     stone.castShadow = true; stone.receiveShadow = true;
     g.add(stone);
     return g;
