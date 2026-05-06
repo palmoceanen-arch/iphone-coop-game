@@ -15,96 +15,23 @@
 // being in the swing damageables list).
 
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { TOON_GRADIENT } from './shading.js';
-
-// Build a tiny procedural stone texture once at module load and reuse it on
-// every wall / gate column / lintel. 128×128 is enough — the toon shader
-// quantises into a couple of tone bands anyway, so the tex's role is just
-// to break up the flat fill with subtle veining + crack streaks. Generated
-// in a deterministic loop (no Math.random'd seeds, mulberry-style hash) so
-// builds are stable. One texture, one material, no GC churn.
-function _buildStoneTexture() {
-  const W = 128, H = 128;
-  const cnv = document.createElement('canvas');
-  cnv.width = W; cnv.height = H;
-  const ctx = cnv.getContext('2d');
-  const img = ctx.createImageData(W, H);
-  const data = img.data;
-  // 2D value-noise lookup, deterministic from integer (x,y) hash. Produces
-  // a soft mottle that the toon shader then steps into ~3 visible bands.
-  const hash = (x, y) => {
-    let h = (x * 374761393 + y * 668265263) | 0;
-    h = (h ^ (h >>> 13)) * 1274126177;
-    return ((h ^ (h >>> 16)) >>> 0) / 0xffffffff;
-  };
-  // Soft 4-tap bilinear of the integer hash so the noise looks like blobs,
-  // not per-pixel salt. Cheap; runs once at module load.
-  const noise = (x, y) => {
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const fx = x - xi, fy = y - yi;
-    const a = hash(xi, yi), b = hash(xi + 1, yi);
-    const c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
-    return (a * (1 - fx) + b * fx) * (1 - fy)
-         + (c * (1 - fx) + d * fx) * fy;
-  };
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      // Big blobs (lighter / darker stone patches) + finer grain on top.
-      const big = noise(x / 22, y / 22);
-      const fine = noise(x / 5, y / 5);
-      let v = 0.62 + (big - 0.5) * 0.18 + (fine - 0.5) * 0.06;
-      // Crack streaks: a couple of thin diagonal lines that drop intensity
-      // sharply, faked by sampling a low-octave noise as a hash-grid.
-      const crack = noise((x + y * 0.4) / 17, (y - x * 0.3) / 19);
-      if (crack < 0.18) v -= (0.18 - crack) * 1.2;
-      // Subtle vignette toward edges so adjacent walls' textures don't all
-      // average to the same shade — gives a faint blocky read.
-      const ex = Math.abs(x - W * 0.5) / (W * 0.5);
-      const ey = Math.abs(y - H * 0.5) / (H * 0.5);
-      const edge = Math.max(ex, ey);
-      v -= Math.max(0, edge - 0.85) * 0.6;
-      v = Math.max(0.20, Math.min(1.0, v));
-      const r = Math.round(v * 168);
-      const g = Math.round(v * 172);
-      const b = Math.round(v * 184);     // cool tint, slightly bluer than r/g
-      const idx = (y * W + x) * 4;
-      data[idx] = r;
-      data[idx + 1] = g;
-      data[idx + 2] = b;
-      data[idx + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(cnv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  // Pixelated min/mag keeps the chunky low-poly read instead of blurring
-  // crack lines into a gray smear at distance.
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  return tex;
-}
 
 // Procedural materials cached and shared across all structures of a kind so
 // long sessions don't accumulate THREE.Material allocations.
 let MATERIALS = null;
 function ensureMaterials() {
   if (MATERIALS) return;
-  const stoneTex = _buildStoneTexture();
   MATERIALS = {
     wood: new THREE.MeshToonMaterial({ color: 0x8c5a2c, gradientMap: TOON_GRADIENT }),
     woodDark: new THREE.MeshToonMaterial({ color: 0x6b4023, gradientMap: TOON_GRADIENT }),
-    // White colour multiplied by the texture map so the toon banding picks
-    // up the texture's noise + cracks instead of flattening a single hex.
-    stone: new THREE.MeshToonMaterial({
-      color: 0xffffff, map: stoneTex, gradientMap: TOON_GRADIENT,
-    }),
-    stoneDark: new THREE.MeshToonMaterial({
-      color: 0xb8b8c0, map: stoneTex, gradientMap: TOON_GRADIENT,
-    }),
+    stone: new THREE.MeshToonMaterial({ color: 0x9aa0a8, gradientMap: TOON_GRADIENT }),
+    stoneDark: new THREE.MeshToonMaterial({ color: 0x6e7280, gradientMap: TOON_GRADIENT }),
+    // Thin crack veins on stone walls. Distinctly darker than `stoneDark`
+    // so even a glancing camera angle reads the lines as cracks, not just
+    // shadow. Shared across every wall — no per-instance materials.
+    stoneCrack: new THREE.MeshToonMaterial({ color: 0x363840, gradientMap: TOON_GRADIENT }),
     soil: new THREE.MeshToonMaterial({ color: 0x4b3522, gradientMap: TOON_GRADIENT }),
   };
 }
@@ -275,51 +202,147 @@ export function buildFenceMesh(connections) {
   return g;
 }
 
-// Build a fence-style gate mesh: same post + arm layout as a fence, plus
-// a stone lintel cap so a player can pick the gate out of a fence run at
-// a glance. When `isOpen` is true, the rail arms are omitted entirely —
-// the gate's "open" state IS the absence of rails, so the player can
-// walk through the cell without bumping a barrier (the matching collider
-// shrink lives in game.js). Connections come from the same neighbour
-// scan fences use, so a gate dropped into a fence run extends its arms
-// toward both neighbours and hides them mid-toggle.
-export function buildGateMesh(connections, isOpen) {
+// Build a Minecraft-style fence gate mesh: two fence-style posts at the
+// E/W cell boundaries (gate's local x=±0.5) plus a swinging door panel
+// hinged on the west post. The whole gate is later rotated by `yaw`
+// from the calling code, so a yaw=π/2 gate has its posts at world N/S
+// edges and the door swings perpendicular.
+//
+// `openDir`:
+//   0  → closed (door spans the gap between the two posts)
+//   +1 → open, door swings toward gate-local +Z (the door tucks against
+//        the south side of the gate when yaw = 0)
+//   -1 → open, door swings toward gate-local -Z (north side)
+//
+// The caller (game.js's gate-interact handler) picks the sign so the
+// door always opens AWAY from the player who pressed E, exactly like
+// Minecraft. Collider radius is shrunk to GATE_OPEN_RADIUS in game.js
+// when openDir != 0.
+export function buildGateMesh(openDir) {
   ensureMaterials();
   const g = new THREE.Group();
-  // Post — slightly taller than a fence post (1.10m vs 1.00m) so the
-  // stone cap floats just above the fence's top rail and the gate reads
-  // as a distinct object from a far-away camera angle.
-  const post = new THREE.Mesh(
-    new THREE.BoxGeometry(0.20, 1.10, 0.20),
-    MATERIALS.woodDark,
+  // Two posts at the cell's E/W boundaries. Slightly chunkier than fence
+  // posts (0.18 vs 0.20 — actually 0.18 is a tad slimmer so the door
+  // panel between them reads cleanly without overcrowding the cell).
+  // Post tops sit at y=1.10 to match the fence's top-rail height.
+  const postGeo = new THREE.BoxGeometry(0.18, 1.10, 0.18);
+  const leftPost = new THREE.Mesh(postGeo, MATERIALS.woodDark);
+  leftPost.position.set(-0.50, 0.55, 0);
+  leftPost.castShadow = true; leftPost.receiveShadow = true;
+  g.add(leftPost);
+  const rightPost = new THREE.Mesh(postGeo, MATERIALS.woodDark);
+  rightPost.position.set(+0.50, 0.55, 0);
+  rightPost.castShadow = true; rightPost.receiveShadow = true;
+  g.add(rightPost);
+  // Door panel — a Group whose pivot sits at the west-post hinge. Its
+  // children extend from local x=0 (at the hinge) rightward toward the
+  // east post. Closed → rotation.y = 0, door spans the gap between the
+  // posts. Open → rotation.y = -π/2, door rotates clockwise (viewed
+  // from above) into the cell so the player can walk through.
+  const door = new THREE.Group();
+  door.position.set(-0.41, 0, 0);
+  // Top + bottom rails span almost the full inter-post gap. 0.78 leaves
+  // a 0.04m latch gap so the door doesn't look fused to the right post.
+  const railGeo = new THREE.BoxGeometry(0.78, 0.08, 0.05);
+  const topRail = new THREE.Mesh(railGeo, MATERIALS.wood);
+  topRail.position.set(0.39, 0.85, 0);
+  topRail.castShadow = true; topRail.receiveShadow = true;
+  door.add(topRail);
+  const botRail = new THREE.Mesh(railGeo, MATERIALS.wood);
+  botRail.position.set(0.39, 0.30, 0);
+  botRail.castShadow = true; botRail.receiveShadow = true;
+  door.add(botRail);
+  // Centre vertical bar bridges the two rails — Minecraft's gate has it.
+  const centerBar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.49, 0.05),
+    MATERIALS.wood,
   );
-  post.position.set(0, 0.55, 0);
-  post.castShadow = true; post.receiveShadow = true;
-  g.add(post);
-  // Stone cap — visual marker that this cell is openable. Wider than the
-  // post so it reads from the ground silhouette too, not just from above.
-  const cap = new THREE.Mesh(
-    new THREE.BoxGeometry(0.32, 0.10, 0.32),
-    MATERIALS.stoneDark,
+  centerBar.position.set(0.39, 0.575, 0);
+  centerBar.castShadow = true; centerBar.receiveShadow = true;
+  door.add(centerBar);
+  // End vertical bar at the latch end — a recognisable detail and a
+  // visual cue for which side the gate "closes" toward.
+  const latchBar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.62, 0.05),
+    MATERIALS.wood,
   );
-  cap.position.set(0, 1.16, 0);
-  cap.castShadow = true; cap.receiveShadow = true;
-  g.add(cap);
-  // Closed gate gets the fence-style arms; open gate omits them so the
-  // cell is walkable. The collider radius is toggled in game.js to match.
-  if (!isOpen) {
-    _addFenceArms(g, connections);
-  }
+  latchBar.position.set(0.75, 0.575, 0);
+  latchBar.castShadow = true; latchBar.receiveShadow = true;
+  door.add(latchBar);
+  if (openDir > 0) door.rotation.y = -Math.PI / 2;
+  else if (openDir < 0) door.rotation.y = +Math.PI / 2;
+  g.add(door);
   return g;
+}
+
+// Deterministic uint32 hash from integer (x,z). Used to seed crack-pattern
+// variation on stone walls so two walls at different cells don't share
+// the exact same crack layout but each individual wall is stable across
+// chunk reloads (no Math.random churn).
+function _stoneHash(x, z) {
+  let h = ((x | 0) * 374761393 + (z | 0) * 668265263) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  return ((h ^ (h >>> 16)) >>> 0);
+}
+
+// Decorate a wall group with 3-4 thin dark crack veins on its outer
+// faces, picked deterministically from `(x,z)`. Cracks are pure visuals
+// — no collider impact. Each crack is a single flat box (~0.025m thin)
+// embedded just outside the main mesh face so it reads as a dark line
+// when the camera grazes the wall. Skipped on ghost-preview meshes
+// where (x,z) isn't known so the preview stays clean.
+function _addStoneCracks(group, x, z) {
+  let state = _stoneHash(x, z) || 1;
+  const rand = () => {
+    state = ((state * 1664525) + 1013904223) | 0;
+    return ((state >>> 0) / 0x100000000);
+  };
+  const numCracks = 3 + (rand() < 0.5 ? 0 : 1);  // 3 or 4 per wall
+  for (let i = 0; i < numCracks; i++) {
+    const face = Math.floor(rand() * 4);   // 0 = +Z, 1 = -Z, 2 = +X, 3 = -X
+    const length = 0.30 + rand() * 0.40;
+    const thickness = 0.025 + rand() * 0.015;
+    const yPos = 0.30 + rand() * 1.00;
+    const lateralPos = (rand() - 0.5) * 0.60;
+    const tiltZ = (rand() - 0.5) * 0.40;
+    let geom, px, py = yPos, pz, ry = 0;
+    const FACE_OFF = 0.476;     // just outside the 0.95-wide main mesh
+    if (face === 0) {           // +Z face
+      geom = new THREE.BoxGeometry(thickness, length, 0.02);
+      px = lateralPos; pz = +FACE_OFF;
+    } else if (face === 1) {    // -Z face
+      geom = new THREE.BoxGeometry(thickness, length, 0.02);
+      px = lateralPos; pz = -FACE_OFF;
+    } else if (face === 2) {    // +X face
+      geom = new THREE.BoxGeometry(0.02, length, thickness);
+      px = +FACE_OFF; pz = lateralPos;
+      ry = Math.PI / 2;
+    } else {                    // -X face
+      geom = new THREE.BoxGeometry(0.02, length, thickness);
+      px = -FACE_OFF; pz = lateralPos;
+      ry = Math.PI / 2;
+    }
+    const m = new THREE.Mesh(geom, MATERIALS.stoneCrack);
+    m.position.set(px, py, pz);
+    m.rotation.set(0, ry, tiltZ);
+    m.castShadow = false;
+    m.receiveShadow = true;
+    group.add(m);
+  }
 }
 
 // Build a procedural mesh for one structure. Geometry is per-call so
 // each instance gets its own (small) buffers — this is fine for the
 // expected handful-of-structures-per-chunk usage. Materials are shared.
 //
+// `x` and `z` are the world-space cell centre (optional); when present,
+// kinds that vary per-instance (currently only `wall`'s crack pattern)
+// hash them for deterministic variation. Ghost previews call without
+// (x,z) so they don't show cracks.
+//
 // Returns a THREE.Group positioned at the origin; caller positions the
 // group at the world (x,z) and yaw, then parents into the chunk group.
-export function buildStructureMesh(kind) {
+export function buildStructureMesh(kind, x, z) {
   ensureMaterials();
   const g = new THREE.Group();
   if (kind === 'fence') {
@@ -331,33 +354,38 @@ export function buildStructureMesh(kind) {
     return buildFenceMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'wall') {
-    // Solid stone block that fills its 1m grid cell. Slightly inset so
-    // adjacent walls don't z-fight at the seam.
+    // Stone block with chamfered edges via RoundedBoxGeometry — 12
+    // beveled edges + 8 rounded corners off a 0.06m radius. Reads as a
+    // hewn block at any camera distance; much better silhouette than a
+    // raw cube. 2 segments per axis is the cheapest setting that still
+    // produces visible bevels.
     const main = new THREE.Mesh(
-      new THREE.BoxGeometry(0.95, 1.6, 0.95),
+      new RoundedBoxGeometry(0.95, 1.6, 0.95, 2, 0.06),
       MATERIALS.stone,
     );
     main.position.set(0, 0.80, 0);
     main.castShadow = true; main.receiveShadow = true;
     g.add(main);
-    // Cap on top in a darker stone — gives the silhouette more life from
-    // a top-down camera without an extra GLB.
+    // Cap on top — slightly larger footprint, also chamfered, in a
+    // darker stone. Gives the silhouette a hint of capstone overhang.
     const cap = new THREE.Mesh(
-      new THREE.BoxGeometry(1.00, 0.10, 1.00),
+      new RoundedBoxGeometry(1.00, 0.10, 1.00, 1, 0.04),
       MATERIALS.stoneDark,
     );
     cap.position.set(0, 1.65, 0);
     cap.castShadow = true; cap.receiveShadow = true;
     g.add(cap);
+    // Deterministic crack veins keyed off the wall's world position.
+    // Skipped for ghost previews so the placement preview stays clean.
+    if (typeof x === 'number' && typeof z === 'number') {
+      _addStoneCracks(g, x, z);
+    }
     return g;
   }
   if (kind === 'gate') {
-    // Default gate preview: closed, no neighbour connections. Live gates
-    // get arms attached by `buildGateMesh()` once neighbour scan runs in
-    // game.js. Open/closed toggle is handled there via the `open` field
-    // on the descriptor; preview always renders the closed silhouette so
-    // the player sees what they're committing to.
-    return buildGateMesh({ N: false, E: false, S: false, W: false }, false);
+    // Default gate preview: closed. Live gates get rebuilt by
+    // `buildGateMesh()` from game.js when their open state is toggled.
+    return buildGateMesh(0);
   }
   if (kind === 'planter') {
     // Low rectangular wooden frame around a square of dark soil. Empty

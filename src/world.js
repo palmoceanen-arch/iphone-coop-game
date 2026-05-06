@@ -526,18 +526,23 @@ export class World {
     }
   }
 
-  // Persist a gate's open/closed state on its descriptor so a chunk
-  // reload after the player walked away leaves it open or closed exactly
-  // as they last toggled it. Uses the same eps lookup as the other
-  // descriptor updaters above.
-  updateStructureOpen(chunkKey, x, z, isOpen) {
+  // Persist a gate's open state on its descriptor so a chunk reload
+  // after the player walked away leaves it exactly as they last
+  // toggled it. `openDir` is 0 (closed) / +1 / -1 (open, with direction
+  // = which side the door swung toward). Storing as a number lets the
+  // gate remember which way it was open after a reload.
+  updateStructureOpen(chunkKey, x, z, openDir) {
     const arr = this.placedStructures.get(chunkKey);
     if (!arr) return;
     const eps = 0.15;
+    const dir = openDir | 0;
     for (const d of arr) {
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
-        if (isOpen) d.open = true;
-        else delete d.open;
+        if (dir !== 0) d.openDir = dir;
+        else delete d.openDir;
+        // Also clear any legacy boolean `open` written by the previous
+        // gate version so reload sees the new descriptor cleanly.
+        delete d.open;
         return;
       }
     }

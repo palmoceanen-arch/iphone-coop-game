@@ -655,7 +655,9 @@ export class Game {
       if (!chunk) continue;
       const recipe = RECIPES[s.kind];
       if (!recipe) continue;
-      const mesh = buildStructureMesh(s.kind);
+      // Pass world (x,z) so the wall mesh can hash it for a deterministic
+      // crack pattern. Other kinds ignore the extra args.
+      const mesh = buildStructureMesh(s.kind, s.x, s.z);
       mesh.position.set(s.x, 0, s.z);
       mesh.rotation.y = s.yaw || 0;
       chunk.group.add(mesh);
@@ -695,10 +697,12 @@ export class Game {
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
       } else if (s.kind === 'gate') {
         // Restore persisted open state (chunk reload after the player
-        // toggled the gate, then walked away). Gate's `open` lives on
-        // the Structure so toggling doesn't have to round-trip the
-        // descriptor each frame.
-        struct.open = !!s.open;
+        // toggled the gate, then walked away). Gate's `openDir` lives
+        // on the Structure so toggling doesn't have to round-trip the
+        // descriptor each frame; legacy `s.open` boolean (from the
+        // previous fence-style gate) maps to openDir = -1 if found.
+        if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
+        else struct.openDir = s.open ? -1 : 0;
         this._rebuildGateMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
       } else if (s.kind === 'wall') {
@@ -745,8 +749,9 @@ export class Game {
 
   // Rebuild a single fence's mesh with the current neighbour connection
   // mask. Detaches the old group from the chunk, builds a fresh one,
-  // re-parents at the same world position. Yaw stays at 0 — the fence
-  // mesh is 4-way symmetric so the descriptor's yaw is meaningless.
+  // re-parents at the same world position. Fence mesh is 4-way symmetric
+  // so yaw doesn't change the silhouette, but we still preserve the
+  // descriptor's yaw for consistency with non-symmetric kinds.
   _rebuildFenceMesh(struct) {
     if (!struct || struct.kind !== 'fence' || !struct.alive || !struct.group) return;
     const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
@@ -754,31 +759,31 @@ export class Game {
     if (old && old.parent) old.parent.remove(old);
     const next = buildFenceMesh(conns);
     next.position.set(struct.pos.x, 0, struct.pos.z);
-    next.rotation.y = 0;
+    next.rotation.y = struct.yaw || 0;
     struct.group.add(next);
     struct.mesh = next;
     struct._restRotZ = next.rotation.z;
   }
 
-  // Rebuild a single gate's mesh with the current neighbour mask + open
-  // state. The gate's `open` flag stays on the Structure between calls so
-  // the toggle interaction is the only place that flips it. Identical
-  // shape to `_rebuildFenceMesh` because the renderer is shared via
-  // `_addFenceArms`. Collider radius gets nudged to GATE_OPEN_RADIUS in
-  // the open state so player movement can pass through the cell.
+  // Rebuild a single gate's mesh with the current open state. The gate's
+  // `openDir` (0/+1/-1) stays on the Structure between calls so the
+  // toggle interaction is the only place that flips it. Yaw is
+  // preserved so a gate placed at yaw=π/2 keeps its N-S orientation.
+  // Collider radius gets nudged to GATE_OPEN_RADIUS when openDir != 0
+  // so player movement can pass through the cell.
   _rebuildGateMesh(struct) {
     if (!struct || struct.kind !== 'gate' || !struct.alive || !struct.group) return;
-    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
     const old = struct.mesh;
     if (old && old.parent) old.parent.remove(old);
-    const next = buildGateMesh(conns, !!struct.open);
+    const dir = struct.openDir | 0;
+    const next = buildGateMesh(dir);
     next.position.set(struct.pos.x, 0, struct.pos.z);
-    next.rotation.y = 0;
+    next.rotation.y = struct.yaw || 0;
     struct.group.add(next);
     struct.mesh = next;
     struct._restRotZ = next.rotation.z;
     if (struct.collider) {
-      struct.collider.r = struct.open
+      struct.collider.r = dir !== 0
         ? GATE_OPEN_RADIUS
         : (RECIPES.gate?.radius || 0.45);
     }
@@ -994,10 +999,26 @@ export class Game {
       if (d <= bestD) { bestD = d; target = s; }
     }
     if (!target) return false;
-    target.open = !target.open;
+    const wasOpen = (target.openDir | 0) !== 0;
+    if (wasOpen) {
+      target.openDir = 0;
+    } else {
+      // Open AWAY from the player. Compute the player's z in the gate's
+      // local frame (yaw = θ → world→local: rotate by -θ around Y), then
+      // pick the sign that puts the door on the opposite side.
+      const dx = player.pos.x - target.pos.x;
+      const dz = player.pos.z - target.pos.z;
+      const yaw = target.yaw || 0;
+      const localZ = -dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      // localZ > 0 → player on +Z side → swing door to -Z (openDir = -1)
+      // localZ <= 0 → player on -Z side → swing door to +Z (openDir = +1)
+      target.openDir = (localZ > 0) ? -1 : +1;
+    }
     this._rebuildGateMesh(target);
     if (target.chunkKey) {
-      this.world.updateStructureOpen(target.chunkKey, target.pos.x, target.pos.z, target.open);
+      this.world.updateStructureOpen(
+        target.chunkKey, target.pos.x, target.pos.z, target.openDir,
+      );
     }
     // Sound + ring effect cribbed from the farming verbs so the toggle
     // has audible weight without a new asset. Toast announces the new
@@ -1005,7 +1026,7 @@ export class Game {
     this.sound.till?.();
     this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xc8a060, 0.9, 0.25);
     this.effects.toast?.(
-      target.open ? 'Калитка открыта' : 'Калитка закрыта',
+      (target.openDir | 0) !== 0 ? 'Калитка открыта' : 'Калитка закрыта',
       '#c8a060',
     );
     // Force a fresh prompt re-emit on the next frame so the "open /
@@ -1039,11 +1060,12 @@ export class Game {
         p._gatePromptKey = null;
         continue;
       }
-      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.open ? 'o' : 'c'}`;
+      const isOpen = (target.openDir | 0) !== 0;
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${isOpen ? 'o' : 'c'}`;
       if (p._gatePromptKey === stateKey) continue;
       p._gatePromptKey = stateKey;
       const key = (p.index === 0) ? 'E' : 'J';
-      const verb = target.open ? 'закрыть' : 'открыть';
+      const verb = isOpen ? 'закрыть' : 'открыть';
       this.effects.toast?.(`${key}: ${verb} калитку`, '#c8a060');
     }
   }
