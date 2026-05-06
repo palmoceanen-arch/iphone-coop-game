@@ -85,11 +85,32 @@ function buildWaterMaterial() {
       return vec3(sqrt(d1), sqrt(d2), hash21(nearest + 0.13));
     }
 
+    // 2D value noise used as a domain-warp source — bends the input
+    // to the Voronoi by a small noise field so cell borders curve
+    // organically instead of meeting at sharp polygonal seams.
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash21(i);
+      float b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0));
+      float d = hash21(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
     void main() {
-      // Cell scale: ~1.4-2.5 m wide cells at this frequency, which
-      // reads as a fine cellular network at the camera's view height
-      // without dissolving into noise.
-      vec3 v = voronoi(vWorldXZ * 0.65);
+      // Domain warp: shift the Voronoi input by a small noise field
+      // so cell borders curve organically — the underlying lattice
+      // is still Voronoi (network of cells), but the seams are no
+      // longer straight polygon edges.
+      vec2 warp = vec2(
+        vnoise(vWorldXZ * 0.85 + 11.0),
+        vnoise(vWorldXZ * 0.85 + 41.7)
+      ) - 0.5;
+      vec2 p = (vWorldXZ + warp * 1.6) * 0.65;
+
+      vec3 v = voronoi(p);
       float borderDist = v.y - v.x;
       float cellId = v.z;
 
@@ -102,18 +123,18 @@ function buildWaterMaterial() {
       float thickness = 0.04 + 0.07 * pulse;
       float line = 1.0 - smoothstep(0.0, thickness, borderDist);
 
-      // Occasional darker interior blob — only some cells show it at
-      // any given time, gated by another per-cell phase. The blob
-      // sits at the cell centre (small v.x), so cells where the
-      // gate is open get a soft dark pool; cells where it's closed
-      // stay flat fill. The result is a few darker spots winking on
-      // and off across the lake.
+      // Occasional darker interior blob — fades smoothly in and out
+      // per-cell using smoothstep on the gate sin (no abrupt step).
+      // The blob sits at the cell centre (small v.x), so cells whose
+      // gate is currently above the smoothstep range get a soft dark
+      // pool; everywhere else stays flat fill. Even at peak the dark
+      // tone only mixes 65% so cells never read as 'voids'.
       float darkGate = 0.5 + 0.5 * sin(uTime * 0.40 + cellId * 17.0 + 1.7);
-      float darkMask = 1.0 - smoothstep(0.10, 0.30, v.x);
-      float dark = step(0.55, darkGate) * darkMask;
+      float darkMask = 1.0 - smoothstep(0.05, 0.32, v.x);
+      float darkAmt = smoothstep(0.40, 0.85, darkGate) * darkMask;
 
       vec3 col = uShallow;
-      col = mix(col, uDeep, dark * 0.85);
+      col = mix(col, uDeep, darkAmt * 0.65);
       col = mix(col, uHighlight, line);
 
       gl_FragColor = vec4(col, uOpacity);
