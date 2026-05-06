@@ -260,6 +260,20 @@ function chunkSeed(worldSeed, cx, cz) {
   return h >>> 0;
 }
 
+// Point-in-triangle test for the marching-squares-driven water collision
+// path. Triangle vertices are passed as [x, z] pairs in world space. Uses
+// the standard half-plane sign test; treats edges as inside (any zero
+// half-plane is OK) so points landing exactly on a shared triangle edge
+// register as wet rather than slipping into a sub-pixel gap.
+function _ptInTri(px, pz, a, b, c) {
+  const d1 = (px - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (pz - b[1]);
+  const d2 = (px - c[0]) * (b[1] - c[1]) - (b[0] - c[0]) * (pz - c[1]);
+  const d3 = (px - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (pz - a[1]);
+  const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+  const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+  return !(hasNeg && hasPos);
+}
+
 // 2D value noise — deterministic, derived from world seed.
 function makeNoise(worldSeed) {
   function hash(ix, iz) {
@@ -1105,12 +1119,75 @@ export class World {
     };
   }
 
-  // True if the world position (x, z) is currently under water. Sampled
-  // directly from the same low-frequency noise used to build lake meshes,
-  // so the lookup is exact (no per-chunk cache needed) and continuous —
-  // fine for sliding the player along curved shores.
+  // True if the world position (x, z) is currently under water. Mirrors the
+  // marching-squares classification used by `_buildSmoothWaterMesh` exactly
+  // (same per-chunk skip, same per-cell corner test, same edge-crossing
+  // interpolation, same saddle disambiguation) so collision can never
+  // disagree with what the player sees. Without this the fbm noise has
+  // sub-cell variation the mesh's straight-line interpolation can't
+  // capture, producing visible holes (collision wet, mesh dry — player
+  // gets stuck on grass) and phantom water (mesh wet, collision dry —
+  // player walks on rendered water).
   isWaterAt(x, z) {
-    return this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ) < WATER_THRESHOLD;
+    // Origin chunk is water-free by design (campfire / spawn safety) —
+    // `_generateChunk` skips its mesh, so collision must agree.
+    if (Math.floor(x / CHUNK_SIZE) === 0 && Math.floor(z / CHUNK_SIZE) === 0) {
+      return false;
+    }
+    const STEP = WATER_CELL;
+    const i = Math.floor(x / STEP);
+    const j = Math.floor(z / STEP);
+    const x0 = i * STEP, z0 = j * STEP;
+    const x1 = x0 + STEP, z1 = z0 + STEP;
+    const f = WATER_NOISE_FREQ;
+    const nBL = this.noise(x0 * f, z0 * f);
+    const nTL = this.noise(x0 * f, z1 * f);
+    const nTR = this.noise(x1 * f, z1 * f);
+    const nBR = this.noise(x1 * f, z0 * f);
+    const wBL = nBL < WATER_THRESHOLD;
+    const wTL = nTL < WATER_THRESHOLD;
+    const wTR = nTR < WATER_THRESHOLD;
+    const wBR = nBR < WATER_THRESHOLD;
+    const c = (wBL ? 1 : 0) | (wTL ? 2 : 0) | (wTR ? 4 : 0) | (wBR ? 8 : 0);
+    if (c === 0) return false;
+    if (c === 15) return true;
+    // Same CCW corner walk as the mesh builder — produces a 3- to 6-vert
+    // polygon whose interior is the wet portion of the cell.
+    const corners = [
+      { wet: wBL, x: x0, z: z0, n: nBL },
+      { wet: wTL, x: x0, z: z1, n: nTL },
+      { wet: wTR, x: x1, z: z1, n: nTR },
+      { wet: wBR, x: x1, z: z0, n: nBR },
+    ];
+    const poly = [];
+    for (let k = 0; k < 4; k++) {
+      const a = corners[k], b = corners[(k + 1) % 4];
+      if (a.wet) poly.push([a.x, a.z]);
+      if (a.wet !== b.wet) {
+        const t = (WATER_THRESHOLD - a.n) / (b.n - a.n);
+        poly.push([a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t]);
+      }
+    }
+    if ((c === 5 || c === 10) && poly.length === 6) {
+      const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
+      const centerWet = this.noise(cxw * f, czw * f) < WATER_THRESHOLD;
+      if (!centerWet) {
+        // Two disjoint corner triangles — same indexing as the mesh.
+        if (c === 5) {
+          return _ptInTri(x, z, poly[0], poly[1], poly[5])
+              || _ptInTri(x, z, poly[3], poly[4], poly[2]);
+        }
+        return _ptInTri(x, z, poly[1], poly[2], poly[0])
+            || _ptInTri(x, z, poly[4], poly[5], poly[3]);
+      }
+    }
+    if (poly.length < 3) return false;
+    // Fan-triangulate from poly[0] — matches the mesh's fan emission, so
+    // any point covered by a mesh triangle is reported as wet here too.
+    for (let k = 1; k < poly.length - 1; k++) {
+      if (_ptInTri(x, z, poly[0], poly[k], poly[k + 1])) return true;
+    }
+    return false;
   }
 
   // Build a smooth-shoreline lake mesh for a single chunk via marching
