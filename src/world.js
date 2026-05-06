@@ -37,187 +37,193 @@ const SUN_FLOOR   = 0.005;
 //   2 = high   — full pattern as authored (animated breathing + dark patches)
 // The shader compiles each tier with #if WATER_QUALITY blocks so the unused
 // work is dropped at compile time, not branched at runtime.
+//
+// The water material is a MeshToonMaterial, NOT a raw ShaderMaterial. This
+// is what wires the water into the scene's lighting pipeline: ambient,
+// directional sun, hemisphere moon, and the shared TOON_GRADIENT 3-band
+// ramp all apply automatically — exactly as they do for the ground and
+// props. Our cellular pattern is injected via onBeforeCompile by replacing
+// the diffuseColor in <color_fragment>; everything after that (the toon
+// lighting passes) runs unchanged. Without this routing the water would
+// stay at full brightness through the night while every other surface
+// darkens under low sun + ambient.
+const WATER_PATTERN_FN_GLSL = /* glsl */`
+  // 2D hashes used to scatter Voronoi feature points + give each
+  // cell a stable scalar id (drives per-cell pulse phase).
+  float waterHash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  vec2 waterHash22(vec2 p) {
+    vec2 q = vec2(dot(p, vec2(127.1, 311.7)),
+                  dot(p, vec2(269.5, 183.3)));
+    return fract(sin(q) * 43758.5453);
+  }
+  // Voronoi over a 3×3 neighbourhood. Returns:
+  //   .xy = lattice coords of the nearest feature point's grid cell
+  //         (constant within a Voronoi cell — used to derive a stable
+  //         per-cell id and to sample low-freq noise at the cell)
+  //   .z  = distance to the nearest feature point
+  //   .w  = distance to the second-nearest feature point
+  // (.w - .z) is small near a cell border and large at cell centres,
+  // so we drive the bright outline width off it directly.
+  vec4 waterVoronoi(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float d1 = 8.0, d2 = 8.0;
+    vec2 nearest = vec2(0.0);
+    for (int yi = -1; yi <= 1; yi++) {
+      for (int xi = -1; xi <= 1; xi++) {
+        vec2 g = vec2(float(xi), float(yi));
+        vec2 o = waterHash22(i + g);
+        vec2 r = g + o - f;
+        float d = dot(r, r);
+        if (d < d1) { d2 = d1; d1 = d; nearest = i + g; }
+        else if (d < d2) { d2 = d; }
+      }
+    }
+    return vec4(nearest, sqrt(d1), sqrt(d2));
+  }
+  // 2D value noise used as a domain-warp source — bends the input
+  // to the Voronoi by a small noise field so cell borders curve
+  // organically instead of meeting at sharp polygonal seams.
+  float waterVnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = waterHash21(i);
+    float b = waterHash21(i + vec2(1.0, 0.0));
+    float c = waterHash21(i + vec2(0.0, 1.0));
+    float d = waterHash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+`;
+
 export function buildWaterMaterial(quality = 'high') {
   const Q = quality === 'low' ? 0 : quality === 'medium' ? 1 : 2;
-  const vert = /* glsl */`
-    attribute float shoreDist;
-    varying vec2 vWorldXZ;
-    varying float vShore;
-    void main() {
-      vec4 wp = modelMatrix * vec4(position, 1.0);
-      vWorldXZ = wp.xz;
-      vShore = shoreDist;
-      gl_Position = projectionMatrix * viewMatrix * wp;
-    }
-  `;
-  const frag = /* glsl */`
-    precision mediump float;
-    uniform float uTime;
-    uniform vec3 uDeep;
-    uniform vec3 uShallow;
-    uniform vec3 uHighlight;
-    uniform vec3 uLight;
-    uniform float uOpacity;
-    varying vec2 vWorldXZ;
-    varying float vShore;
-
-    // 2D hashes used to scatter Voronoi feature points + give each
-    // cell a stable scalar id (drives per-cell pulse phase).
-    float hash21(vec2 p) {
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-    }
-    vec2 hash22(vec2 p) {
-      vec2 q = vec2(dot(p, vec2(127.1, 311.7)),
-                    dot(p, vec2(269.5, 183.3)));
-      return fract(sin(q) * 43758.5453);
-    }
-
-    // Voronoi over a 3×3 neighbourhood. Returns:
-    //   .xy = lattice coords of the nearest feature point's grid cell
-    //         (constant within a Voronoi cell — used to derive a stable
-    //         per-cell id and to sample low-freq noise at the cell)
-    //   .z  = distance to the nearest feature point
-    //   .w  = distance to the second-nearest feature point
-    // (.w - .z) is small near a cell border and large at cell centres,
-    // so we drive the bright outline width off it directly.
-    vec4 voronoi(vec2 p) {
-      vec2 i = floor(p);
-      vec2 f = fract(p);
-      float d1 = 8.0, d2 = 8.0;
-      vec2 nearest = vec2(0.0);
-      for (int yi = -1; yi <= 1; yi++) {
-        for (int xi = -1; xi <= 1; xi++) {
-          vec2 g = vec2(float(xi), float(yi));
-          vec2 o = hash22(i + g);
-          vec2 r = g + o - f;
-          float d = dot(r, r);
-          if (d < d1) {
-            d2 = d1;
-            d1 = d;
-            nearest = i + g;
-          } else if (d < d2) {
-            d2 = d;
-          }
-        }
-      }
-      return vec4(nearest, sqrt(d1), sqrt(d2));
-    }
-
-    // 2D value noise used as a domain-warp source — bends the input
-    // to the Voronoi by a small noise field so cell borders curve
-    // organically instead of meeting at sharp polygonal seams.
-    float vnoise(vec2 p) {
-      vec2 i = floor(p);
-      vec2 f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      float a = hash21(i);
-      float b = hash21(i + vec2(1.0, 0.0));
-      float c = hash21(i + vec2(0.0, 1.0));
-      float d = hash21(i + vec2(1.0, 1.0));
-      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-    }
-
-    void main() {
-      vec3 col;
-#if WATER_QUALITY >= 1
-      // Domain warp: shift the Voronoi input by a small noise field
-      // so cell borders curve organically — the underlying lattice
-      // is still Voronoi (network of cells), but the seams are no
-      // longer straight polygon edges.
-      vec2 warp = vec2(
-        vnoise(vWorldXZ * 1.10 + 11.0),
-        vnoise(vWorldXZ * 1.10 + 41.7)
-      ) - 0.5;
-      // Higher voronoi frequency (1.10 vs the previous 0.65) so cells
-      // are smaller — ~0.9-1.5 m wide, finer network at view distance.
-      vec2 p = (vWorldXZ + warp * 1.0) * 1.10;
-
-      vec4 v = voronoi(p);
-      float borderDist = v.w - v.z;
-      float cellId = hash21(v.xy + 0.13);
-
-#if WATER_QUALITY >= 2
-      // Border thickness 'breathes' per-cell — each cell has its own
-      // phase so neighbouring borders pulse a bit out of step (the
-      // network as a whole shimmers in and out instead of beating
-      // uniformly). Wide amplitude (0.020-0.155) and a quick pulse
-      // (~4s period) so the breathing reads at a glance.
-      float pulse = 0.5 + 0.5 * sin(uTime * 1.55 + cellId * 6.2832);
-      float thickness = 0.020 + 0.135 * pulse;
-#else
-      // Static thickness on medium — pinned at the time-averaged
-      // value (pulse=0.5) so the visual weight matches the high
-      // tier's mean.
-      float thickness = 0.020 + 0.135 * 0.5;
-#endif
-      float line = 1.0 - smoothstep(0.0, thickness, borderDist);
-
-#if WATER_QUALITY >= 2
-      // Dark patches: identical Voronoi noise to the bright lines —
-      // same domain-warped lattice, just sampled at 1/1.3 the
-      // frequency (so cells are 1.3× larger) and shifted by a
-      // constant world-space offset so dark cell boundaries don't
-      // align with the bright network. The dark fill is solid (not
-      // an outline), so the cell shape itself reads as the noise.
-      vec2 pBig = (vWorldXZ + warp * 1.0) * (1.10 / 1.3) + vec2(5.7, 9.3);
-      vec4 vBig = voronoi(pBig);
-      float darkPick = hash21(vBig.xy + 3.7);
-      // smoothstep over a tiny range gives a hard fill (big cells are
-      // either dark or not) while still antialiasing the threshold
-      // crossing at sub-pixel cell boundaries.
-      float darkAmt = smoothstep(0.59, 0.61, darkPick);
-      col = mix(uShallow, uDeep, darkAmt);
-#else
-      col = uShallow;
-#endif
-
-      col = mix(col, uHighlight, line);
-#else
-      // Low tier: flat shallow fill, no Voronoi work.
-      col = uShallow;
-#endif
-
-      // Shoreline outline — thin highlight line at the water/land
-      // seam. fwidth keeps the line at constant pixel-width even
-      // though the underlying noise gradient varies along the bank,
-      // so the rim reads as a clean stylised outline (no soft falloff
-      // band) and matches the cell borders in look. Kept on every
-      // tier — costs one fwidth + one smoothstep, the cheapest part
-      // of the shader, and without it the water silhouette reads as
-      // a flat painted shape with no edge.
-      float wShore = fwidth(vShore);
-      float shoreLine = 1.0 - smoothstep(0.0, max(wShore * 2.0, 0.004), vShore);
-      col = mix(col, uHighlight, shoreLine);
-
-      // Day-night tint: matches the rest of the scene's lighting (toon
-      // ground / props darken under low ambient + low sun intensity).
-      // Driven by World.update from dayWeight + sky tint blend, so at
-      // noon this is ~(1,1,1) and at midnight ~(0.15,0.18,0.25).
-      gl_FragColor = vec4(col * uLight, uOpacity);
-    }
-  `;
-  return new THREE.ShaderMaterial({
-    defines: { WATER_QUALITY: Q },
-    uniforms: {
-      uTime:      { value: 0 },
-      // Three close-tone teal steps with deliberately gentle contrast
-      // so the cellular network reads as a single body of water
-      // rather than three sharply tinted patches. 'Shallow' is the
-      // base cell fill, 'deep' is the flat fill of the clustered
-      // dark cells (one step darker than shallow), 'highlight' is
-      // the bright cell border / shoreline outline.
-      uDeep:      { value: new THREE.Color(0x44afca) },
-      uShallow:   { value: new THREE.Color(0x48b1cb) },
-      uHighlight: { value: new THREE.Color(0x80b1c6) },
-      // Per-frame day/night tint multiplier. Updated by World.update.
-      uLight:     { value: new THREE.Color(1, 1, 1) },
-      uOpacity:   { value: 1.00 },
-    },
-    vertexShader: vert,
-    fragmentShader: frag,
+  // White base colour: the pattern overrides diffuseColor.rgb wholesale
+  // in <color_fragment>, so the material's `color` doesn't actually tint
+  // the water. Keeping it at white avoids any chance of double-multiply
+  // confusion if a future edit only patches part of the chain.
+  const mat = new THREE.MeshToonMaterial({
+    color: 0xffffff,
+    gradientMap: TOON_GRADIENT,
     transparent: true,
-    extensions: { derivatives: true },
   });
+  // The shoreline uses `fwidth(vShore)` which requires the standard
+  // derivatives extension on WebGL1. three.js auto-enables it for
+  // ShaderMaterial when the source contains fwidth, but for a
+  // MeshToonMaterial patched via onBeforeCompile we have to flag it
+  // explicitly so the program prelude inserts
+  // `#extension GL_OES_standard_derivatives : enable`.
+  mat.extensions = { ...(mat.extensions || {}), derivatives: true };
+  // Three close-tone teal steps with deliberately gentle contrast so the
+  // cellular network reads as a single body of water rather than three
+  // sharply tinted patches. 'Shallow' is the base cell fill, 'deep' is
+  // the flat fill of the clustered dark cells, 'highlight' is the bright
+  // cell border / shoreline outline. uTime is advanced once per frame
+  // from World.update.
+  mat.userData.waterUniforms = {
+    uTime:      { value: 0 },
+    uDeep:      { value: new THREE.Color(0x44afca) },
+    uShallow:   { value: new THREE.Color(0x48b1cb) },
+    uHighlight: { value: new THREE.Color(0x80b1c6) },
+  };
+  // Stash the active quality on userData so setWaterQuality (and the
+  // program cache key below) can read the current bucket without
+  // closing over a snapshot.
+  mat.userData.waterQ = Q;
+  mat.defines = { WATER_QUALITY: Q };
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, mat.userData.waterUniforms);
+    // ---- Vertex: forward world XZ and the per-vertex shoreDist ---------
+    // shoreDist is a custom attribute set by the marching-squares mesher
+    // (geometry.setAttribute('shoreDist', ...)). We expose vWorldXZ /
+    // vShore varyings to the fragment so the pattern can sample world
+    // space (chunk-independent) and the shoreline edge can use fwidth.
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+attribute float shoreDist;
+varying vec2 vWorldXZ;
+varying float vShore;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vec4 _waterWp = modelMatrix * vec4(transformed, 1.0);
+vWorldXZ = _waterWp.xz;
+vShore = shoreDist;`,
+      );
+    // ---- Fragment: declare uniforms + helpers, override diffuseColor ---
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uTime;
+uniform vec3 uDeep;
+uniform vec3 uShallow;
+uniform vec3 uHighlight;
+varying vec2 vWorldXZ;
+varying float vShore;
+${WATER_PATTERN_FN_GLSL}`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+vec3 _waterCol;
+#if WATER_QUALITY >= 1
+// Domain-warped Voronoi network — see WATER_PATTERN_FN_GLSL for the
+// individual helpers. The warp breaks integer-grid alignment so cell
+// seams curve organically.
+vec2 _waterWarp = vec2(
+  waterVnoise(vWorldXZ * 1.10 + 11.0),
+  waterVnoise(vWorldXZ * 1.10 + 41.7)
+) - 0.5;
+vec2 _waterP = (vWorldXZ + _waterWarp * 1.0) * 1.10;
+vec4 _waterV = waterVoronoi(_waterP);
+float _waterBorderDist = _waterV.w - _waterV.z;
+float _waterCellId = waterHash21(_waterV.xy + 0.13);
+#if WATER_QUALITY >= 2
+// Per-cell pulse phase so the network breathes asynchronously — wide
+// amplitude (0.020-0.155) and a ~4s period read clearly at a glance.
+float _waterPulse = 0.5 + 0.5 * sin(uTime * 1.55 + _waterCellId * 6.2832);
+float _waterThickness = 0.020 + 0.135 * _waterPulse;
+#else
+// Medium tier pins thickness at the time-averaged value so the visual
+// weight matches the high tier's mean.
+float _waterThickness = 0.020 + 0.135 * 0.5;
+#endif
+float _waterLine = 1.0 - smoothstep(0.0, _waterThickness, _waterBorderDist);
+#if WATER_QUALITY >= 2
+// Dark patches: same Voronoi noise sampled at 1/1.3 the frequency and
+// shifted so dark cell boundaries don't align with the bright network.
+vec2 _waterPBig = (vWorldXZ + _waterWarp * 1.0) * (1.10 / 1.3) + vec2(5.7, 9.3);
+vec4 _waterVBig = waterVoronoi(_waterPBig);
+float _waterDarkPick = waterHash21(_waterVBig.xy + 3.7);
+float _waterDarkAmt = smoothstep(0.59, 0.61, _waterDarkPick);
+_waterCol = mix(uShallow, uDeep, _waterDarkAmt);
+#else
+_waterCol = uShallow;
+#endif
+_waterCol = mix(_waterCol, uHighlight, _waterLine);
+#else
+// Low tier: flat shallow fill, skips both Voronoi voices entirely.
+_waterCol = uShallow;
+#endif
+// Shoreline outline kept on every tier — costs one fwidth + one
+// smoothstep and is the visual seam between water and shore.
+float _waterWShore = fwidth(vShore);
+float _waterShoreLine = 1.0 - smoothstep(0.0, max(_waterWShore * 2.0, 0.004), vShore);
+_waterCol = mix(_waterCol, uHighlight, _waterShoreLine);
+diffuseColor.rgb = _waterCol;`,
+      );
+  };
+  // Pin the program cache key to the quality tier so swapping tiers
+  // recompiles cleanly. Without this, three.js could share a compiled
+  // program across tiers and ignore the WATER_QUALITY change.
+  mat.customProgramCacheKey = () => `water-pattern-toon-q${mat.userData.waterQ}`;
+  return mat;
 }
 
 // Smooth bell centred on `centre` (in dayTime units), 1 at the peak and 0
@@ -1459,16 +1465,27 @@ export class World {
     this._waterQuality = q;
     if (this._waterMaterial) {
       const Q = q === 'low' ? 0 : q === 'medium' ? 1 : 2;
+      this._waterMaterial.userData.waterQ = Q;
       this._waterMaterial.defines = { ...this._waterMaterial.defines, WATER_QUALITY: Q };
+      // needsUpdate=true forces three.js to recompile the program; the
+      // customProgramCacheKey above keys on userData.waterQ so the new
+      // tier picks up its own compiled program rather than reusing the
+      // previous tier's.
       this._waterMaterial.needsUpdate = true;
     }
   }
 
   update(dt) {
-    // Advance the water shader's time uniform — used by the cel-shaded
-    // wave pattern + travelling shore-foam stripes. Always runs (even
-    // while the day cycle is paused) so water keeps moving in menus.
-    if (this._waterMaterial) this._waterMaterial.uniforms.uTime.value += dt;
+    // Advance the water shader's time uniform — drives the per-cell
+    // breathing pulse on the high tier. Always runs (even while the day
+    // cycle is paused) so water keeps moving in menus. The water rides
+    // on MeshToonMaterial via onBeforeCompile, and our custom uniforms
+    // are stashed on userData; the shader.uniforms object holds the
+    // same reference, so mutating .value here propagates straight
+    // through on the GPU side.
+    if (this._waterMaterial && this._waterMaterial.userData.waterUniforms) {
+      this._waterMaterial.userData.waterUniforms.uTime.value += dt;
+    }
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
@@ -1556,37 +1573,6 @@ export class World {
     // without going pitch-black (silhouettes still readable).
     this.ambient.intensity = THREE.MathUtils.lerp(0.06, 0.22, dayWeight);
     this.moonHelper.intensity = THREE.MathUtils.lerp(0.18, 0.0, dayWeight);
-
-    // Day-night tint for the water shader. The water uses a custom
-    // ShaderMaterial without lights, so without an explicit term it
-    // would stay at full brightness all night. We pass an RGB
-    // multiplier mirroring the lighting the rest of the scene gets
-    // (toon-shaded ground / props): flat horizontal surface lit by
-    // ambient + moon hemisphere + a sun lambertian (clamped at the
-    // horizon since water normal is +Y and sun below the horizon
-    // contributes nothing).
-    if (this._waterMaterial) {
-      // Sun contribution: warm-white (0xfff4d8 ≈ 1.000, 0.957, 0.847)
-      // scaled by intensity and clamped lambertian (max(sunY, 0)).
-      const sunDot = Math.max(0, sunY);
-      const sunI = this.sun.intensity * sunDot;
-      // Moon hemisphere sky colour 0x7aa6ff ≈ (0.478, 0.651, 1.000),
-      // weighted by moonHelper.intensity (0 day, ~0.18 deep night).
-      const mI = this.moonHelper.intensity;
-      const aI = this.ambient.intensity;
-      // Raw irradiance peaks near 1.82 at solar noon. Normalise to ~1.0
-      // at peak with a 0.45 floor so deep night doesn't crush the water
-      // to black — the toon-shaded ground stays around mid-grey at
-      // midnight, water should sit at a comparable level rather than
-      // becoming a black hole next to readable terrain.
-      const NORM = 0.55;
-      const FLOOR = 0.45;
-      const lerp = (raw) => FLOOR + (1 - FLOOR) * Math.min(1, NORM * raw);
-      const r = lerp(aI + sunI * 1.000 + mI * 0.478);
-      const g = lerp(aI + sunI * 0.957 + mI * 0.651);
-      const b = lerp(aI + sunI * 0.847 + mI * 1.000);
-      this._waterMaterial.uniforms.uLight.value.setRGB(r, g, b);
-    }
 
     if (this.fire) {
       this.fire.scale.setScalar(0.85 + Math.sin(performance.now() * 0.012) * 0.1 + Math.random() * 0.08);
