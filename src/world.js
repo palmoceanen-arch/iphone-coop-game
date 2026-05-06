@@ -1574,13 +1574,17 @@ export class World {
       // weighted by moonHelper.intensity (0 day, ~0.18 deep night).
       const mI = this.moonHelper.intensity;
       const aI = this.ambient.intensity;
-      // Raw irradiance peaks near 1.82 at solar noon. Normalise so noon
-      // lands at ~1.0 (water keeps its authored colour at full sun) and
-      // clamp at 1 so a future ambient bump can't blow out highlights.
+      // Raw irradiance peaks near 1.82 at solar noon. Normalise to ~1.0
+      // at peak with a 0.45 floor so deep night doesn't crush the water
+      // to black — the toon-shaded ground stays around mid-grey at
+      // midnight, water should sit at a comparable level rather than
+      // becoming a black hole next to readable terrain.
       const NORM = 0.55;
-      const r = Math.min(1, NORM * (aI + sunI * 1.000 + mI * 0.478));
-      const g = Math.min(1, NORM * (aI + sunI * 0.957 + mI * 0.651));
-      const b = Math.min(1, NORM * (aI + sunI * 0.847 + mI * 1.000));
+      const FLOOR = 0.45;
+      const lerp = (raw) => FLOOR + (1 - FLOOR) * Math.min(1, NORM * raw);
+      const r = lerp(aI + sunI * 1.000 + mI * 0.478);
+      const g = lerp(aI + sunI * 0.957 + mI * 0.651);
+      const b = lerp(aI + sunI * 0.847 + mI * 1.000);
       this._waterMaterial.uniforms.uLight.value.setRGB(r, g, b);
     }
 
