@@ -15,6 +15,85 @@ const SUN_PEAK    = 1.6;
 const SUN_HORIZON = 0.18;
 const SUN_FLOOR   = 0.005;
 
+// Cel-shaded water shader. Cheap (no displacement, no extra geometry,
+// no render targets): a single ShaderMaterial driven by a `uTime`
+// uniform plus a per-vertex `shoreDist` attribute computed at chunk
+// gen. The fragment shader quantises a 3-octave sin wave into three
+// flat colour bands (deep blue → light blue → white highlight), and
+// fades a fourth band (foam white) in close to shore using a
+// time-modulated stripe so the waterline reads as moving foam rather
+// than a static white edge. Only one material exists per Game (cached
+// in `world._waterMaterial`); the per-chunk geometry just references
+// it. `uTime` is advanced once per frame from `World.update(dt)`.
+function buildWaterMaterial() {
+  const vert = /* glsl */`
+    attribute float shoreDist;
+    varying vec2 vWorldXZ;
+    varying float vShore;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldXZ = wp.xz;
+      vShore = shoreDist;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `;
+  const frag = /* glsl */`
+    precision mediump float;
+    uniform float uTime;
+    uniform vec3 uDeep;
+    uniform vec3 uShallow;
+    uniform vec3 uHighlight;
+    uniform vec3 uFoam;
+    uniform float uOpacity;
+    varying vec2 vWorldXZ;
+    varying float vShore;
+
+    // Three angled sin waves at differing frequencies — sums to a
+    // travelling caustic-like pattern. World-space coords keep the
+    // pattern stable across chunk boundaries (no seams).
+    float waves(vec2 p, float t) {
+      float w1 = sin(p.x * 0.55 + p.y * 0.40 + t * 0.65);
+      float w2 = sin(p.x * 0.22 - p.y * 0.50 + t * 0.45 + 1.7);
+      float w3 = sin(p.x * 0.95 + p.y * 0.15 + t * 1.10 + 3.1);
+      return (w1 + w2 + w3) * (1.0 / 3.0);
+    }
+
+    void main() {
+      float w = waves(vWorldXZ, uTime);
+      // Quantise into 3 cel bands: deep / shallow / highlight.
+      vec3 col;
+      if (w > 0.55) col = uHighlight;
+      else if (w > -0.10) col = uShallow;
+      else col = uDeep;
+
+      // Shore foam: a static thin white band right at the waterline so
+      // the lake outline is always crisp, plus a moving stripe a bit
+      // further inland that washes back and forth like surf.
+      float shoreLine = 1.0 - smoothstep(0.0, 0.04, vShore);
+      float stripe = sin(vShore * 22.0 - uTime * 1.6);
+      float surfMask = 1.0 - smoothstep(0.04, 0.20, vShore);
+      float surf = step(0.55, stripe) * surfMask;
+      float foam = max(shoreLine, surf);
+      col = mix(col, uFoam, foam);
+
+      gl_FragColor = vec4(col, uOpacity);
+    }
+  `;
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime:      { value: 0 },
+      uDeep:      { value: new THREE.Color(0x2257b8) },
+      uShallow:   { value: new THREE.Color(0x6cb6ff) },
+      uHighlight: { value: new THREE.Color(0xffffff) },
+      uFoam:      { value: new THREE.Color(0xffffff) },
+      uOpacity:   { value: 0.92 },
+    },
+    vertexShader: vert,
+    fragmentShader: frag,
+    transparent: true,
+  });
+}
+
 // Smooth bell centred on `centre` (in dayTime units), 1 at the peak and 0
 // outside ±halfWidth, with a cosine taper. dayTime wraps mod 1 so the bell
 // works near the 0/1 boundary too. Used to drive the sunset/sunrise tint
@@ -961,9 +1040,24 @@ export class World {
 
     const positions = [];
     const indices = [];
+    // Per-vertex shore distance, sampled from the same noise that defines
+    // the water mask. Edge-crossing verts (shoreline) get exactly 0;
+    // interior verts get a small positive value scaling with depth. The
+    // water shader uses this to drive a white foam band right at the
+    // shore + wave-direction stripes inside the lake.
+    const shoreDists = [];
     let nextIdx = 0;
+    const sampleShoreDist = (x, z) => {
+      const n = this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ);
+      // Normalise so 0 = on the threshold (shore) and ~1 = deepest. Since
+      // n can dip below 0 we clamp the upper bound — the shader only uses
+      // the [0, ~0.4] range for foam and treats anything bigger as "deep".
+      const d = (WATER_THRESHOLD - n) / WATER_THRESHOLD;
+      return d > 0 ? d : 0;
+    };
     const pushVert = (x, z) => {
       positions.push(x, 0.04, z);
+      shoreDists.push(sampleShoreDist(x, z));
       return nextIdx++;
     };
     const pushTri = (a, b, c) => {
@@ -1053,16 +1147,10 @@ export class World {
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setAttribute('shoreDist', new THREE.BufferAttribute(new Float32Array(shoreDists), 1));
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
-    if (!this._waterMaterial) {
-      this._waterMaterial = new THREE.MeshToonMaterial({
-        color: 0x3a86ff,
-        gradientMap: TOON_GRADIENT,
-        transparent: true,
-        opacity: 0.88,
-      });
-    }
+    if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial();
     const mesh = new THREE.Mesh(geo, this._waterMaterial);
     mesh.receiveShadow = true;
     return mesh;
@@ -1117,6 +1205,10 @@ export class World {
   isNight() { return this.dayTime < SUNRISE || this.dayTime >= SUNSET; }
 
   update(dt) {
+    // Advance the water shader's time uniform — used by the cel-shaded
+    // wave pattern + travelling shore-foam stripes. Always runs (even
+    // while the day cycle is paused) so water keeps moving in menus.
+    if (this._waterMaterial) this._waterMaterial.uniforms.uTime.value += dt;
     this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
