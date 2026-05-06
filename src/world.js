@@ -177,7 +177,7 @@ export function buildWaterMaterial() {
       // the bright cell border / shoreline outline.
       uDeep:      { value: new THREE.Color(0x46aac3) },
       uShallow:   { value: new THREE.Color(0x48b1cb) },
-      uHighlight: { value: new THREE.Color(0x85c5e5) },
+      uHighlight: { value: new THREE.Color(0x78b8d9) },
       uOpacity:   { value: 1.00 },
     },
     vertexShader: vert,
