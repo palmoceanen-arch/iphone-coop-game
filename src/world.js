@@ -844,9 +844,11 @@ export class World {
     // 2. Water — marching-squares lake mesh. Sample noise at corners of a
     // (WATER_GRID+1)² grid covering this chunk; build a smooth curved
     // shoreline by interpolating where the noise crosses WATER_THRESHOLD on
-    // each cell edge. The origin chunk stays water-free so the campfire /
-    // starting area is always usable on land.
-    const waterMesh = isOrigin ? null : this._buildSmoothWaterMesh(minX, minZ);
+    // each cell edge. The origin chunk also gets a mesh — `_waterMaskAt`
+    // applies a radial bias around (0, 0) so the campfire / starting area
+    // ends up dry naturally, and any lake that crosses into origin fades
+    // smoothly instead of being chopped off at the chunk boundary.
+    const waterMesh = this._buildSmoothWaterMesh(minX, minZ);
     if (waterMesh) {
       group.add(waterMesh);
       // The water BufferGeometry is uniquely allocated for this chunk
@@ -1133,22 +1135,49 @@ export class World {
   // capture, producing visible holes (collision wet, mesh dry — player
   // gets stuck on grass) and phantom water (mesh wet, collision dry —
   // player walks on rendered water).
-  isWaterAt(x, z) {
-    // Origin chunk is water-free by design (campfire / spawn safety) —
-    // `_generateChunk` skips its mesh, so collision must agree.
-    if (Math.floor(x / CHUNK_SIZE) === 0 && Math.floor(z / CHUNK_SIZE) === 0) {
-      return false;
+  // Water-mask noise sample at world position (x, z). Two pieces:
+  // 1. Domain warping of the underlying value-fbm so the threshold contour
+  //    no longer aligns with the integer noise grid (without it the lake
+  //    shores show weak axis-alignment).
+  // 2. A radial "campfire clearing" bias near (0, 0) that pushes the noise
+  //    above threshold inside SPAWN_CLEAR_R so the spawn area is reliably
+  //    dry. We apply this in the mask itself (rather than skipping the
+  //    origin chunk's mesh entirely) so any lake that naturally extends
+  //    toward origin fades out smoothly through partial cells instead of
+  //    being chopped at the origin chunk's hard cell boundary — which
+  //    used to leave a hard 90° corner in the shoreline at x = ±32 / z = ±32.
+  _waterMaskAt(x, z) {
+    const f = WATER_NOISE_FREQ;
+    const wx = (this.noise(x * f + 11.7, z * f + 5.3) - 0.5);
+    const wz = (this.noise(x * f + 41.1, z * f + 27.9) - 0.5);
+    const A = 1.5;
+    let n = this.noise((x + wx * A) * f, (z + wz * A) * f);
+    // Spawn clearing — full bias at distance 0, fades smoothly to zero at
+    // SPAWN_CLEAR_R. Smoothstep keeps the radial fade C¹-continuous so the
+    // threshold contour stays a smooth curve where the bias trails off
+    // (a linear fade would introduce a small kink right at the radius).
+    // 0.5 is large enough to push any cell above the 0.30 threshold from
+    // any underlying noise value in [0, 1].
+    const SPAWN_CLEAR_R = 14;
+    const d = Math.hypot(x, z);
+    if (d < SPAWN_CLEAR_R) {
+      const t = 1 - d / SPAWN_CLEAR_R;
+      const ts = t * t * (3 - 2 * t);
+      n += ts * 0.5;
     }
+    return n;
+  }
+
+  isWaterAt(x, z) {
     const STEP = WATER_CELL;
     const i = Math.floor(x / STEP);
     const j = Math.floor(z / STEP);
     const x0 = i * STEP, z0 = j * STEP;
     const x1 = x0 + STEP, z1 = z0 + STEP;
-    const f = WATER_NOISE_FREQ;
-    const nBL = this.noise(x0 * f, z0 * f);
-    const nTL = this.noise(x0 * f, z1 * f);
-    const nTR = this.noise(x1 * f, z1 * f);
-    const nBR = this.noise(x1 * f, z0 * f);
+    const nBL = this._waterMaskAt(x0, z0);
+    const nTL = this._waterMaskAt(x0, z1);
+    const nTR = this._waterMaskAt(x1, z1);
+    const nBR = this._waterMaskAt(x1, z0);
     const wBL = nBL < WATER_THRESHOLD;
     const wTL = nTL < WATER_THRESHOLD;
     const wTR = nTR < WATER_THRESHOLD;
@@ -1175,7 +1204,7 @@ export class World {
     }
     if ((c === 5 || c === 10) && poly.length === 6) {
       const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
-      const centerWet = this.noise(cxw * f, czw * f) < WATER_THRESHOLD;
+      const centerWet = this._waterMaskAt(cxw, czw) < WATER_THRESHOLD;
       if (!centerWet) {
         // Two disjoint corner triangles — same indexing as the mesh.
         if (c === 5) {
@@ -1209,7 +1238,7 @@ export class World {
       for (let i = 0; i <= G; i++) {
         const wx = minX + i * STEP;
         const wz = minZ + j * STEP;
-        N[j * (G + 1) + i] = this.noise(wx * WATER_NOISE_FREQ, wz * WATER_NOISE_FREQ);
+        N[j * (G + 1) + i] = this._waterMaskAt(wx, wz);
       }
     }
 
@@ -1224,7 +1253,9 @@ export class World {
     const shoreDists = [];
     let nextIdx = 0;
     const sampleShoreDist = (x, z) => {
-      const n = this.noise(x * WATER_NOISE_FREQ, z * WATER_NOISE_FREQ);
+      // Use the same domain-warped mask as the corner classifier so the
+      // per-vertex shoreline outline lines up with the actual mesh edge.
+      const n = this._waterMaskAt(x, z);
       const d = (WATER_THRESHOLD - n) / WATER_THRESHOLD;
       return d > 0 ? d : 0;
     };
@@ -1289,7 +1320,7 @@ export class World {
         // separately to avoid bridging across the dry middle).
         if ((c === 5 || c === 10) && poly.length === 6) {
           const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
-          const nC = this.noise(cxw * WATER_NOISE_FREQ, czw * WATER_NOISE_FREQ);
+          const nC = this._waterMaskAt(cxw, czw);
           const centerWet = nC < WATER_THRESHOLD;
           if (!centerWet) {
             const baseIdx = nextIdx;
