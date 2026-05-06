@@ -17,15 +17,15 @@ const SUN_FLOOR   = 0.005;
 
 // Cel-shaded water shader. Cheap (no displacement, no extra geometry,
 // no render targets): a single ShaderMaterial driven by a `uTime`
-// uniform. The fragment shader samples a stationary 2D value-noise
-// field in world coordinates and quantises it into three close-tone
-// cyan-blue bands using two thresholds that BREATHE over time — so
-// dark and light blobs grow and shrink IN PLACE rather than drifting
-// sideways. A per-region phase offset (sampled from a slow noise
-// layer) decorrelates the pulse across the lake so the whole surface
-// doesn't beat in unison. Only one material exists per Game (cached
-// in `world._waterMaterial`); the per-chunk geometry just references
-// it. `uTime` is advanced once per frame from `World.update(dt)`.
+// uniform. The fragment shader runs a 2D Voronoi over world XZ to get
+// a stationary network of irregular cells; the BORDERS between cells
+// are drawn as thin light-cyan outlines (so the lake reads as a
+// connected web of bright lines on a base teal fill, like the
+// stylised 2D-water reference). Per-cell pulses breathe the border
+// thickness and gate occasional darker interior blobs so the network
+// doesn't sit static. Only one material exists per Game (cached in
+// `world._waterMaterial`); the per-chunk geometry just references it.
+// `uTime` is advanced once per frame from `World.update(dt)`.
 function buildWaterMaterial() {
   const vert = /* glsl */`
     varying vec2 vWorldXZ;
@@ -44,47 +44,77 @@ function buildWaterMaterial() {
     uniform float uOpacity;
     varying vec2 vWorldXZ;
 
-    // 2D value noise — hash + smooth-step interpolation between four
-    // grid corners. Pure function of position, no time term, so the
-    // noise field is stationary in world space (blobs don't drift).
+    // 2D hashes used to scatter Voronoi feature points + give each
+    // cell a stable scalar id (drives per-cell pulse phase).
     float hash21(vec2 p) {
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
-    float vnoise(vec2 p) {
+    vec2 hash22(vec2 p) {
+      vec2 q = vec2(dot(p, vec2(127.1, 311.7)),
+                    dot(p, vec2(269.5, 183.3)));
+      return fract(sin(q) * 43758.5453);
+    }
+
+    // Voronoi over a 3×3 neighbourhood. Returns:
+    //   .x = distance to the nearest feature point (centre of the cell
+    //        the fragment is in)
+    //   .y = distance to the second-nearest feature point
+    //   .z = a stable [0,1) id for the cell's feature (used for phase)
+    // (.y - .x) is small near a cell border and large at cell centres,
+    // so we drive the bright outline width off it directly.
+    vec3 voronoi(vec2 p) {
       vec2 i = floor(p);
       vec2 f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      float a = hash21(i);
-      float b = hash21(i + vec2(1.0, 0.0));
-      float c = hash21(i + vec2(0.0, 1.0));
-      float d = hash21(i + vec2(1.0, 1.0));
-      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      float d1 = 8.0, d2 = 8.0;
+      vec2 nearest = vec2(0.0);
+      for (int yi = -1; yi <= 1; yi++) {
+        for (int xi = -1; xi <= 1; xi++) {
+          vec2 g = vec2(float(xi), float(yi));
+          vec2 o = hash22(i + g);
+          vec2 r = g + o - f;
+          float d = dot(r, r);
+          if (d < d1) {
+            d2 = d1;
+            d1 = d;
+            nearest = i + g;
+          } else if (d < d2) {
+            d2 = d;
+          }
+        }
+      }
+      return vec3(sqrt(d1), sqrt(d2), hash21(nearest + 0.13));
     }
 
     void main() {
-      // Two-octave noise for organic, irregular blob shapes that
-      // still tile cleanly across chunk boundaries (world-space
-      // sample). The frequencies (0.55 + 1.30) give patches around
-      // 1.5-3 m across at the camera's typical view distance.
-      vec2 p = vWorldXZ * 0.55;
-      float n = vnoise(p) * 0.65 + vnoise(p * 2.35 + 7.0) * 0.35;
+      // Cell scale: ~1.4-2.5 m wide cells at this frequency, which
+      // reads as a fine cellular network at the camera's view height
+      // without dissolving into noise.
+      vec3 v = voronoi(vWorldXZ * 0.65);
+      float borderDist = v.y - v.x;
+      float cellId = v.z;
 
-      // Two thresholds that 'breathe' over time. The noise FIELD
-      // itself doesn't move — only the cutoffs slide up and down,
-      // so a blob grows and shrinks IN PLACE rather than drifting
-      // sideways. A per-region phase (slow noise) decorrelates the
-      // pulse across the lake so neighbouring blobs share a phase
-      // but distant ones don't beat in unison. Dark and light
-      // populations get independent speeds + offsets.
-      float regionPhase = vnoise(vWorldXZ * 0.18) * 6.2832;
-      float pulseDark  = 0.5 + 0.5 * sin(uTime * 0.55 + regionPhase);
-      float pulseLight = 0.5 + 0.5 * sin(uTime * 0.40 + regionPhase + 2.4);
-      float threshDark  = 0.22 + 0.20 * pulseDark;
-      float threshLight = 0.78 - 0.20 * pulseLight;
+      // Border thickness 'breathes' per-cell — each cell has its own
+      // phase so neighbouring borders pulse a bit out of step (the
+      // network as a whole shimmers in and out instead of beating
+      // uniformly). Thickness is the smoothstep edge distance, so
+      // pulse=0 → very thin lines, pulse=1 → noticeably thicker.
+      float pulse = 0.5 + 0.5 * sin(uTime * 0.65 + cellId * 6.2832);
+      float thickness = 0.04 + 0.07 * pulse;
+      float line = 1.0 - smoothstep(0.0, thickness, borderDist);
+
+      // Occasional darker interior blob — only some cells show it at
+      // any given time, gated by another per-cell phase. The blob
+      // sits at the cell centre (small v.x), so cells where the
+      // gate is open get a soft dark pool; cells where it's closed
+      // stay flat fill. The result is a few darker spots winking on
+      // and off across the lake.
+      float darkGate = 0.5 + 0.5 * sin(uTime * 0.40 + cellId * 17.0 + 1.7);
+      float darkMask = 1.0 - smoothstep(0.10, 0.30, v.x);
+      float dark = step(0.55, darkGate) * darkMask;
 
       vec3 col = uShallow;
-      if (n < threshDark) col = uDeep;
-      else if (n > threshLight) col = uHighlight;
+      col = mix(col, uDeep, dark * 0.85);
+      col = mix(col, uHighlight, line);
 
       gl_FragColor = vec4(col, uOpacity);
     }
@@ -92,15 +122,14 @@ function buildWaterMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime:      { value: 0 },
-      // Three close-tone steps of cyan-blue. The 'shallow' tone is
-      // the lake's base colour (most of the surface), 'deep' fills
-      // the dark blob population, 'highlight' fills the light blob
-      // population. Contrast is intentionally gentle so the blobs
-      // read as ripples on a single body of water rather than three
-      // separately tinted patches.
-      uDeep:      { value: new THREE.Color(0x3d8db8) },
+      // Three close-tone cyan-blue steps. 'Shallow' is the cell fill
+      // (most of the surface), 'highlight' is the bright thin border
+      // outline that makes the cellular network read, and 'deep' is
+      // the optional darker pool inside cells that the per-cell
+      // phase gate winks on/off.
+      uDeep:      { value: new THREE.Color(0x2f7ba5) },
       uShallow:   { value: new THREE.Color(0x5fadd2) },
-      uHighlight: { value: new THREE.Color(0x9fd4ec) },
+      uHighlight: { value: new THREE.Color(0xc9eaf5) },
       uOpacity:   { value: 0.94 },
     },
     vertexShader: vert,
