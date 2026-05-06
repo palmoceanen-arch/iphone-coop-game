@@ -25,7 +25,10 @@ import { Rune } from './runes.js';
 import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
-import { Structure, RECIPES, buildStructureMesh, buildFenceMesh } from './structure.js';
+import {
+  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh,
+  GATE_OPEN_RADIUS,
+} from './structure.js';
 import { BuildController } from './buildMode.js';
 import { Crop, CROP_ORDER, cropLabel, cropColor } from './farming.js';
 import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
@@ -681,28 +684,47 @@ export class Game {
         struct.crop = crop;
         this.crops.push(crop);
       }
-      // Fences auto-connect to neighbour fences (Minecraft-style).
-      // Rebuild the new fence's mesh with the right N/S/E/W arms, then
-      // refresh any already-spawned neighbour fence so the connection
-      // is mutual. Neighbours that haven't drained yet will pick up the
-      // connection naturally on their own first build below.
+      // Fence-connectable structures auto-link with their cardinal
+      // neighbours (Minecraft-style fence run). Rebuild the new entry's
+      // mesh with the right N/S/E/W arms, then refresh any already-
+      // spawned neighbour fence/gate so the connection is mutual.
+      // Neighbours that haven't drained yet pick up the connection
+      // naturally on their own first build below.
       if (s.kind === 'fence') {
         this._rebuildFenceMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'gate') {
+        // Restore persisted open state (chunk reload after the player
+        // toggled the gate, then walked away). Gate's `open` lives on
+        // the Structure so toggling doesn't have to round-trip the
+        // descriptor each frame.
+        struct.open = !!s.open;
+        this._rebuildGateMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'wall') {
+        // Walls don't render any connection arms themselves, but their
+        // presence flips a fence/gate neighbour's connection bit, so
+        // refresh those too.
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
       }
     }
   }
 
-  // True if the persisted descriptor map records a fence at world (x,z).
+  // True if the persisted descriptor map records a fence-connectable
+  // structure at world (x,z). Fences hook up to other fences, stone walls
+  // and gates (gates are fence-style too) so a player can run a fence
+  // straight into the side of a wall or terminate it at a gate without an
+  // ugly stub. Planters are NOT connectable — they're walk-through farm
+  // plots and a fence rail visually dead-ending at one would look weird.
   // Cheap O(n) scan of the chunk's descriptor list — typical chunk has
   // <20 structures so this is fine inside a 4-neighbour loop.
-  _isFenceAt(x, z) {
+  _isFenceConnectableAt(x, z) {
     const ck = this.world.chunkKeyOf(x, z);
     const arr = this.world.placedStructures.get(ck);
     if (!arr) return false;
     const eps = 0.15;
     for (const d of arr) {
-      if (d.kind === 'fence'
+      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate')
           && Math.abs(d.x - x) < eps
           && Math.abs(d.z - z) < eps) return true;
     }
@@ -714,10 +736,10 @@ export class Game {
   // facing-vector convention used elsewhere in the codebase).
   _fenceConnectionsAt(x, z) {
     return {
-      N: this._isFenceAt(x, z - 1),
-      S: this._isFenceAt(x, z + 1),
-      E: this._isFenceAt(x + 1, z),
-      W: this._isFenceAt(x - 1, z),
+      N: this._isFenceConnectableAt(x, z - 1),
+      S: this._isFenceConnectableAt(x, z + 1),
+      E: this._isFenceConnectableAt(x + 1, z),
+      W: this._isFenceConnectableAt(x - 1, z),
     };
   }
 
@@ -738,19 +760,47 @@ export class Game {
     struct._restRotZ = next.rotation.z;
   }
 
-  // After a fence at (x,z) is placed or destroyed, refresh the meshes of
-  // the four cardinal neighbour fences so their connection arms reflect
-  // the new state. Walks `this.structures` (live entities only); any
-  // descriptor-only fence still queued for spawn will pick up the right
+  // Rebuild a single gate's mesh with the current neighbour mask + open
+  // state. The gate's `open` flag stays on the Structure between calls so
+  // the toggle interaction is the only place that flips it. Identical
+  // shape to `_rebuildFenceMesh` because the renderer is shared via
+  // `_addFenceArms`. Collider radius gets nudged to GATE_OPEN_RADIUS in
+  // the open state so player movement can pass through the cell.
+  _rebuildGateMesh(struct) {
+    if (!struct || struct.kind !== 'gate' || !struct.alive || !struct.group) return;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildGateMesh(conns, !!struct.open);
+    next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    if (struct.collider) {
+      struct.collider.r = struct.open
+        ? GATE_OPEN_RADIUS
+        : (RECIPES.gate?.radius || 0.45);
+    }
+  }
+
+  // After ANY fence-connectable structure (fence/wall/gate) is placed or
+  // destroyed at (x,z), refresh the meshes of the four cardinal neighbour
+  // fences and gates so their arms reflect the new state. Walls don't
+  // need re-rendering — they're a static block — so we only rebuild
+  // fence/gate neighbours. Walks `this.structures` (live entities only);
+  // any descriptor-only entry still queued for spawn picks up the right
   // connections when it drains.
   _rebuildFenceNeighborsOf(x, z) {
     const eps = 0.15;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = x + dx, nz = z + dz;
       for (const s of this.structures) {
-        if (!s.alive || s.kind !== 'fence') continue;
+        if (!s.alive) continue;
+        if (s.kind !== 'fence' && s.kind !== 'gate') continue;
         if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
-          this._rebuildFenceMesh(s);
+          if (s.kind === 'fence') this._rebuildFenceMesh(s);
+          else this._rebuildGateMesh(s);
           break;
         }
       }
@@ -925,6 +975,76 @@ export class Game {
         text = `${key}: ${verb} — ${cropLabel(target.cropKind)}`;
       }
       this.effects.toast?.(text, '#9ad36b');
+    }
+  }
+
+  // ---- Gate interaction (open / close) -----------------------------
+  // Find the gate closest to `player` within GATE_INTERACT_RADIUS and
+  // toggle its open/closed state. Mirrors the contract of
+  // `_tryFarmInteract` / `_tryOpenAltar`: returns true if anything was
+  // consumed so the caller can clear the player's interact-press intent
+  // and not double-fire downstream interactions on the same E press.
+  _tryGateInteract(player) {
+    if (!player || !player.alive || this.structures.length === 0) return false;
+    const GATE_INTERACT_RADIUS = 1.4;
+    let target = null, bestD = GATE_INTERACT_RADIUS;
+    for (const s of this.structures) {
+      if (!s.alive || s.kind !== 'gate') continue;
+      const d = Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z);
+      if (d <= bestD) { bestD = d; target = s; }
+    }
+    if (!target) return false;
+    target.open = !target.open;
+    this._rebuildGateMesh(target);
+    if (target.chunkKey) {
+      this.world.updateStructureOpen(target.chunkKey, target.pos.x, target.pos.z, target.open);
+    }
+    // Sound + ring effect cribbed from the farming verbs so the toggle
+    // has audible weight without a new asset. Toast announces the new
+    // state in Russian (matching the rest of the prompt copy).
+    this.sound.till?.();
+    this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xc8a060, 0.9, 0.25);
+    this.effects.toast?.(
+      target.open ? 'Калитка открыта' : 'Калитка закрыта',
+      '#c8a060',
+    );
+    // Force a fresh prompt re-emit on the next frame so the "open /
+    // close" label flips immediately instead of waiting for the prompt
+    // dedup to expire.
+    player._gatePromptKey = null;
+    return true;
+  }
+
+  // Render an interact prompt above the closest open-able gate for each
+  // player. Same shape as `_showFarmPrompts` — one per player, deduped
+  // on a (gate, state, builder-mode) key so we don't spam the toast
+  // queue every frame the player stands next to a gate.
+  _showGatePrompts() {
+    if (this.structures.length === 0) return;
+    const PROMPT_RADIUS = 1.8;
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const builder = this.builders[p.index];
+      if (builder && builder.active) {
+        p._gatePromptKey = null;
+        continue;
+      }
+      let target = null, bestD = PROMPT_RADIUS;
+      for (const s of this.structures) {
+        if (!s.alive || s.kind !== 'gate') continue;
+        const d = Math.hypot(s.pos.x - p.pos.x, s.pos.z - p.pos.z);
+        if (d <= bestD) { bestD = d; target = s; }
+      }
+      if (!target) {
+        p._gatePromptKey = null;
+        continue;
+      }
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.open ? 'o' : 'c'}`;
+      if (p._gatePromptKey === stateKey) continue;
+      p._gatePromptKey = stateKey;
+      const key = (p.index === 0) ? 'E' : 'J';
+      const verb = target.open ? 'закрыть' : 'открыть';
+      this.effects.toast?.(`${key}: ${verb} калитку`, '#c8a060');
     }
   }
 
@@ -1463,6 +1583,14 @@ export class Game {
     // rotation), so we won't double-fire. We still allow growth ticks for
     // every alive Crop in a sim-loaded chunk regardless of build mode.
     if (!this.altarOpen) {
+      // Gate toggle takes precedence over farming if both a gate and a
+      // planter are within interact range — a planter rarely sits
+      // directly under a gate in practice, but if it does the gate
+      // matters more for traversal.
+      for (const p of this.players) {
+        if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
+        if (this._tryGateInteract(p)) p._lastIntent.interact = false;
+      }
       for (const p of this.players) {
         if (!p.alive || !p._lastIntent || !p._lastIntent.interact) continue;
         if (this._tryFarmInteract(p)) p._lastIntent.interact = false;
@@ -1489,6 +1617,11 @@ export class Game {
     // each player. Same UX as chest "press E to open" — keeps the rest of
     // the planter logic out of the player module.
     this._showFarmPrompts();
+    // Gate prompt sits in the same prompt overlay; runs after the farm
+    // prompt so a player who's between a planter and a gate sees the
+    // farm hint (the more-frequent action) — the gate hint replaces it
+    // only when the planter is out of range.
+    this._showGatePrompts();
 
     // Update enemies
     const ctx = {
@@ -1590,12 +1723,12 @@ export class Game {
         s.removeCollider();
         s.destroyMesh();
         if (s.chunkKey) this.world.forgetStructure(s.chunkKey, s.pos.x, s.pos.z);
-        // Auto-disconnect: if a fence dies, its 4-cardinal fence
-        // neighbours need their connection arms refreshed so they no
-        // longer point at the (now empty) cell. forgetStructure above
-        // has already removed this fence's descriptor, so the rebuild
-        // sees the correct post-death state.
-        if (s.kind === 'fence') {
+        // Auto-disconnect: any fence-connectable death (fence/wall/gate)
+        // empties its cell, so the 4-cardinal fence/gate neighbours need
+        // their arms refreshed to stop pointing at it. forgetStructure
+        // above has already removed this entry's descriptor, so the
+        // rebuild sees the correct post-death state.
+        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate') {
           this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
         }
         // Drop any attached Crop too — the planter mesh is gone so no

@@ -526,6 +526,23 @@ export class World {
     }
   }
 
+  // Persist a gate's open/closed state on its descriptor so a chunk
+  // reload after the player walked away leaves it open or closed exactly
+  // as they last toggled it. Uses the same eps lookup as the other
+  // descriptor updaters above.
+  updateStructureOpen(chunkKey, x, z, isOpen) {
+    const arr = this.placedStructures.get(chunkKey);
+    if (!arr) return;
+    const eps = 0.15;
+    for (const d of arr) {
+      if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
+        if (isOpen) d.open = true;
+        else delete d.open;
+        return;
+      }
+    }
+  }
+
   // Recompute which chunks are active (visible) and which actively simulate
   // their enemies, based on the centroid of all alive players. Cheap: just
   // walks the existing chunks Map and toggles group.visible. Also unloads
