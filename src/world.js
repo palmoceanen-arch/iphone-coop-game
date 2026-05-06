@@ -31,7 +31,14 @@ const SUN_FLOOR   = 0.005;
 // one material exists per Game (cached in `world._waterMaterial`);
 // the per-chunk geometry just references it. `uTime` is advanced
 // once per frame from `World.update(dt)`.
-export function buildWaterMaterial() {
+// Three quality buckets driven by the player's video settings:
+//   0 = low    — flat shallow fill + thin shoreline outline
+//   1 = medium — Voronoi network + shoreline, no animation, no dark patches
+//   2 = high   — full pattern as authored (animated breathing + dark patches)
+// The shader compiles each tier with #if WATER_QUALITY blocks so the unused
+// work is dropped at compile time, not branched at runtime.
+export function buildWaterMaterial(quality = 'high') {
+  const Q = quality === 'low' ? 0 : quality === 'medium' ? 1 : 2;
   const vert = /* glsl */`
     attribute float shoreDist;
     varying vec2 vWorldXZ;
@@ -110,6 +117,8 @@ export function buildWaterMaterial() {
     }
 
     void main() {
+      vec3 col;
+#if WATER_QUALITY >= 1
       // Domain warp: shift the Voronoi input by a small noise field
       // so cell borders curve organically — the underlying lattice
       // is still Voronoi (network of cells), but the seams are no
@@ -123,10 +132,10 @@ export function buildWaterMaterial() {
       vec2 p = (vWorldXZ + warp * 1.0) * 1.10;
 
       vec4 v = voronoi(p);
-      vec2 lat = v.xy;
       float borderDist = v.w - v.z;
-      float cellId = hash21(lat + 0.13);
+      float cellId = hash21(v.xy + 0.13);
 
+#if WATER_QUALITY >= 2
       // Border thickness 'breathes' per-cell — each cell has its own
       // phase so neighbouring borders pulse a bit out of step (the
       // network as a whole shimmers in and out instead of beating
@@ -134,8 +143,15 @@ export function buildWaterMaterial() {
       // (~4s period) so the breathing reads at a glance.
       float pulse = 0.5 + 0.5 * sin(uTime * 1.55 + cellId * 6.2832);
       float thickness = 0.020 + 0.135 * pulse;
+#else
+      // Static thickness on medium — pinned at the time-averaged
+      // value (pulse=0.5) so the visual weight matches the high
+      // tier's mean.
+      float thickness = 0.020 + 0.135 * 0.5;
+#endif
       float line = 1.0 - smoothstep(0.0, thickness, borderDist);
 
+#if WATER_QUALITY >= 2
       // Dark patches: identical Voronoi noise to the bright lines —
       // same domain-warped lattice, just sampled at 1/1.3 the
       // frequency (so cells are 1.3× larger) and shifted by a
@@ -144,21 +160,30 @@ export function buildWaterMaterial() {
       // an outline), so the cell shape itself reads as the noise.
       vec2 pBig = (vWorldXZ + warp * 1.0) * (1.10 / 1.3) + vec2(5.7, 9.3);
       vec4 vBig = voronoi(pBig);
-      vec2 latBig = vBig.xy;
-      float darkPick = hash21(latBig + 3.7);
+      float darkPick = hash21(vBig.xy + 3.7);
       // smoothstep over a tiny range gives a hard fill (big cells are
       // either dark or not) while still antialiasing the threshold
       // crossing at sub-pixel cell boundaries.
       float darkAmt = smoothstep(0.59, 0.61, darkPick);
+      col = mix(uShallow, uDeep, darkAmt);
+#else
+      col = uShallow;
+#endif
 
-      vec3 col = mix(uShallow, uDeep, darkAmt);
       col = mix(col, uHighlight, line);
+#else
+      // Low tier: flat shallow fill, no Voronoi work.
+      col = uShallow;
+#endif
 
       // Shoreline outline — thin highlight line at the water/land
       // seam. fwidth keeps the line at constant pixel-width even
       // though the underlying noise gradient varies along the bank,
       // so the rim reads as a clean stylised outline (no soft falloff
-      // band) and matches the cell borders in look.
+      // band) and matches the cell borders in look. Kept on every
+      // tier — costs one fwidth + one smoothstep, the cheapest part
+      // of the shader, and without it the water silhouette reads as
+      // a flat painted shape with no edge.
       float wShore = fwidth(vShore);
       float shoreLine = 1.0 - smoothstep(0.0, max(wShore * 2.0, 0.004), vShore);
       col = mix(col, uHighlight, shoreLine);
@@ -167,6 +192,7 @@ export function buildWaterMaterial() {
     }
   `;
   return new THREE.ShaderMaterial({
+    defines: { WATER_QUALITY: Q },
     uniforms: {
       uTime:      { value: 0 },
       // Three close-tone teal steps with deliberately gentle contrast
@@ -384,6 +410,11 @@ export class World {
     this._nightCol = new THREE.Color(0x070b15);
     this._sunsetCol = new THREE.Color(0xff9a55);
     this._tmpSkyCol = new THREE.Color();
+    // Water shader quality bucket: 'low' | 'medium' | 'high'. Driven by
+    // the player's video settings (settings.applyVideo →
+    // world.setWaterQuality). Held here so the lazy-built water material
+    // picks up the right tier on first use.
+    this._waterQuality = 'high';
     this._buildSky();
     this._buildLights();
     this._buildGround();
@@ -1354,7 +1385,7 @@ export class World {
     geo.setAttribute('shoreDist', new THREE.BufferAttribute(new Float32Array(shoreDists), 1));
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
     geo.computeVertexNormals();
-    if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial();
+    if (!this._waterMaterial) this._waterMaterial = buildWaterMaterial(this._waterQuality);
     const mesh = new THREE.Mesh(geo, this._waterMaterial);
     mesh.receiveShadow = true;
     return mesh;
@@ -1407,6 +1438,24 @@ export class World {
   }
 
   isNight() { return this.dayTime < SUNRISE || this.dayTime >= SUNSET; }
+
+  // Switch the water shader's quality bucket. Called by Settings.applyVideo
+  // whenever the player picks a different water tier in the pause menu. If
+  // the material has already been built, we patch its `defines` and force a
+  // recompile; otherwise the new value is just stored and picked up on the
+  // first lazy build inside `_buildSmoothWaterMesh`.
+  setWaterQuality(quality) {
+    const q = quality === 'low' || quality === 'medium' || quality === 'high'
+      ? quality
+      : 'high';
+    if (this._waterQuality === q) return;
+    this._waterQuality = q;
+    if (this._waterMaterial) {
+      const Q = q === 'low' ? 0 : q === 'medium' ? 1 : 2;
+      this._waterMaterial.defines = { ...this._waterMaterial.defines, WATER_QUALITY: Q };
+      this._waterMaterial.needsUpdate = true;
+    }
+  }
 
   update(dt) {
     // Advance the water shader's time uniform — used by the cel-shaded

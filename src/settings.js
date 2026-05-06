@@ -37,6 +37,7 @@ export const VIDEO_PRESETS = {
     resolutionScale: 0.75,
     fog: true,
     particles: 'low',
+    water: 'low',
     fov: 60,
   },
   medium: {
@@ -45,6 +46,7 @@ export const VIDEO_PRESETS = {
     resolutionScale: 1.0,
     fog: true,
     particles: 'medium',
+    water: 'medium',
     fov: 60,
   },
   high: {
@@ -53,6 +55,7 @@ export const VIDEO_PRESETS = {
     resolutionScale: 1.0,
     fog: true,
     particles: 'high',
+    water: 'high',
     fov: 60,
   },
   ultra: {
@@ -61,6 +64,7 @@ export const VIDEO_PRESETS = {
     resolutionScale: 1.25,
     fog: true,
     particles: 'high',
+    water: 'high',
     fov: 60,
   },
 };
@@ -247,6 +251,9 @@ export class Settings {
     }
     if (this.effects && typeof this.effects.setParticleScale === 'function') {
       this.effects.setParticleScale(this.particleMultiplier());
+    }
+    if (this.world && typeof this.world.setWaterQuality === 'function') {
+      this.world.setWaterQuality(v.water);
     }
   }
 
