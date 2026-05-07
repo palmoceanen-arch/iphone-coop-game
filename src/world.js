@@ -682,12 +682,17 @@ export class World {
 
   markChestConsumed(chunkKey, x, z) {
     this._consumedChests.add(this.spawnKey(chunkKey, x, z));
+    // Drop the chest's gold dot from the minimap overlay on the next
+    // render. Same hook the structure-mutation paths use; the minimap
+    // listens via `_onChunkChanged` -> `Minimap.invalidate(key)`.
+    if (this._onChunkChanged) this._onChunkChanged(chunkKey);
   }
   markBreakableConsumed(chunkKey, x, z) {
     this._consumedBreakables.add(this.spawnKey(chunkKey, x, z));
   }
   markAltarConsumed(chunkKey, x, z) {
     this._consumedAltars.add(this.spawnKey(chunkKey, x, z));
+    if (this._onChunkChanged) this._onChunkChanged(chunkKey);
   }
 
   // Player just placed a structure at (x,z) with the given kind / yaw / hp.
@@ -912,6 +917,11 @@ export class World {
     // mesh's lifecycle. Only the *large* trees / rocks are harvestable; tiny
     // ground-clutter rocks and bushes stay non-interactive.
     const resourceSpawns = [];
+    // Decorative landmarks (currently just cliff-cluster boulders) that
+    // aren't harvestable but should still appear on the minimap.
+    // `_placeCliffCluster` pushes one entry per rock so the cluster
+    // reads as a chunky pile of dots rather than a single point.
+    const naturalProps = [];
     // BufferGeometries we own (fresh-allocated for this chunk and not
     // returned to a shared cache). Currently just the marching-squares
     // water mesh, but the array is generic so future per-chunk meshes
@@ -985,7 +995,7 @@ export class World {
         const n = sampleN(x, z);
         if (n < 0.62) continue; // only on rocky terrain
         if (!this._spotClear(x, z, 3.0, colliders)) continue;
-        this._placeCliffCluster(group, colliders, r, x, z, isOnWater);
+        this._placeCliffCluster(group, colliders, r, x, z, isOnWater, naturalProps);
       }
     }
 
@@ -1208,6 +1218,7 @@ export class World {
       breakableSpawns,
       altarSpawns,
       resourceSpawns,
+      naturalProps,
       cx,
       cz,
       _ownedGeos: ownedGeos,
@@ -1450,8 +1461,11 @@ export class World {
 
   // Drop a tight cluster of oversized gray rocks at (x, z), reading as a
   // cliff outcrop / boulder pile. 4-6 rocks in a small radius, sized 2.6-4×
-  // larger than the regular scattered rocks.
-  _placeCliffCluster(group, colliders, r, x, z, isOnWater) {
+  // larger than the regular scattered rocks. The optional `mapDots` array
+  // collects per-rock positions so the minimap can stamp the whole pile
+  // (these rocks aren't in `resourceSpawns` because they aren't
+  // harvestable — without this hook the cluster is invisible on the map).
+  _placeCliffCluster(group, colliders, r, x, z, isOnWater, mapDots) {
     const count = r.int(4, 6);
     const placed = [];
     for (let i = 0; i < count; i++) {
@@ -1473,6 +1487,7 @@ export class World {
       mesh.rotation.x = r.range(-0.1, 0.1);
       group.add(mesh);
       placed.push({ x: px, z: pz });
+      if (mapDots) mapDots.push({ x: px, z: pz, kind: 'rock' });
     }
     if (placed.length > 0) {
       // One big collider for the whole cluster — cheaper than per-rock.

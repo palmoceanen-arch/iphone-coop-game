@@ -27,11 +27,19 @@
 import { CHUNK_SIZE } from './world.js';
 
 // Pixels per metre on the cached chunk tiles AND the on-screen display.
-// 2 px/m → 64 px per chunk, ~100 m visible window in a 200×200 minimap.
+// 2 px/m → 64 px per chunk, ~110 m visible window in a 220×220 minimap.
 // Doubling this would quadruple bake cost; halving makes single-tile
 // landmarks (a tree, a torch) sub-pixel.
 const PX_PER_M = 2;
 const TILE_PX = CHUNK_SIZE * PX_PER_M;
+
+// Radius (in metres, around each living player) considered "explored".
+// Roughly matches the on-screen camera footprint (~25 m diagonal) plus a
+// small buffer so the map only ever reveals terrain the player could
+// plausibly have seen. Loaded chunks reach much further out (≈3 chunks
+// of streaming budget) so using `world.chunks` as the visited set would
+// expose unseen lakes and points-of-interest beyond the camera frustum.
+const EXPLORATION_RADIUS_M = 30;
 
 // Colour palette. RGB triplets are used by the per-pixel terrain bake;
 // CSS strings are used by the structure overlay (which goes through the
@@ -57,6 +65,12 @@ const STRUCTURE_COL = {
   campfire: '#ff8a3a',
   torch:    '#ffd060',
 };
+// Persistent points of interest live on the same overlay layer as
+// player-built structures so they re-bake whenever the chunk's overlay
+// is invalidated (chest opened, altar drained → markChestConsumed /
+// markAltarConsumed fires _onChunkChanged, dropping the dot).
+const CHEST_COL = '#ffd166'; // gold — matches the in-world chest lid lock
+const ALTAR_COL = '#e6f0ff'; // near-white — reads against grass and rocks
 // Bright accent so player blips read against any terrain colour.
 // P1 = cyan (matches `.hud.left .name`), P2 = pink (`.hud.right .name`).
 const PLAYER_COL = ['#6ad0ff', '#ff8a8a'];
@@ -108,6 +122,33 @@ export class Minimap {
     this._terrain.delete(chunkKey);
     this._tile.delete(chunkKey);
     this._dirty.add(chunkKey);
+  }
+
+  // Mark every chunk a `EXPLORATION_RADIUS_M`-radius disc around the
+  // player overlaps as visited. We don't try to paint a partial chunk —
+  // exposing the whole 32 m chunk once the player is within camera reach
+  // is close enough to "what they could see" and avoids per-pixel
+  // visibility masks. Called once per living player per frame.
+  _markExplored(p) {
+    if (!p || !p.alive) return;
+    const r = EXPLORATION_RADIUS_M;
+    const cMinX = Math.floor((p.pos.x - r) / CHUNK_SIZE);
+    const cMaxX = Math.floor((p.pos.x + r) / CHUNK_SIZE);
+    const cMinZ = Math.floor((p.pos.z - r) / CHUNK_SIZE);
+    const cMaxZ = Math.floor((p.pos.z + r) / CHUNK_SIZE);
+    for (let ccz = cMinZ; ccz <= cMaxZ; ccz++) {
+      for (let ccx = cMinX; ccx <= cMaxX; ccx++) {
+        // Closest point on the chunk's AABB to the player. If that's
+        // within the radius, at least one corner of the chunk is in
+        // view, so reveal the whole tile.
+        const minX = ccx * CHUNK_SIZE, maxX = minX + CHUNK_SIZE;
+        const minZ = ccz * CHUNK_SIZE, maxZ = minZ + CHUNK_SIZE;
+        const qx = p.pos.x < minX ? minX : (p.pos.x > maxX ? maxX : p.pos.x);
+        const qz = p.pos.z < minZ ? minZ : (p.pos.z > maxZ ? maxZ : p.pos.z);
+        const dx = p.pos.x - qx, dz = p.pos.z - qz;
+        if (dx * dx + dz * dz <= r * r) this._visited.add(`${ccx},${ccz}`);
+      }
+    }
   }
 
   _bakeTerrain(chunkKey) {
@@ -164,6 +205,19 @@ export class Minimap {
         stamp(lx, ly, r.kind === 'tree' ? COL.tree : COL.rock);
       }
     }
+    // Natural rock piles (cliff clusters). These are decorative
+    // (non-harvestable, non-collidable per-rock — the cluster has one
+    // shared collider) so they aren't in `resourceSpawns`. Without this
+    // pass the prominent boulder piles dotting rocky terrain were
+    // invisible on the minimap, making the map's "rock" coverage feel
+    // sparse compared to what the player actually sees.
+    if (chunk && chunk.naturalProps) {
+      for (const r of chunk.naturalProps) {
+        const lx = Math.round((r.x - minX) * PX_PER_M);
+        const ly = Math.round((r.z - minZ) * PX_PER_M);
+        stamp(lx, ly, COL.rock);
+      }
+    }
 
     this._terrain.set(chunkKey, id);
   }
@@ -176,11 +230,11 @@ export class Minimap {
     }
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, TILE_PX, TILE_PX);
+    const [cx, cz] = chunkKey.split(',').map(Number);
+    const minX = cx * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
     const placed = this.world.placedStructures && this.world.placedStructures.get(chunkKey);
     if (placed && placed.length > 0) {
-      const [cx, cz] = chunkKey.split(',').map(Number);
-      const minX = cx * CHUNK_SIZE;
-      const minZ = cz * CHUNK_SIZE;
       for (const s of placed) {
         const c = STRUCTURE_COL[s.kind];
         if (!c) continue;
@@ -188,6 +242,41 @@ export class Minimap {
         const ly = Math.round((s.z - minZ) * PX_PER_M) - 1;
         ctx.fillStyle = c;
         ctx.fillRect(lx, ly, 3, 3);
+      }
+    }
+    // Chests + altars. Both live as plain {x, z, chunkKey} descriptors on
+    // the chunk's spawn arrays. Skip ones the player has already
+    // consumed — `markChestConsumed` / `markAltarConsumed` add the spawn
+    // to a Set and fire `_onChunkChanged`, which routes back into
+    // `invalidate()` and re-bakes this overlay so the dot disappears.
+    const chunk = this.world.chunks.get(chunkKey);
+    if (chunk) {
+      const consumedChests = this.world._consumedChests;
+      if (chunk.chestSpawns) {
+        ctx.fillStyle = CHEST_COL;
+        for (const c of chunk.chestSpawns) {
+          if (consumedChests && consumedChests.has(this.world.spawnKey(chunkKey, c.x, c.z))) continue;
+          const lx = Math.round((c.x - minX) * PX_PER_M);
+          const ly = Math.round((c.z - minZ) * PX_PER_M);
+          // 3×3 solid square reads cleanly at 2 px/m.
+          ctx.fillRect(lx - 1, ly - 1, 3, 3);
+        }
+      }
+      const consumedAltars = this.world._consumedAltars;
+      if (chunk.altarSpawns) {
+        ctx.fillStyle = ALTAR_COL;
+        for (const a of chunk.altarSpawns) {
+          if (consumedAltars && consumedAltars.has(this.world.spawnKey(chunkKey, a.x, a.z))) continue;
+          const lx = Math.round((a.x - minX) * PX_PER_M);
+          const ly = Math.round((a.z - minZ) * PX_PER_M);
+          // Diamond / plus shape (5 px) so altars read distinctly from
+          // the square chest dot at the same scale.
+          ctx.fillRect(lx,     ly - 2, 1, 1);
+          ctx.fillRect(lx - 1, ly - 1, 3, 1);
+          ctx.fillRect(lx - 2, ly,     5, 1);
+          ctx.fillRect(lx - 1, ly + 1, 3, 1);
+          ctx.fillRect(lx,     ly + 2, 1, 1);
+        }
       }
     }
   }
@@ -224,16 +313,29 @@ export class Minimap {
     if (p1 && p1.alive) { cx += p1.pos.x; cz += p1.pos.z; n++; }
     if (n === 0) return; // both dead — nothing useful to display
     cx /= n; cz /= n;
+    // Snap the window centre to the same 0.5 m grid the cached tiles
+    // live on (1 tile pixel = 0.5 m at PX_PER_M = 2). Without this snap
+    // the per-frame `Math.round(dx)` for each tile crosses pixel
+    // boundaries every time the centroid drifts past a half-pixel,
+    // making every tree / rock / wall jitter by one pixel as the
+    // players walk. Snapping ensures every chunk's screen offset is
+    // already an exact integer pixel, so consecutive frames stamp the
+    // same pixels until the camera has actually moved a full pixel.
+    cx = Math.round(cx * PX_PER_M) / PX_PER_M;
+    cz = Math.round(cz * PX_PER_M) / PX_PER_M;
 
     const halfM = (W / 2) / PX_PER_M;
     const minWX = cx - halfM;
     const minWZ = cz - (H / 2) / PX_PER_M;
 
-    // Mark every currently-loaded chunk as visited. The set is otherwise
-    // additive — once visited, a chunk's terrain stays drawn even after
-    // the chunk unloads from world.chunks (which is what the player wants
-    // when wandering back to find an old camp).
-    for (const key of this.world.chunks.keys()) this._visited.add(key);
+    // Mark a small disc around each living player as visited. This
+    // matches the on-screen camera footprint plus a small buffer so the
+    // map only ever exposes terrain the players could plausibly have
+    // seen — using `world.chunks.keys()` here would expose terrain ~3
+    // chunks beyond the camera (the streaming budget) including lakes,
+    // chests and altars the players haven't reached yet.
+    this._markExplored(p0);
+    this._markExplored(p1);
 
     const cMinX = Math.floor((cx - halfM) / CHUNK_SIZE);
     const cMaxX = Math.floor((cx + halfM) / CHUNK_SIZE);
