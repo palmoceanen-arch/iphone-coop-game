@@ -162,10 +162,19 @@ export class AbilityProjectile {
     if (!this.alive) return;
     this.alive = false;
 
-    // AoE damage
+    // AoE damage. If the projectile already applied direct damage to the
+    // collided enemy (this.damage > 0, the icebolt/spell-bolt case), keep
+    // skipping that enemy here so it isn't double-hit. But for purely
+    // explosive projectiles (this.damage === 0, currently fireball), the
+    // collided enemy must be included — otherwise a fireball that collides
+    // dead-on with an enemy delivers zero damage to that enemy because the
+    // direct branch was a no-op AND the AoE loop excluded them. Same bug
+    // would silently hit any future explosive ability with damage:0.
+    const directAlreadyDamaged = this.damage > 0;
     if (this.aoeRadius > 0 && this.aoeDamage > 0) {
       for (const e of enemies) {
-        if (!e.alive || e === directHitEnemy) continue;
+        if (!e.alive) continue;
+        if (directAlreadyDamaged && e === directHitEnemy) continue;
         const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
         const d = Math.hypot(dx, dz);
         if (d <= this.aoeRadius + e.radius) {
