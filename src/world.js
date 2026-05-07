@@ -485,7 +485,11 @@ export class World {
   // Ground = a single large flat plane (toon-shaded grass) that follows the
   // centroid of the players. Snapped to a multiple of CHUNK_SIZE so its
   // texture does not visibly slide. With a flat colour and no displacement
-  // there are no self-shadowing artifacts.
+  // there are no self-shadowing artifacts. Loaded chunks paint their own
+  // small per-chunk ground patches on top of this plane (sand / light
+  // grass / dark forest based on the same noise the minimap samples), so
+  // this base plane only ever shows in the unloaded distance — its colour
+  // matches the dominant "light grass" tier so the seam is invisible.
   _buildGround() {
     const size = (ACTIVE_RADIUS * 2 + 4) * CHUNK_SIZE; // ~320m
     const geo = new THREE.PlaneGeometry(size, size, 1, 1);
@@ -495,8 +499,66 @@ export class World {
       gradientMap: TOON_GRADIENT,
     });
     this.ground = new THREE.Mesh(geo, mat);
+    // Sit just below the per-chunk patches (which live at y=0) so the patches
+    // win the depth test inside loaded chunks but the base plane fills in
+    // the unexplored skirt that streams just past the camera.
+    this.ground.position.y = -0.02;
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
+  }
+
+  // Bake a 64×64 RGBA texture for one chunk's ground tile, painting sand
+  // (low noise), light grass (mid) and dark forest grass (high) from the
+  // exact same `this.noise` field the minimap samples — so a sand patch
+  // visible on the minimap is sand under the players' feet too. 0.5 m per
+  // texel matches the minimap's 2 px/m cache; the bilinear filter on the
+  // GPU softens the sand→grass→forest steps without our having to bake a
+  // gradient pass into the texture itself.
+  _bakeChunkGroundTexture(cx, cz) {
+    const TILE_PX = 64;        // 2 px/m × 32 m chunk
+    const PX_PER_M = 2;
+    const minX = cx * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE;
+    const canvas = document.createElement('canvas');
+    canvas.width = TILE_PX;
+    canvas.height = TILE_PX;
+    const ctx = canvas.getContext('2d');
+    const id = ctx.createImageData(TILE_PX, TILE_PX);
+    const data = id.data;
+    const noise = this.noise;
+    for (let py = 0; py < TILE_PX; py++) {
+      const wz = minZ + (py + 0.5) / PX_PER_M;
+      for (let px = 0; px < TILE_PX; px++) {
+        const wx = minX + (px + 0.5) / PX_PER_M;
+        const n = noise(wx, wz);
+        let r, g, b;
+        // Same thresholds as the minimap's terrain bake — sand on low
+        // noise, light grass on mid, deep forest on high. The colours
+        // here are toon-friendly (slightly brighter than the muted
+        // minimap palette) so they read well under the 3-band sun ramp.
+        if (n < 0.32)        { r = 196; g = 169; b = 106; } // sand   (#c4a96a)
+        else if (n < 0.55)   { r = 109; g = 176; b =  80; } // grass  (#6db050) — was the global ground colour
+        else                 { r =  60; g = 110; b =  65; } // forest (#3c6e41)
+        const i = (py * TILE_PX + px) * 4;
+        data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(id, 0, 0);
+    const tex = new THREE.CanvasTexture(canvas);
+    // Linear filtering on the chunk patch makes the sand→grass→forest
+    // transitions soft instead of pixel-stepped at typical view
+    // distances. ClampToEdge stops the filter from sampling past the
+    // 32 m chunk edge into the neighbour's address space; adjacent
+    // chunks are baked from the same continuous noise so the boundary
+    // pixels already match closely and the seam is invisible.
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return tex;
   }
 
   _buildCampfire() {
@@ -922,10 +984,13 @@ export class World {
     // `_placeCliffCluster` pushes one entry per rock so the cluster
     // reads as a chunky pile of dots rather than a single point.
     const naturalProps = [];
-    // BufferGeometries we own (fresh-allocated for this chunk and not
-    // returned to a shared cache). Currently just the marching-squares
-    // water mesh, but the array is generic so future per-chunk meshes
-    // can hook in. `_disposeChunk` walks this list on unload.
+    // BufferGeometries / Materials / Textures we own (fresh-allocated
+    // for this chunk and not returned to a shared cache). The water
+    // mesh's BufferGeometry is one entry; the per-chunk ground patch
+    // contributes another three (geometry, material, baked texture).
+    // `_disposeChunk` walks this list on unload and calls .dispose() on
+    // anything that has one — so any future per-chunk GPU resource can
+    // just be pushed here without touching the unload path.
     const ownedGeos = [];
 
     const isOrigin = (cx === 0 && cz === 0);
@@ -933,6 +998,26 @@ export class World {
     const localCenter = (x, z) => Math.hypot(x, z);
 
     const sampleN = (x, z) => this.noise(x, z);
+
+    // 1. Per-chunk ground patch. A 32×32 m plane painted with the same
+    // sand / light-grass / dark-forest noise the minimap samples, so the
+    // 3D world's ground reads with the same biome variation a player
+    // sees on the map. Sits at y=0 — the global ground plane is at
+    // y=-0.02, so loaded chunks win the depth test and the base plane
+    // only ever shows in the unloaded distance. Trees, rocks, structures
+    // etc. are placed at y=0 and continue to sit flush on this patch.
+    const groundTex = this._bakeChunkGroundTexture(cx, cz);
+    const groundGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 1, 1);
+    groundGeo.rotateX(-Math.PI / 2);
+    const groundMat = new THREE.MeshToonMaterial({
+      map: groundTex,
+      gradientMap: TOON_GRADIENT,
+    });
+    const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+    groundMesh.position.set(minX + CHUNK_SIZE / 2, 0, minZ + CHUNK_SIZE / 2);
+    groundMesh.receiveShadow = true;
+    group.add(groundMesh);
+    ownedGeos.push(groundGeo, groundMat, groundTex);
 
     // 2. Water — marching-squares lake mesh. Sample noise at corners of a
     // (WATER_GRID+1)² grid covering this chunk; build a smooth curved
