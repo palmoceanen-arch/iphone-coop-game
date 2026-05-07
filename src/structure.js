@@ -26,8 +26,12 @@ function ensureMaterials() {
   MATERIALS = {
     wood: new THREE.MeshToonMaterial({ color: 0x8c5a2c, gradientMap: TOON_GRADIENT }),
     woodDark: new THREE.MeshToonMaterial({ color: 0x6b4023, gradientMap: TOON_GRADIENT }),
-    stone: new THREE.MeshToonMaterial({ color: 0xa6acb6, gradientMap: TOON_GRADIENT }),
-    stoneDark: new THREE.MeshToonMaterial({ color: 0x6e7280, gradientMap: TOON_GRADIENT }),
+    // Match the colour the chunk-spawned rock props (Kenney Nature Kit
+    // gltfs) get tinted to in `models.js` — without this, a player-built
+    // stone wall reads noticeably bluer/lighter than the boulders they
+    // mined the stone from, which is jarring next to natural rock.
+    stone: new THREE.MeshToonMaterial({ color: 0x8a8e95, gradientMap: TOON_GRADIENT }),
+    stoneDark: new THREE.MeshToonMaterial({ color: 0x5c6066, gradientMap: TOON_GRADIENT }),
     soil: new THREE.MeshToonMaterial({ color: 0x4b3522, gradientMap: TOON_GRADIENT }),
     // Charred / burnt-log surface for campfire crossbeams. Slightly
     // darker than woodDark so a campfire reads as "already lit" even

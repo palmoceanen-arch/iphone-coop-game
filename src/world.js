@@ -960,7 +960,12 @@ export class World {
       const mesh = spawnProp(id, { scale, rotationY: yaw });
       mesh.position.set(x, 0, z);
       group.add(mesh);
-      const collider = { x, z, r: 1.0 };
+      // Trunk-tight collider. The tree mesh's foliage canopy reaches
+      // out ~1m but the wood stem itself is only ~0.4m wide — players
+      // were complaining that they bumped into "thin air" around big
+      // pines. 0.5 is half the previous radius and matches what your
+      // sword can reach against the trunk.
+      const collider = { x, z, r: 0.5 };
       colliders.push(collider);
       resourceSpawns.push({ x, z, kind: 'tree', mesh, chunkKey, collider, colliderArray: colliders, group });
     }
