@@ -347,6 +347,63 @@ export class Enemy {
     return ({ slime: 0x6cd25b, archer: 0xc9a3ff, bomber: 0xff8a30, wisp: 0x9dfcff, ogre: 0xb98860 })[this.kind] || 0xffffff;
   }
 
+  // JSON-clean snapshot for persistence. Captures everything the
+  // chunk-streaming reload path needs to bring this enemy back at the
+  // same HP / pos / aggro state. Returns null when the enemy is dead so
+  // callers can drop the entry instead of saving a tombstone.
+  toOverride() {
+    if (!this.alive) return null;
+    const ov = {
+      kind: this.kind,
+      x: this.pos.x,
+      z: this.pos.z,
+      level: this.level,
+      hp: this.hp,
+      maxHP: this.maxHP,
+      elite: !!this.elite,
+      asleep: !!this.asleep,
+      state: this.state || 'idle',
+      homeX: this.home ? this.home.x : this.pos.x,
+      homeZ: this.home ? this.home.z : this.pos.z,
+    };
+    // Only store status effects when present so a save with a thousand
+    // idle slimes doesn't carry a thousand `_frozen: 0` entries.
+    if (this._frozen && this._frozen > 0) ov._frozen = this._frozen;
+    if (this._slow && this._slow > 0) ov._slow = this._slow;
+    if (this._poison && this._poison.dur > 0) {
+      ov._poison = { dps: this._poison.dps, dur: this._poison.dur };
+    }
+    return ov;
+  }
+
+  // Re-apply a saved snapshot. Constructor has already run config() to
+  // produce baseline level-scaled stats; we patch hp / state / status
+  // effects on top so the enemy resumes at exactly the captured state.
+  applyOverride(ov) {
+    if (!ov) return;
+    if (typeof ov.maxHP === 'number') this.maxHP = ov.maxHP;
+    if (typeof ov.hp === 'number') {
+      this.hp = Math.max(0, Math.min(this.maxHP, ov.hp));
+      if (this.hp <= 0) this.alive = false;
+    }
+    if (typeof ov.state === 'string') {
+      this.state = ov.state;
+      this.stateTimer = 0;
+    }
+    if (typeof ov.asleep === 'boolean') {
+      this.asleep = ov.asleep;
+      if (this.mesh) this.mesh.visible = !ov.asleep;
+    }
+    if (typeof ov._frozen === 'number') this._frozen = ov._frozen;
+    if (typeof ov._slow === 'number') this._slow = ov._slow;
+    if (ov._poison && typeof ov._poison.dur === 'number') {
+      this._poison = { dps: ov._poison.dps || 0, dur: ov._poison.dur, src: null };
+    }
+    if (ov.homeX !== undefined && ov.homeZ !== undefined) {
+      this.home = { x: ov.homeX, z: ov.homeZ };
+    }
+  }
+
   _explode(playersForDamage = null) {
     this.effects.flashSphere(this.pos.x, 0.8, this.pos.z, 0xff8a30, this.boomRadius, 0.3);
     this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xff8a30, this.boomRadius, 0.4);

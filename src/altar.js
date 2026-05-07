@@ -175,4 +175,23 @@ export class Altar {
     this.alive = false;
     this.scene.remove(this.mesh);
   }
+
+  // JSON-clean snapshot of altar state. Returns null for altars that
+  // are still at full charges so the saved blob doesn't carry no-op
+  // entries for every altar the player has merely walked past.
+  toOverride() {
+    if (this.charges >= MAX_CHARGES) return null;
+    return { charges: Math.max(0, this.charges) };
+  }
+
+  // Re-apply a saved charge count after construction. Refreshes the
+  // glow state immediately so a depleted altar reads as spent on the
+  // first frame instead of the next gameplay tick.
+  applyOverride(ov) {
+    if (!ov) return;
+    if (typeof ov.charges === 'number') {
+      this.charges = Math.max(0, Math.min(MAX_CHARGES, ov.charges));
+      this._refreshGlow();
+    }
+  }
 }

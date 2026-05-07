@@ -251,6 +251,41 @@ export class Resource {
   burstY() {
     return (this.kind === 'tree') ? 1.6 : 0.5;
   }
+
+  // JSON-clean snapshot of mutable state for persistence. Returns null
+  // for resources that haven't deviated from the initial chunk-spawn
+  // state — the caller can drop the override entry when this is null
+  // and let chunk regen re-emit the resource at full HP. Saves bytes.
+  toOverride() {
+    if (this.state === 'alive' && this.hp >= this.maxHP) return null;
+    const out = { hp: this.hp, state: this.state };
+    if (this.state === 'stump') out.regrowT = this.regrowT;
+    return out;
+  }
+
+  // Re-apply a previously-saved snapshot in-place. Called by the game's
+  // resource drainer right after constructing the Resource against a
+  // freshly-streamed mesh, so a chunk that reloads picks the resource
+  // back up exactly where the player left it.
+  applyOverride(ov) {
+    if (!ov) return;
+    if (typeof ov.hp === 'number') {
+      this.hp = Math.max(0, Math.min(this.maxHP, ov.hp));
+      if (this.hp <= 0) this.alive = false;
+    }
+    const targetState = ov.state || 'alive';
+    if (targetState === 'stump' || targetState === 'gone') {
+      // Run through the normal death path so the chunk's collider and
+      // visual mesh end up in the same configuration they would have
+      // taken naturally — modulo the regrowT carry-over below.
+      this.alive = false;
+      this.enterDeathState();
+      if (typeof ov.regrowT === 'number') this.regrowT = ov.regrowT;
+    } else {
+      this.alive = true;
+      this.state = 'alive';
+    }
+  }
 }
 
 // Compute wood / stone yield for a resource break. Kept here so the kind →

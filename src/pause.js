@@ -11,6 +11,11 @@ export class PauseMenu {
     if (!this.root) return;
     this.isOpen = false;
     this.onToggle = null; // optional, set by Game
+    // Set by Game so the "Сбросить прогресс" footer button can clear
+    // the persistent save and rebuild the world from scratch. Pause
+    // menu only owns the DOM wiring; the actual reset logic lives in
+    // Game._resetProgress.
+    this.onResetProgress = null;
 
     this._bindTabs();
     this._bindControls();
@@ -66,6 +71,16 @@ export class PauseMenu {
       if (window.confirm('Сбросить настройки графики и звука к стандартным?')) {
         this.settings.reset();
       }
+    });
+    document.getElementById('pause-progress-reset')?.addEventListener('click', () => {
+      if (!this.onResetProgress) return;
+      const ok = window.confirm(
+        'Сбросить весь прогресс? Это вернёт мир в исходное состояние, удалит все собранные предметы, золото, постройки и грядки. Действие необратимо.',
+      );
+      if (!ok) return;
+      this.onResetProgress();
+      this.close();
+      this.onToggle?.(false);
     });
     // Preset row
     document.querySelectorAll('#preset-row button[data-preset]').forEach((btn) => {

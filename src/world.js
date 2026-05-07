@@ -450,10 +450,36 @@ export class World {
     this._consumedChests = new Set();
     this._consumedBreakables = new Set();
     this._consumedAltars = new Set();
+    // Per-chunk overrides for natural (procedurally-spawned) entities.
+    // Keyed by chunkKey — value is an object that may contain:
+    //   { resources: { [posKey]: { hp, state, regrowT } },
+    //     altars:    { [posKey]: { charges } },
+    //     enemies:   [{ kind, x, z, hp, maxHP, level, elite, asleep, ... }] }
+    // Populated by Game on chunk unload (capture phase) and by SaveSystem
+    // when a save is restored. Read by `_loadChunkSync` so a re-streamed
+    // chunk surfaces with the same enemy / resource / altar state the
+    // player left it in. The dedicated Map (rather than a property bolted
+    // on the chunk record) lives across unload→reload cycles for free
+    // because chunks are dropped from `this.chunks` but the override
+    // entry stays put.
+    this.chunkOverrides = new Map();
     // Callback invoked when a chunk is unloaded; Game wires this up to
     // despawn entities tied to that chunk (enemies, chests, etc.) so
     // their THREE meshes are released alongside the chunk's group.
+    // _onCaptureChunkState fires *before* _onChunkUnload so Game has a
+    // chance to snapshot live enemy / resource / altar state into
+    // chunkOverrides while the entities are still healthy. Splitting
+    // the two hooks keeps the capture path side-effect-free with respect
+    // to the despawn path: capture reads `pos`/`hp`/`state`, then despawn
+    // releases pool meshes — the order matters because pool release
+    // can flip `alive` to false on the live entity.
+    this._onCaptureChunkState = null;
     this._onChunkUnload = null;
+    // Optional listener that fires whenever a persistence-affecting
+    // mutation lands on the World (e.g. a structure HP update, a chest
+    // marked consumed, an enemy snapshot stored). SaveSystem hooks this
+    // to debounce writes; left as null when no save system is wired.
+    this._onPersistDirty = null;
     this._lastGroundCx = null;
     this._lastGroundCz = null;
     // Pre-allocated colour temporaries for the per-frame sky tint blend.
@@ -747,11 +773,51 @@ export class World {
     const chunk = this._generateChunk(cx, cz);
     this.chunks.set(key, chunk);
     this.scene.add(chunk.group);
-    if (chunk.enemySpawns) for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
+    // Persistent chunk overrides — enemy snapshots replace the
+    // procedural spawn list entirely (so a chunk that had its enemies
+    // killed stays empty until they regenerate via some other rule),
+    // while resource / altar overrides ride into the spawn descriptor
+    // and are applied by Game on entity construction.
+    const ov = this.chunkOverrides.get(key);
+    if (chunk.enemySpawns) {
+      if (ov && Array.isArray(ov.enemies)) {
+        for (const persisted of ov.enemies) {
+          // Stamp chunkKey/group references so Game's drainer can
+          // route the spawn through `_isSpawnLive`.
+          this.enemySpawns.push({
+            ...persisted,
+            chunkKey: key,
+            _persisted: true,
+          });
+        }
+      } else {
+        for (const e of chunk.enemySpawns) this.enemySpawns.push(e);
+      }
+    }
     if (chunk.chestSpawns) for (const c of chunk.chestSpawns) this.chestSpawns.push(c);
     if (chunk.breakableSpawns) for (const b of chunk.breakableSpawns) this.breakableSpawns.push(b);
-    if (chunk.altarSpawns) for (const a of chunk.altarSpawns) this.altarSpawns.push(a);
-    if (chunk.resourceSpawns) for (const r of chunk.resourceSpawns) this.resourceSpawns.push(r);
+    if (chunk.altarSpawns) {
+      const altarOv = ov && ov.altars;
+      for (const a of chunk.altarSpawns) {
+        const pk = `${a.x.toFixed(1)},${a.z.toFixed(1)}`;
+        if (altarOv && altarOv[pk]) {
+          this.altarSpawns.push({ ...a, override: altarOv[pk] });
+        } else {
+          this.altarSpawns.push(a);
+        }
+      }
+    }
+    if (chunk.resourceSpawns) {
+      const resOv = ov && ov.resources;
+      for (const r of chunk.resourceSpawns) {
+        const pk = `${r.x.toFixed(1)},${r.z.toFixed(1)}`;
+        if (resOv && resOv[pk]) {
+          this.resourceSpawns.push({ ...r, override: resOv[pk] });
+        } else {
+          this.resourceSpawns.push(r);
+        }
+      }
+    }
     // Re-emit any persisted player-placed structures for this chunk so the
     // game-side drainer can re-instantiate them on top of the regenerated
     // chunk geometry. Non-empty only after the player has built things in
@@ -836,6 +902,12 @@ export class World {
     for (const key of toUnload) {
       const chunk = this.chunks.get(key);
       if (!chunk) continue;
+      // Capture before despawn — entities are still alive here, so we
+      // can read hp / pos / state cleanly. _onChunkUnload then releases
+      // the meshes back to their pools.
+      if (typeof this._onCaptureChunkState === 'function') {
+        try { this._onCaptureChunkState(key); } catch { /* ignore listener errors */ }
+      }
       if (typeof this._onChunkUnload === 'function') {
         try { this._onChunkUnload(key); } catch { /* ignore listener errors */ }
       }
@@ -853,19 +925,120 @@ export class World {
     return `${chunkKey}@${x.toFixed(1)},${z.toFixed(1)}`;
   }
 
+  // Local (chunk-scoped) position key matching the format used in
+  // chunkOverrides — must stay in sync with the lookup in _loadChunkSync
+  // and saveSystem.posKey().
+  _posKey(x, z) {
+    return `${x.toFixed(1)},${z.toFixed(1)}`;
+  }
+
+  // Lazily get-or-create the override entry for a chunk. Returns the
+  // override object for in-place mutation; callers should also call
+  // `_markPersistDirty` after the mutation lands.
+  _ensureChunkOverride(chunkKey) {
+    let ov = this.chunkOverrides.get(chunkKey);
+    if (!ov) {
+      ov = {};
+      this.chunkOverrides.set(chunkKey, ov);
+    }
+    return ov;
+  }
+
+  // Trim empty branches off a chunk override and drop the entry
+  // entirely if nothing's left, so the saved blob doesn't accumulate
+  // dead keys for chunks the player just visited and walked away from
+  // without changing anything.
+  _pruneChunkOverride(chunkKey) {
+    const ov = this.chunkOverrides.get(chunkKey);
+    if (!ov) return;
+    if (ov.resources && Object.keys(ov.resources).length === 0) delete ov.resources;
+    if (ov.altars && Object.keys(ov.altars).length === 0) delete ov.altars;
+    if (ov.enemies && ov.enemies.length === 0 && !ov._enemiesPersisted) delete ov.enemies;
+    if (Object.keys(ov).length === 0) this.chunkOverrides.delete(chunkKey);
+  }
+
+  // Notify the wired SaveSystem (if any) that something persistence-
+  // affecting just changed. Cheap when no save system is attached.
+  _markPersistDirty() {
+    if (typeof this._onPersistDirty === 'function') {
+      try { this._onPersistDirty(); } catch { /* ignore listener errors */ }
+    }
+  }
+
+  // ---- public chunk-override mutators ----------------------------------
+  // Used by Game when a per-chunk natural entity changes state (resource
+  // damaged / harvested / regrowing, altar charge spent, etc.) and on
+  // chunk unload via the capture path. Each helper mutates the override
+  // structure in place and fires the persist-dirty hook. Pass `null` /
+  // `undefined` for the value to clear the slot.
+  recordResourceOverride(chunkKey, x, z, override) {
+    const pk = this._posKey(x, z);
+    if (!override) {
+      const ov = this.chunkOverrides.get(chunkKey);
+      if (!ov || !ov.resources) return;
+      delete ov.resources[pk];
+      this._pruneChunkOverride(chunkKey);
+      this._markPersistDirty();
+      return;
+    }
+    const ov = this._ensureChunkOverride(chunkKey);
+    if (!ov.resources) ov.resources = {};
+    ov.resources[pk] = { ...override };
+    this._markPersistDirty();
+  }
+
+  recordAltarOverride(chunkKey, x, z, override) {
+    const pk = this._posKey(x, z);
+    if (!override) {
+      const ov = this.chunkOverrides.get(chunkKey);
+      if (!ov || !ov.altars) return;
+      delete ov.altars[pk];
+      this._pruneChunkOverride(chunkKey);
+      this._markPersistDirty();
+      return;
+    }
+    const ov = this._ensureChunkOverride(chunkKey);
+    if (!ov.altars) ov.altars = {};
+    ov.altars[pk] = { ...override };
+    this._markPersistDirty();
+  }
+
+  // Replace the persisted enemy snapshot list for a chunk. Pass an
+  // empty array to keep the chunk explicitly empty (no procedural
+  // respawn) — pass `null` to forget the override entirely so the next
+  // load falls back to procedural spawn.
+  recordEnemyOverride(chunkKey, enemies) {
+    if (enemies === null || enemies === undefined) {
+      const ov = this.chunkOverrides.get(chunkKey);
+      if (!ov) return;
+      delete ov.enemies;
+      delete ov._enemiesPersisted;
+      this._pruneChunkOverride(chunkKey);
+      this._markPersistDirty();
+      return;
+    }
+    const ov = this._ensureChunkOverride(chunkKey);
+    ov.enemies = Array.isArray(enemies) ? enemies.map(e => ({ ...e })) : [];
+    ov._enemiesPersisted = true;
+    this._markPersistDirty();
+  }
+
   markChestConsumed(chunkKey, x, z) {
     this._consumedChests.add(this.spawnKey(chunkKey, x, z));
     // Drop the chest's gold dot from the minimap overlay on the next
     // render. Same hook the structure-mutation paths use; the minimap
     // listens via `_onChunkChanged` -> `Minimap.invalidate(key)`.
     if (this._onChunkChanged) this._onChunkChanged(chunkKey);
+    this._markPersistDirty();
   }
   markBreakableConsumed(chunkKey, x, z) {
     this._consumedBreakables.add(this.spawnKey(chunkKey, x, z));
+    this._markPersistDirty();
   }
   markAltarConsumed(chunkKey, x, z) {
     this._consumedAltars.add(this.spawnKey(chunkKey, x, z));
     if (this._onChunkChanged) this._onChunkChanged(chunkKey);
+    this._markPersistDirty();
   }
 
   // Player just placed a structure at (x,z) with the given kind / yaw / hp.
@@ -894,6 +1067,7 @@ export class World {
       });
     }
     if (this._onChunkChanged) this._onChunkChanged(chunkKey);
+    this._markPersistDirty();
     return desc;
   }
 
@@ -919,6 +1093,7 @@ export class World {
           arr.splice(i, 1);
           if (arr.length === 0) this.placedStructures.delete(chunkKey);
           if (this._onChunkChanged) this._onChunkChanged(chunkKey);
+          this._markPersistDirty();
           return;
         }
       }
@@ -932,6 +1107,7 @@ export class World {
     }
     if (arr.length === 0) this.placedStructures.delete(chunkKey);
     if (this._onChunkChanged) this._onChunkChanged(chunkKey);
+    this._markPersistDirty();
   }
 
   // Update the persisted HP value for an in-place structure so a reload
@@ -949,12 +1125,13 @@ export class World {
       for (const d of arr) {
         if (Math.abs(d.x - x) >= eps || Math.abs(d.z - z) >= eps) continue;
         const dy = d.y || 0;
-        if (Math.abs(dy - y) < yEps) { d.hp = hp; return; }
+        if (Math.abs(dy - y) < yEps) { d.hp = hp; this._markPersistDirty(); return; }
       }
     }
     for (const d of arr) {
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
         d.hp = hp;
+        this._markPersistDirty();
         return;
       }
     }
@@ -973,6 +1150,7 @@ export class World {
       if (Math.abs(d.x - x) < eps && Math.abs(d.z - z) < eps) {
         if (farm) d.farm = farm;
         else delete d.farm;
+        this._markPersistDirty();
         return;
       }
     }
@@ -995,6 +1173,7 @@ export class World {
         // Also clear any legacy boolean `open` written by the previous
         // gate version so reload sees the new descriptor cleanly.
         delete d.open;
+        this._markPersistDirty();
         return;
       }
     }
@@ -1760,6 +1939,13 @@ export class World {
     for (const key of keys) {
       const chunk = this.chunks.get(key);
       if (!chunk) continue;
+      // Mirror the per-chunk path: capture entity state, then despawn.
+      // This matters when a terrain-quality change forces a full
+      // reload — without capture, enemies / damaged resources around
+      // the player would silently reset to fresh state on reload.
+      if (typeof this._onCaptureChunkState === 'function') {
+        try { this._onCaptureChunkState(key); } catch { /* ignore listener errors */ }
+      }
       if (typeof this._onChunkUnload === 'function') {
         try { this._onChunkUnload(key); } catch { /* ignore listener errors */ }
       }

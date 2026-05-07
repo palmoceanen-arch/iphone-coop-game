@@ -37,6 +37,7 @@ import { AltarUI } from './altarUI.js';
 import { BuildWheel } from './buildWheel.js';
 import { Minimap } from './minimap.js';
 import { iconHTML } from './icons.js';
+import { SaveSystem } from './saveSystem.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -207,7 +208,17 @@ export class Game {
     // entities are dropped (they'll respawn when the chunk reloads
     // because they aren't in the consumed sets); destroyed entities
     // were already marked consumed during their normal cleanup pass.
+    //
+    // _onCaptureChunkState fires *before* despawn so we can snapshot
+    // hp / pos / state into world.chunkOverrides while the entities
+    // are still healthy. The capture is a no-op while `_loading` is
+    // true (a save is being applied) so we don't accidentally write
+    // procedural-baseline state back over the save we just loaded.
     this.world._onChunkUnload = (key) => this._despawnChunkEntities(key);
+    this.world._onCaptureChunkState = (key) => this._captureChunkState(key);
+    // Set during SaveSystem.apply() → _unloadAllChunks() → reload, so
+    // capture skips writing back over the freshly-restored overrides.
+    this._loading = false;
 
     this._spawnInitialEnemies();
     this._drainChestSpawns();
@@ -277,6 +288,25 @@ export class Game {
     // one ourselves. Keeping it singleton-y prevents double event-handler
     // registration on the same DOM nodes.
     this.pauseMenu = opts.pauseMenu || new PauseMenu(this.settings);
+    // Persistent save/load — backed by localStorage today, but the on-disk
+    // shape is a plain JSON object so the same payload can be POSTed to a
+    // server later. Constructed *after* spawn drains so the world's
+    // procedural state exists before any save is applied on top.
+    this.saveSystem = new SaveSystem(this);
+    // World mutations route here so writes are debounced — many small
+    // edits coalesce into one localStorage write per ~1.5s window.
+    this.world._onPersistDirty = () => this.saveSystem?.markDirty();
+    // Right before the SaveSystem stringifies the live state, walk every
+    // currently-loaded chunk and snapshot its enemies/resources/altars
+    // into world.chunkOverrides — otherwise a tab-close mid-game would
+    // serialise stale (last-unloaded) override data and lose any damage
+    // dealt inside the player's currently-loaded ring.
+    this.saveSystem._beforeSerialize = () => this._captureLiveStateForSave();
+    // Pause-menu reset progress button — wipes localStorage and rebuilds
+    // the world from scratch via restart(). Wiring goes through PauseMenu
+    // so the actual button click is handled inside that module.
+    if (this.pauseMenu) this.pauseMenu.onResetProgress = () => this._resetProgress();
+    this._tryLoadSave();
 
     this._bindUI();
     window.addEventListener('resize', () => {
@@ -537,6 +567,124 @@ export class Game {
     this.sound.bell();
   }
 
+  // Wipe the persistent save and reset the run to a fresh procedural
+  // world. Triggered by the pause-menu "Сбросить прогресс" button.
+  // restart() handles entity teardown + player respawn; we additionally
+  // clear the save blob and the world's persistent overrides so the
+  // next chunk reload pulls procedural defaults instead of the previous
+  // session's snapshots.
+  _resetProgress() {
+    this.saveSystem?.suspend();
+    SaveSystem.clear();
+    if (this.world) {
+      this.world._consumedChests?.clear();
+      this.world._consumedBreakables?.clear();
+      this.world._consumedAltars?.clear();
+      this.world.chunkOverrides?.clear();
+      // dayTime / shared resources are reset by restart() below.
+    }
+    this.restart();
+    // After teardown + respawn, ensure the active chunk ring is rebuilt
+    // around the newly-spawned players so the world is fully populated
+    // before the next save is taken.
+    this.world?._unloadAllChunks?.();
+    this._streamChunks();
+    this.saveSystem?.resume();
+    // Take a fresh snapshot so the cleared save isn't immediately
+    // restored from a stale in-memory blob on the next page load.
+    this.saveSystem?.markDirty();
+  }
+
+  // Restore a previously-saved game on top of the procedural world that
+  // the constructor just built. Must be called after the initial spawn
+  // drains so live entities exist (and can be torn down by the chunk
+  // reload below). Bails when there's no save, the seed mismatches, or
+  // the schema is too old.
+  _tryLoadSave() {
+    const blob = SaveSystem.read();
+    if (!blob) return;
+    // Reject saves taken under a different seed — the world's chunk
+    // generation depends on the seed so override entries pinned to
+    // chunk-key strings would land on completely different terrain.
+    const currentSeedHash = (this.world?.seed >>> 0);
+    if (typeof blob.seedHash === 'number' && blob.seedHash !== currentSeedHash) {
+      return;
+    }
+    if (blob.seed && this.seedDisplay && String(blob.seed) !== String(this.seedDisplay)) {
+      return;
+    }
+    this._loading = true;
+    try {
+      this.saveSystem.apply(blob);
+      // Tear down the procedurally-spawned chunks (and their entities)
+      // and let _streamChunks rebuild them with overrides applied.
+      // _loading is true so the capture hook is a no-op, keeping the
+      // saved chunkOverrides intact through the reload.
+      this.world._unloadAllChunks?.();
+      this._streamChunks();
+    } catch (err) {
+      console.warn('[save] apply failed', err);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  // Capture the in-memory state of every entity tied to `chunkKey` into
+  // world.chunkOverrides, so a later chunk reload can restore them at
+  // the same hp / pos / state instead of rebuilding from procedural
+  // defaults. Wired into world via _onCaptureChunkState; fires once per
+  // chunk-unload event, just before _despawnChunkEntities runs.
+  _captureChunkState(chunkKey) {
+    if (this._loading) return;
+    if (!this.world || !chunkKey) return;
+    // Resources: hp / state / regrowT. toOverride() returns null when
+    // the resource is at procedural baseline (full hp, alive); we still
+    // record those so a chunk that had its trees fully respawn doesn't
+    // carry a stale damaged-tree override from a previous unload cycle.
+    if (this.resources && this.resources.length > 0) {
+      for (const r of this.resources) {
+        if (r.chunkKey !== chunkKey) continue;
+        const ov = typeof r.toOverride === 'function' ? r.toOverride() : null;
+        this.world.recordResourceOverride(chunkKey, r.pos.x, r.pos.z, ov);
+      }
+    }
+    // Altars: charges. Same null-equals-baseline contract as resources.
+    if (this.altars && this.altars.length > 0) {
+      for (const a of this.altars) {
+        if (a.chunkKey !== chunkKey) continue;
+        const ov = typeof a.toOverride === 'function' ? a.toOverride() : null;
+        this.world.recordAltarOverride(chunkKey, a.pos.x, a.pos.z, ov);
+      }
+    }
+    // Enemies: snapshot every alive enemy currently inside this chunk.
+    // Skipping dead enemies replaces the chunk's enemy list with the
+    // surviving ones — when the chunk reloads, only the captured
+    // entries are spawned, so a chunk the player cleared stays empty.
+    if (this.enemies && this.enemies.length > 0) {
+      const captured = [];
+      for (const e of this.enemies) {
+        if (!e || !e.alive) continue;
+        if (e.chunkKey !== chunkKey) continue;
+        const ov = typeof e.toOverride === 'function' ? e.toOverride() : null;
+        if (ov) captured.push(ov);
+      }
+      this.world.recordEnemyOverride(chunkKey, captured);
+    }
+  }
+
+  // Walk every currently-loaded chunk and capture its live state so
+  // the next save serialisation reflects the player's latest progress
+  // even for chunks that haven't been streamed out yet. SaveSystem
+  // calls this from `_serialize` so the cost only lands once per save
+  // window (1.5s debounce + idle scheduling), not every frame.
+  _captureLiveStateForSave() {
+    if (!this.world || !this.world.chunks) return;
+    if (this._loading) return;
+    for (const key of this.world.chunks.keys()) {
+      this._captureChunkState(key);
+    }
+  }
+
   restart() {
     // remove enemies, projectiles, pickups
     for (const e of this.enemies) { if (e.alive) e._releaseMesh?.(); }
@@ -607,6 +755,10 @@ export class Game {
     this._spawnInitialEnemies();
     this._spawnStarterChest();
     document.getElementById('death').classList.remove('open');
+    // Death-restart resets most of the run state — make sure the save
+    // catches the new (revived) baseline so a tab close right after
+    // restart doesn't restore the pre-death state.
+    this.saveSystem?.markDirty();
   }
 
   _spawnInitialEnemies() {
@@ -633,6 +785,12 @@ export class Game {
         homeX: s.homeX, homeZ: s.homeZ, elite: !!s.elite,
         chunkKey: s.chunkKey,
       });
+      // Persisted spawns carry the full state captured on the previous
+      // unload. Apply on top of the freshly-constructed (level-scaled)
+      // baseline so hp / asleep / status effects survive the round-trip.
+      if (s._persisted && typeof e.applyOverride === 'function') {
+        e.applyOverride(s);
+      }
       this.enemies.push(e);
     }
   }
@@ -668,6 +826,10 @@ export class Game {
       if (!this._isSpawnLive(s)) continue;
       const a = new Altar(this.scene, s.x, s.z);
       a.chunkKey = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
+      // Restore charges / spent visuals from a previously-saved snapshot.
+      if (s.override && typeof a.applyOverride === 'function') {
+        a.applyOverride(s.override);
+      }
       this.altars.push(a);
     }
   }
@@ -688,6 +850,12 @@ export class Game {
       const s = this.world.resourceSpawns.shift();
       if (!this._isSpawnLive(s)) continue;
       const r = new Resource(s.x, s.z, s.kind, s.mesh, s.chunkKey, s.collider, s.colliderArray, s.group);
+      // Reapply previously-saved hp / state / regrowT on top of the
+      // procedurally-constructed baseline so a chunk reloaded mid-chop
+      // resumes from where the player left it.
+      if (s.override && typeof r.applyOverride === 'function') {
+        r.applyOverride(s.override);
+      }
       this.resources.push(r);
     }
   }
@@ -1194,6 +1362,7 @@ export class Game {
     player.removeItem(itemId, 1);
     player.addItem(newId);
     altar.spendCharge();
+    this._recordAltarChange(altar);
     this.effects.toast?.(`Перековал «${def.name}» в «${newDef.name}».`, '#ffd166');
     this.effects.ring(altar.pos.x, 0.05, altar.pos.z, RARITY[newDef.rarity].color, 1.6, 0.4);
     this.effects.burst(altar.pos.x, 1.0, altar.pos.z, RARITY[newDef.rarity].color, 12, 4, 0.4);
@@ -1212,6 +1381,7 @@ export class Game {
     player.removeItem(itemId, 1);
     player.gold += reward;
     altar.spendCharge();
+    this._recordAltarChange(altar);
     this.effects.toast?.(`Сжёг «${def.name}» — +${reward} золота.`, '#ffd166');
     this.effects.burst(altar.pos.x, 1.0, altar.pos.z, 0xffb84d, 12, 4, 0.4);
     this.sound.pickupGold?.();
@@ -1240,6 +1410,7 @@ export class Game {
     player.removeItem(itemId, 3);
     player.addItem(newId);
     altar.spendCharge();
+    this._recordAltarChange(altar);
     this.effects.toast?.(`Сплавил 3× «${def.name}» в «${newDef.name}»!`, '#' + RARITY[newDef.rarity].color.toString(16).padStart(6, '0'));
     this.effects.ring(altar.pos.x, 0.05, altar.pos.z, RARITY[newDef.rarity].color, 1.8, 0.5);
     this.effects.burst(altar.pos.x, 1.2, altar.pos.z, RARITY[newDef.rarity].color, 16, 5, 0.5);
@@ -1252,6 +1423,17 @@ export class Game {
     setTimeout(() => {
       if (this.altarOpen) this.altarUI.close();
     }, 400);
+  }
+
+  // Push the altar's current charge count into world.chunkOverrides so
+  // a later chunk reload (or save) restores the altar at exactly this
+  // charge level. Centralised so reroll / sacrifice / fuse all stay in
+  // sync without duplicating the recording logic three times.
+  _recordAltarChange(altar) {
+    if (!altar || !altar.chunkKey) return;
+    if (!this.world || typeof this.world.recordAltarOverride !== 'function') return;
+    const ov = typeof altar.toOverride === 'function' ? altar.toOverride() : null;
+    this.world.recordAltarOverride(altar.chunkKey, altar.pos.x, altar.pos.z, ov);
   }
 
   // Called when a breakable's `alive` flips to false (any damage source).
@@ -1301,6 +1483,13 @@ export class Game {
     // after ~10 game days; rocks vanish from the resources list and only
     // come back via natural chunk regeneration.
     r.enterDeathState();
+    // Persist the new state immediately so a chunk that unloads moments
+    // later (or a save fired before the next unload) restores the chopped
+    // tree / smashed rock instead of a fresh full-hp resource.
+    if (r.chunkKey && typeof r.toOverride === 'function') {
+      const ov = r.toOverride();
+      this.world.recordResourceOverride(r.chunkKey, r.pos.x, r.pos.z, ov);
+    }
     // Minimap: tree / rock dots are baked into the *terrain* layer (not
     // the cheap structure overlay), so dropping one requires re-baking
     // the whole tile. Cost is amortised — the bake budget caps it at
