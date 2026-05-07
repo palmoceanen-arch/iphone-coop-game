@@ -35,6 +35,7 @@ import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { BuildWheel } from './buildWheel.js';
+import { Minimap } from './minimap.js';
 import { iconHTML } from './icons.js';
 
 const LEASH_WARN = 14;
@@ -222,6 +223,20 @@ export class Game {
       new BuildController(this.scene, this.world, this.players[0]),
       new BuildController(this.scene, this.world, this.players[1]),
     ];
+
+    // HUD minimap. Rendered every frame from cached per-chunk tiles
+    // (see src/minimap.js for the strategy). The canvas is part of
+    // index.html so the element exists by constructor time; if it's
+    // missing for any reason (e.g. test harness without DOM) we skip
+    // minimap wiring entirely instead of throwing.
+    const minimapCanvas = document.getElementById('minimap');
+    this.minimap = minimapCanvas ? new Minimap(this.world, this.players, minimapCanvas) : null;
+    if (this.minimap) {
+      // World-side hook: fired when placedStructures changes for a
+      // chunk. We just mark the minimap overlay dirty — the actual
+      // re-paint happens on the next render() call.
+      this.world._onChunkChanged = (key) => this.minimap.invalidate(key);
+    }
 
     this.totalKills = 0;
     this.elapsed = 0;
@@ -1261,6 +1276,11 @@ export class Game {
     // after ~10 game days; rocks vanish from the resources list and only
     // come back via natural chunk regeneration.
     r.enterDeathState();
+    // Minimap: tree / rock dots are baked into the *terrain* layer (not
+    // the cheap structure overlay), so dropping one requires re-baking
+    // the whole tile. Cost is amortised — the bake budget caps it at
+    // one per frame inside Minimap.render().
+    if (this.minimap && r.chunkKey) this.minimap.invalidateTerrain(r.chunkKey);
   }
 
   // Always spawn one chest near origin on first load so players see the
@@ -2149,6 +2169,7 @@ export class Game {
     const camP2 = this._cameraTarget(this.players[1]);
     this.followCam.update(0.016, camP1, camP2, this.effects.shake);
     this.renderer.render(this.scene, this.followCam.cam);
+    if (this.minimap) this.minimap.render();
   }
 
   _cameraTarget(p) {

@@ -715,6 +715,7 @@ export class World {
         colliderArray: chunk.colliders,
       });
     }
+    if (this._onChunkChanged) this._onChunkChanged(chunkKey);
     return desc;
   }
 
@@ -739,6 +740,7 @@ export class World {
         if (Math.abs(dy - y) < yEps) {
           arr.splice(i, 1);
           if (arr.length === 0) this.placedStructures.delete(chunkKey);
+          if (this._onChunkChanged) this._onChunkChanged(chunkKey);
           return;
         }
       }
@@ -751,6 +753,7 @@ export class World {
       }
     }
     if (arr.length === 0) this.placedStructures.delete(chunkKey);
+    if (this._onChunkChanged) this._onChunkChanged(chunkKey);
   }
 
   // Update the persisted HP value for an in-place structure so a reload

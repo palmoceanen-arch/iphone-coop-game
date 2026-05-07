@@ -289,6 +289,24 @@
         color: #7aff8a; pointer-events: none; display: none;
       }
       #fps.show { display: block; }
+      /* Minimap — top-down chunk-cached map of the explored world.
+         Bottom-right corner, lifted above the FPS readout. During build
+         mode the right buildbar appears at right:14 / bottom:96 with
+         height ~30 px, so the minimap starts at bottom:140 to leave it
+         a clear gap. The canvas is rendered every frame by
+         Minimap.render(); see src/minimap.js. */
+      #minimap {
+        position: absolute; bottom: 140px; right: 12px;
+        width: 168px; height: 168px;
+        background: #0a0d12;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        pointer-events: none;
+        z-index: 5;
+      }
       /* Start menu — shown on launch before the lobby/QR screen. Mirrors the
          pause-panel chrome (dark card, blue accents, segmented buttons) so
          start, pause and altar UIs feel like the same family. */
@@ -460,6 +478,7 @@
           <span class="cost" id="bb2-cost"></span>
           <span class="hint">L:поставить · K:отмена · J:поворот</span>
         </div>
+        <canvas id="minimap" width="168" height="168" aria-label="Карта местности"></canvas>
         <div id="toast"></div>
         <div id="shop">
           <div class="shop-panel">
