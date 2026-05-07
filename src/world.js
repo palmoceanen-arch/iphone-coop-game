@@ -253,8 +253,17 @@ function sunsetBell(dayTime, centre, halfWidth = 1 / 6) {
 // are frozen until the players come back near.
 
 export const CHUNK_SIZE = 32;
-export const ACTIVE_RADIUS = 3;     // chunks generated/visible around each player (7×7)
-export const SIM_RADIUS    = 2;     // chunks within which enemies actively simulate (5×5)
+// `ACTIVE_RADIUS` is the visible / generated chunk ring around each
+// player. Was 3 (7×7 = 49 chunks) and dropped to 2 (5×5 = 25 chunks)
+// for ~49% less terrain CPU + GPU steady-state load — the previous
+// outermost ring was past the typical fade / fog distance anyway, so
+// the visible difference is small while the perf saving is real.
+// Anything outside is unloaded after a short hysteresis (KEEP_RADIUS).
+export const ACTIVE_RADIUS = 2;     // chunks generated/visible around each player (5×5)
+// SIM_RADIUS is capped at ACTIVE_RADIUS — there's no point simulating
+// enemies inside chunks that aren't loaded. Keeping the export so
+// external callers (camp spawners, AI ticking) keep working.
+export const SIM_RADIUS    = ACTIVE_RADIUS;     // chunks within which enemies actively simulate
 // Beyond ACTIVE_RADIUS we keep an extra ring of chunks loaded so the
 // player can wobble across a chunk border without immediately re-paying
 // the generation cost. Anything outside KEEP_RADIUS is unloaded — its
@@ -289,16 +298,23 @@ const CHUNKS_PER_FRAME = 1;
 
 // Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
 // (WATER_GRID+1) grid of corners, then build a marching-squares mesh.
-// WATER_GRID = 32 gives 1 m cells — fine enough that the noise's highest
-// fbm octave (~12 m wavelength) is sampled at ~12 cells per cycle, so
-// isolated "all-corners-just-barely-dry" cells inside an otherwise wet
-// region show up as at most a 1 m square notch in the shoreline rather
-// than the much more visible 2 m notches the previous 16-cell grid left.
+// WATER_GRID = 16 gives 2 m cells. Noise highest fbm octave is ~12 m
+// wavelength → ~6 cells per cycle, well above Nyquist, so the lake
+// shapes themselves are unchanged. The visible cost is that
+// "all-corners-just-barely-dry" notches in the shoreline are now 2 m
+// instead of 1 m, but marching-squares interpolation still cuts the
+// boundary at sub-cell precision so the shoreline curve itself stays
+// smooth — what gets coarser is only the worst-case isolated-notch
+// size. In return: 4× fewer noise samples + cells per chunk on the
+// water bake (the most expensive single per-chunk operation, since
+// each `_waterMaskAt` does 3 fbm calls for domain warping). The same
+// grid is used by `_buildIsoBandMesh` for the sand / forest biome
+// edges so they get the same coarsening (and the same 4× perf win).
 // Where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
 // crossing point, giving smooth curved shorelines instead of axis-aligned
 // blocks. WATER_NOISE_FREQ scales the noise input so lakes form large
 // connected basins rather than tiny specks.
-export const WATER_GRID = 32;
+export const WATER_GRID = 16;
 export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
 export const WATER_THRESHOLD = 0.30;
 export const WATER_NOISE_FREQ = 0.45;
@@ -531,13 +547,21 @@ export class World {
   // boundary therefore has the same level of edge smoothing as the
   // water shoreline (true vector geometry rasterised with sub-pixel AA
   // by the GPU), and no more.
-  _buildIsoBandMesh(minX, minZ, threshold, insideBelow, material, y) {
+  // `noiseGrid` is an optional precomputed (G+1)² Float32Array of
+  // `this.noise(minX + i*STEP, minZ + j*STEP)` samples laid out in
+  // row-major order. Sand and forest bands share the same noise field,
+  // so `_generateChunk` builds the grid once and passes it to both
+  // calls — saving one full (G+1)² fbm sweep per chunk.
+  _buildIsoBandMesh(minX, minZ, threshold, insideBelow, material, y, noiseGrid = null) {
     const G = WATER_GRID;
     const STEP = WATER_CELL;
-    const N = new Float32Array((G + 1) * (G + 1));
-    for (let j = 0; j <= G; j++) {
-      for (let i = 0; i <= G; i++) {
-        N[j * (G + 1) + i] = this.noise(minX + i * STEP, minZ + j * STEP);
+    let N = noiseGrid;
+    if (!N) {
+      N = new Float32Array((G + 1) * (G + 1));
+      for (let j = 0; j <= G; j++) {
+        for (let i = 0; i <= G; i++) {
+          N[j * (G + 1) + i] = this.noise(minX + i * STEP, minZ + j * STEP);
+        }
       }
     }
     const inside = insideBelow
@@ -1097,15 +1121,28 @@ export class World {
         polygonOffsetUnits: -2,
       });
     }
+    // Sand and forest bands sample the SAME `this.noise(x, z)` field on
+    // the SAME (WATER_GRID+1)² lattice — only the threshold differs.
+    // Build the corner grid once and feed both calls so we only pay the
+    // noise sweep once per chunk.
+    const G_BIOME = WATER_GRID;
+    const STEP_BIOME = WATER_CELL;
+    const biomeNoise = new Float32Array((G_BIOME + 1) * (G_BIOME + 1));
+    for (let j = 0; j <= G_BIOME; j++) {
+      for (let i = 0; i <= G_BIOME; i++) {
+        biomeNoise[j * (G_BIOME + 1) + i] =
+          this.noise(minX + i * STEP_BIOME, minZ + j * STEP_BIOME);
+      }
+    }
     const sandMesh = this._buildIsoBandMesh(
-      minX, minZ, SAND_NOISE_MAX, true, this._sandMaterial, 0
+      minX, minZ, SAND_NOISE_MAX, true, this._sandMaterial, 0, biomeNoise
     );
     if (sandMesh) {
       group.add(sandMesh);
       if (sandMesh.geometry) ownedGeos.push(sandMesh.geometry);
     }
     const forestMesh = this._buildIsoBandMesh(
-      minX, minZ, FOREST_NOISE_MIN, false, this._forestMaterial, 0
+      minX, minZ, FOREST_NOISE_MIN, false, this._forestMaterial, 0, biomeNoise
     );
     if (forestMesh) {
       group.add(forestMesh);
