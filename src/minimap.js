@@ -45,11 +45,15 @@ const COL = {
   tree:       [42, 74, 32],
   rock:       [138, 142, 149],
 };
+// Structures need to read clearly against the dark-green grass and the
+// gray rocks. Walls go a notch lighter than the rock colour so a wall
+// next to a natural boulder is still distinguishable; fences/gates pick
+// a saturated wood-brown rather than the muted planter colour.
 const STRUCTURE_COL = {
-  wall:     '#5a5f68',
-  fence:    '#8c5a2c',
-  gate:     '#d4a060',
-  planter:  '#4b3522',
+  wall:     '#b8bdc8',
+  fence:    '#c47032',
+  gate:     '#e0a050',
+  planter:  '#6b4a2c',
   campfire: '#ff8a3a',
   torch:    '#ffd060',
 };
