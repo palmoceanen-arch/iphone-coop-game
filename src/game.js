@@ -306,7 +306,20 @@ export class Game {
     // the world from scratch via restart(). Wiring goes through PauseMenu
     // so the actual button click is handled inside that module.
     if (this.pauseMenu) this.pauseMenu.onResetProgress = () => this._resetProgress();
-    this._tryLoadSave();
+    // Only restore from localStorage if the caller explicitly asked for
+    // it (e.g. the start-menu's "Загрузить" path). The "Новая игра" path
+    // passes loadSave=false so we always start with a clean slate even
+    // when the same seed happens to match an existing save. Default of
+    // false preserves the new-game-first behaviour for any external
+    // callers that don't pass the flag.
+    if (opts.loadSave) {
+      this._tryLoadSave();
+    } else {
+      // Starting fresh — nuke any stale save so the first auto-save of
+      // this run doesn't accidentally surface in a future "Загрузить"
+      // session pointing at the previous game's state.
+      SaveSystem.clear();
+    }
 
     this._bindUI();
     window.addEventListener('resize', () => {
@@ -2002,10 +2015,14 @@ export class Game {
     for (const pk of this.pickups) pk.update(dt, this.players, this.sound, this.effects, this.world.resources);
     compactInPlace(this.pickups, pk => pk.alive);
 
-    // Chests + runes. When a chest finishes its open animation and
-    // self-destroys we record its position in the world's consumed-set
-    // so a later regeneration of the same chunk doesn't spawn a fresh
-    // chest in the same spot.
+    // Chests + runes. We record the chest's position in the world's
+    // consumed-set the moment the lid pops open (not at fade-end) so
+    // that a tab-close / refresh during the ~1.8s open animation still
+    // persists the "already opened" state — otherwise the chunk reload
+    // would respawn the same chest. The compactInPlace fallback below
+    // covers any chest that loses its alive flag without going through
+    // the open path (e.g. chunk despawn while the chest was still
+    // closed — leave the consumed-set alone in that case).
     for (const c of this.chests) c.update(
       dt, this.players, this.sound, this.effects,
       (rune) => this.runes.push(rune),
@@ -2013,9 +2030,20 @@ export class Game {
       // gravitate-to-player + shared-resources deposit path handles them
       // exactly like wood / stone pickups.
       (pickup) => this.pickups.push(pickup),
+      (chest) => {
+        if (chest.chunkKey) {
+          this.world.markChestConsumed(chest.chunkKey, chest.pos.x, chest.pos.z);
+        }
+      },
     );
     compactInPlace(this.chests, c => c.alive, c => {
-      if (c.chunkKey) this.world.markChestConsumed(c.chunkKey, c.pos.x, c.pos.z);
+      // Defensive: if a chest somehow finished its lifetime without the
+      // open path firing (chunk unload mid-animation, etc.), still mark
+      // it consumed when it had been opened so the chunk reload doesn't
+      // recreate it.
+      if (c.opened && c.chunkKey) {
+        this.world.markChestConsumed(c.chunkKey, c.pos.x, c.pos.z);
+      }
     });
     for (const r of this.runes) r.update(dt, this.players, this.sound, this.effects);
     compactInPlace(this.runes, r => r.alive);

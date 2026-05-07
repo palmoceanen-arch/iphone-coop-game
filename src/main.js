@@ -71,7 +71,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     url.searchParams.set('seed', config.seed);
     window.history.replaceState({}, '', url.toString());
 
-    game = new Game({ seed: config.seed, players: config.players, pauseMenu });
+    // mode === 'load' tells Game to restore the saved snapshot on top of
+    // the procedurally-built world. mode === 'new' (or anything else)
+    // wipes any stale save first so a fresh run never inherits the
+    // previous game's chunk overrides / consumed chests / structures.
+    const loadSave = config.mode === 'load';
+    game = new Game({
+      seed: config.seed,
+      players: config.players,
+      pauseMenu,
+      loadSave,
+    });
     window.__game = game;
     if (params.get('testInventory') === '1') {
       for (const player of game.players) {

@@ -4,13 +4,20 @@
 // each character that updates instantly on every click.
 //
 // The actual `Game` instance is constructed by main.js *after* the user
-// clicks "Применить и начать", so the picked options can flow into
-// `new Game({ seed, players })` without a page reload. The menu also
-// exposes "Загрузить" (placeholder) and "Настройки", which reuses the
-// existing pause-menu overlay.
+// clicks "Применить и начать" (new game) or "Загрузить" (load), so the
+// picked options can flow into `new Game({ seed, players, loadSave })`
+// without a page reload. The menu also exposes "Настройки", which reuses
+// the existing pause-menu overlay.
+//
+// onStart is invoked with `{ mode, seed, players? }`:
+//   • mode === 'new'  → start a fresh run with the picked seed/players
+//   • mode === 'load' → restore the localStorage save; `seed` is the
+//     seed embedded in the save blob so main.js can rebuild the same
+//     world before SaveSystem.apply() restores entity state on top.
 import * as THREE from 'three';
 import { PLAYER_COLOR_PRESETS, CAPE_COLOR_PRESETS } from './player.js';
 import { WEAPONS, applyCharacterTint, setEquippedWeapon, spawnCharacter } from './models.js';
+import { SaveSystem } from './saveSystem.js';
 
 // Default picks per slot — closest equivalents to the historical
 // P1 cyan-sword / P2 coral-axe loadout in the new wheel palette so a
@@ -102,7 +109,7 @@ export class StartMenu {
   _bind() {
     const r = this.root;
     r.querySelector('#start-btn-new').addEventListener('click', () => this._showView('newgame'));
-    r.querySelector('#start-btn-load').addEventListener('click', () => this._showView('load'));
+    r.querySelector('#start-btn-load').addEventListener('click', () => this._openLoad());
     r.querySelector('#start-btn-settings').addEventListener('click', () => this._openSettings());
     r.querySelectorAll('[data-back="main"]').forEach((b) => {
       b.addEventListener('click', () => this._showView('main'));
@@ -129,10 +136,49 @@ export class StartMenu {
         weapon: c.weapon,
       }));
       this.close();
-      this.onStart && this.onStart({ seed, players });
+      this.onStart && this.onStart({ mode: 'new', seed, players });
+    });
+
+    // Confirm button on the load view — visible only when a save was
+    // detected. Hands the saved seed back to main.js so the world is
+    // rebuilt deterministically before SaveSystem.apply() lays the
+    // saved entity state on top.
+    r.querySelector('#start-btn-load-confirm')?.addEventListener('click', () => {
+      const blob = SaveSystem.read();
+      if (!blob) return;
+      const seed = blob.seed || this.seed || randomSeed();
+      this.close();
+      this.onStart && this.onStart({ mode: 'load', seed });
     });
 
     window.addEventListener('resize', () => this._resizePreviews());
+  }
+
+  // Switch to the load view and populate it with whatever's in
+  // localStorage. When there's no save we keep the existing empty-state
+  // copy and hide the confirm button; otherwise we show a one-line
+  // summary (seed + saved-at timestamp) and reveal the confirm button.
+  _openLoad() {
+    this._showView('load');
+    const r = this.root;
+    const empty = r.querySelector('.start-load-empty');
+    const summary = r.querySelector('#start-load-summary');
+    const confirm = r.querySelector('#start-btn-load-confirm');
+    const blob = SaveSystem.read();
+    if (!blob) {
+      if (empty) empty.style.display = '';
+      if (summary) { summary.style.display = 'none'; summary.textContent = ''; }
+      if (confirm) confirm.style.display = 'none';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (summary) {
+      const seed = blob.seed ? `Сид: ${blob.seed}` : 'Сид: ?';
+      const when = blob.savedAt ? new Date(blob.savedAt).toLocaleString() : '';
+      summary.textContent = when ? `${seed} · ${when}` : seed;
+      summary.style.display = '';
+    }
+    if (confirm) confirm.style.display = '';
   }
 
   _openSettings() {

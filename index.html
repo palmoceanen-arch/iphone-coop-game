@@ -673,13 +673,18 @@
               </div>
             </div>
 
-            <!-- Load placeholder -->
+            <!-- Load: shows the save summary if present, otherwise the
+                 empty-state message. The summary + confirm button are
+                 toggled in startMenu._openLoad() based on
+                 SaveSystem.read(). -->
             <div class="start-view" data-view="load">
               <div class="start-load-empty">
-                Сохранения отсутствуют.<br>Загрузка прогресса появится в одном из следующих обновлений.
+                Сохранения отсутствуют.
               </div>
+              <div id="start-load-summary" class="start-load-summary" style="display:none;"></div>
               <div class="start-footer">
                 <button data-back="main">Назад</button>
+                <button id="start-btn-load-confirm" class="primary" style="display:none;">Загрузить</button>
               </div>
             </div>
           </div>

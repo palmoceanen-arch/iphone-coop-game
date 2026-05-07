@@ -64,7 +64,7 @@ export class Chest {
     return grp;
   }
 
-  update(dt, players, sound, effects, onSpawnRune, onSpawnPickup) {
+  update(dt, players, sound, effects, onSpawnRune, onSpawnPickup, onOpened) {
     if (!this.alive) return;
     this.bobT += dt * 2;
     if (this.opened) {
@@ -89,6 +89,7 @@ export class Chest {
       const intent = near._lastIntent;
       if (intent && intent.interact) {
         this._open(sound, effects, onSpawnRune, onSpawnPickup);
+        onOpened?.(this);
       }
     }
   }
