@@ -226,7 +226,10 @@ export class Game {
     this._drainAltarSpawns();
     this._drainResourceSpawns();
     this._drainStructureSpawns();
-    this._spawnStarterChest();
+    // _spawnStarterChest() is intentionally deferred until after the
+    // load-or-clear branch below so the starter chest can consult the
+    // restored _consumedChests set (otherwise a saved run that already
+    // opened the starter chest would respawn it on load).
     // Build the per-player build controllers now that scene + world are
     // ready. Construction is cheap; ghost meshes are spawned lazily on
     // first recipe-select.
@@ -320,6 +323,10 @@ export class Game {
       // session pointing at the previous game's state.
       SaveSystem.clear();
     }
+    // Spawn the starter chest now that any loaded save has populated
+    // _consumedChests — the helper will short-circuit if the player
+    // already opened it in a previous session.
+    this._spawnStarterChest();
 
     this._bindUI();
     window.addEventListener('resize', () => {
@@ -1512,11 +1519,24 @@ export class Game {
 
   // Always spawn one chest near origin on first load so players see the
   // pickup loop within a few seconds — discovering the first chest can
-  // otherwise take a few minutes of exploration.
+  // otherwise take a few minutes of exploration. The chest is stamped
+  // with the origin chunkKey so the regular open-handler routes it
+  // through world.markChestConsumed (same path procedural chests use),
+  // and we skip the spawn entirely when the consumed-set already lists
+  // (4, 4) so a saved run that already cracked it doesn't get a fresh
+  // copy after load.
   _spawnStarterChest() {
     if (this._starterChestSpawned) return;
     this._starterChestSpawned = true;
-    const c = new Chest(this.scene, 4, 4);
+    const STARTER_X = 4;
+    const STARTER_Z = 4;
+    const chunkKey = this.world.chunkKeyOf(STARTER_X, STARTER_Z);
+    const sk = this.world.spawnKey(chunkKey, STARTER_X, STARTER_Z);
+    if (this.world._consumedChests && this.world._consumedChests.has(sk)) {
+      return;
+    }
+    const c = new Chest(this.scene, STARTER_X, STARTER_Z);
+    c.chunkKey = chunkKey;
     this.chests.push(c);
   }
 
