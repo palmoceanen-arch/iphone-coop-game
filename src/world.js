@@ -522,19 +522,20 @@ export class World {
     this.scene.add(this.ground);
   }
 
-  // Bake a 64×64 RGBA texture for one chunk's ground tile, painting sand
-  // (low noise), light grass (mid) and dark forest grass (high) from the
-  // exact same `this.noise` field the minimap samples — so a sand patch
-  // visible on the minimap is sand under the players' feet too. 0.5 m per
-  // texel matches the minimap's 2 px/m cache; the texture itself bakes a
-  // smoothstep gradient between the three tiers so the biome transitions
-  // ramp continuously (like the water's shoreline) instead of cutting at
-  // hard noise thresholds — at 64 px / 32 m, a hard threshold reads as a
-  // visible 0.5 m sawtooth as the camera moves, while a smooth ramp
-  // dissolves into the bilinear filter.
+  // Bake a 128×128 RGBA texture for one chunk's ground tile, painting
+  // sand (low noise), light grass (mid) and dark forest grass (high)
+  // from the exact same `this.noise` field the minimap samples — so a
+  // sand patch visible on the minimap is sand under the players' feet
+  // too. 0.25 m per texel (4 px/m), four times finer than the minimap
+  // cache, so the boundary curve between biomes is sharp without
+  // visible stair-stepping at gameplay camera distance. Each texel is
+  // 2×2 super-sampled and hard-thresholded per sample, then averaged —
+  // this keeps biome *regions* crisp (no muddy gradient inside a region)
+  // while only the literal one-texel boundary line is anti-aliased,
+  // giving a smooth-but-clear edge between sand / grass / forest.
   _bakeChunkGroundTexture(cx, cz) {
-    const TILE_PX = 64;        // 2 px/m × 32 m chunk
-    const PX_PER_M = 2;
+    const TILE_PX = 128;       // 4 px/m × 32 m chunk
+    const PX_PER_M = 4;
     const minX = cx * CHUNK_SIZE;
     const minZ = cz * CHUNK_SIZE;
     const canvas = document.createElement('canvas');
@@ -546,35 +547,35 @@ export class World {
     const noise = this.noise;
     // Toon-friendly biome palette. Same hue family as the minimap, but
     // slightly brighter so the 3-band sun ramp produces clear cel-shading.
-    const SAND   = [196, 169, 106]; // #c4a96a
-    const GRASS  = [109, 176,  80]; // #6db050 (was the global ground colour)
-    const FOREST = [ 60, 110,  65]; // #3c6e41
-    // 0.04-wide smoothstep windows centred on the minimap's 0.32 / 0.55
-    // thresholds. ~0.04 in noise space ≈ 1 m on the ground at the FBM's
-    // base frequency — wide enough to read as a soft fade under-foot,
-    // narrow enough to keep biome regions recognisable.
-    const T1_LO = 0.30, T1_HI = 0.34; // sand   → grass
-    const T2_LO = 0.53, T2_HI = 0.57; // grass  → forest
-    const smoothstep = (e0, e1, x) => {
-      const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
-      return t * t * (3 - 2 * t);
-    };
+    const SAND_R = 196, SAND_G = 169, SAND_B = 106; // #c4a96a
+    const GRASS_R = 109, GRASS_G = 176, GRASS_B = 80; // #6db050 (was global)
+    const FOREST_R = 60, FOREST_G = 110, FOREST_B = 65; // #3c6e41
+    // Same hard thresholds as the minimap baker — biome regions read as
+    // discrete sand / grass / forest patches, no gradient blend.
+    const T1 = 0.32; // sand   → grass
+    const T2 = 0.55; // grass  → forest
+    // Rotated 2×2 grid super-sample offsets inside each texel. Rotated
+    // (rather than aligned) so the AA is symmetric on both diagonal
+    // and axis-aligned edges. With 4 samples per texel the per-channel
+    // result has 5 quantisation levels, which is enough to read as a
+    // smooth curve at 0.25 m / texel.
+    const SUB_X = [0.125, 0.625, 0.375, 0.875];
+    const SUB_Y = [0.375, 0.125, 0.875, 0.625];
     for (let py = 0; py < TILE_PX; py++) {
-      const wz = minZ + (py + 0.5) / PX_PER_M;
       for (let px = 0; px < TILE_PX; px++) {
-        const wx = minX + (px + 0.5) / PX_PER_M;
-        const n = noise(wx, wz);
-        // Three weights that always sum to ≤ 1; the smoothstep windows
-        // overlap zero noise space so the residual `grassW` is exactly
-        // (1 − sandW − forestW) without negative-weight clamping in the
-        // common case.
-        const sandW   = 1 - smoothstep(T1_LO, T1_HI, n);
-        const forestW =     smoothstep(T2_LO, T2_HI, n);
-        const grassW  = Math.max(0, 1 - sandW - forestW);
+        let r = 0, g = 0, b = 0;
+        for (let s = 0; s < 4; s++) {
+          const wx = minX + (px + SUB_X[s]) / PX_PER_M;
+          const wz = minZ + (py + SUB_Y[s]) / PX_PER_M;
+          const n = noise(wx, wz);
+          if (n < T1)      { r += SAND_R;   g += SAND_G;   b += SAND_B; }
+          else if (n < T2) { r += GRASS_R;  g += GRASS_G;  b += GRASS_B; }
+          else             { r += FOREST_R; g += FOREST_G; b += FOREST_B; }
+        }
         const i = (py * TILE_PX + px) * 4;
-        data[i + 0] = (SAND[0] * sandW + GRASS[0] * grassW + FOREST[0] * forestW) | 0;
-        data[i + 1] = (SAND[1] * sandW + GRASS[1] * grassW + FOREST[1] * forestW) | 0;
-        data[i + 2] = (SAND[2] * sandW + GRASS[2] * grassW + FOREST[2] * forestW) | 0;
+        data[i + 0] = (r * 0.25) | 0;
+        data[i + 1] = (g * 0.25) | 0;
+        data[i + 2] = (b * 0.25) | 0;
         data[i + 3] = 255;
       }
     }
