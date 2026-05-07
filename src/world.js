@@ -287,15 +287,15 @@ const FOREST_NOISE_MIN = 0.55; // n ≥ 0.55 → dark forest
 // Toon-friendly biome colours (also match the minimap palette).
 //
 // FOREST_COLOR_HEX sits intentionally close to the grass tier — only
-// slightly darker (~7 pts L) and noticeably less saturated, so deep-noise
+// slightly darker (~7 pts L) and a touch less saturated, so deep-noise
 // pockets read as "shaded grove" rather than the near-black it used to
-// be (HSL 126°/29%/33%). New tone is HSL 120°/23%/43%: cooler hue keeps
-// the foresty feel, but lower saturation + higher lightness stop the
-// patches from punching out as ugly dark blobs against the rest of the
-// meadow.
+// be (HSL 126°/29%/33%). Current tone is HSL 109°/29%/43%: hue warmed
+// just past the grass band so the biome edge feels like the same plant
+// in shadow rather than a different (cooler) species, and saturation
+// kept close to grass (~38%) so the patch doesn't go grey.
 const SAND_COLOR_HEX   = 0xc4a96a;
 const GRASS_COLOR_HEX  = 0x6db050;
-const FOREST_COLOR_HEX = 0x568856;
+const FOREST_COLOR_HEX = 0x5b8e4f;
 // How many queued chunks to materialise per `processChunkQueue` call.
 // Each chunk gen runs the marching-squares water mesh + dozens of
 // model clones, costing roughly 1-3ms on a low-end laptop, so 1 per
