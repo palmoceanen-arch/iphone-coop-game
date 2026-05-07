@@ -1107,6 +1107,16 @@ export function getEquippedWeapon(character) {
 // `duration` seconds, then plays target. Useful for switching between idle/run
 // states without snapping. Other actions are faded out but kept on the mixer
 // so they can be faded back in later.
+//
+// `setEffectiveWeight(1)` is mandatory before the fadeIn: any prior code path
+// (including the enemy pool's `_resetVisualState`, which zeroes every action's
+// weight to give the next acquire a clean baseline) may have left `weight` at
+// 0. Three.js evaluates `_effectiveWeight = weight * fadeInterpolant`, so
+// without forcing weight back to 1 here, the target action would fade in to
+// `0 * 1 = 0` and never contribute. Once the previous locomotion action
+// completes its fadeOut and disables itself, the bone bindings would have
+// total weight 0 → PropertyMixer falls back to bind pose → enemies render in
+// T-pose while still walking/running.
 export function crossFadeTo(actions, target, duration = 0.18) {
   if (!actions || !target) return null;
   const next = actions[target];
@@ -1119,7 +1129,7 @@ export function crossFadeTo(actions, target, duration = 0.18) {
       didFade = true;
     }
   }
-  next.reset();
+  next.reset().setEffectiveWeight(1.0);
   if (didFade) next.fadeIn(duration);
   next.play();
   return next;

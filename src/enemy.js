@@ -231,16 +231,23 @@ export class Enemy {
     // alone leaves it scheduled, which would let the previous death/hit/
     // attack pose bleed into the new spawn (most visibly as a stuck
     // T-pose when no locomotion clip ends up with weight > 0).
+    //
+    // We restore each action's `weight` to 1 (Three.js's factory default)
+    // rather than zero. A future play()/fadeIn() of any of these slots
+    // (locomotion via crossFadeTo, attacks via _playAttackAnim) computes
+    // `_effectiveWeight = weight * fadeInterpolant`, so leaving weight at
+    // 0 here would cause every action played later to contribute zero —
+    // the bones would fall back to bind pose mid-locomotion (T-pose) and
+    // attack swings would be invisible on pool-recycled enemies.
     if (this._character?.actions) {
       const actions = this._character.actions;
       for (const a of Object.values(actions)) {
         if (!a) continue;
         a.stop();
-        a.weight = 0;
+        a.setEffectiveWeight(1.0);
       }
       if (actions.idle) {
         actions.idle.reset();
-        actions.idle.weight = 1;
         actions.idle.enabled = true;
         actions.idle.play();
       }
@@ -291,7 +298,10 @@ export class Enemy {
   _playAttackAnim() {
     const action = this._character?.actions?.[this._attackAnimKey];
     if (!action) return;
-    action.reset();
+    // setEffectiveWeight(1) defends against a pool acquire that just zeroed
+    // every action's weight: without it `_effectiveWeight = 0 * fadeIn` and
+    // the swing animation would be invisible on a recycled enemy.
+    action.reset().setEffectiveWeight(1.0);
     action.fadeIn(0.05).play();
   }
 
