@@ -301,6 +301,14 @@ export class Minimap {
   }
 
   render() {
+    // Bail before doing any work when the panel is hidden. The canvas
+    // is shown / hidden from src/game.js by toggling the `.open` class
+    // on this same element (M key), so this is the single source of
+    // truth — no parallel JS flag to drift out of sync. With the panel
+    // closed we skip ~16 drawImage calls + any pending tile bakes per
+    // frame at 60 fps.
+    if (!this.display.classList.contains('open')) return;
+
     const W = this.display.width, H = this.display.height;
     const dctx = this.dctx;
     dctx.fillStyle = COL.unvisited;

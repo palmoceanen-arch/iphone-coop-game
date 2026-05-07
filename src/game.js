@@ -313,6 +313,18 @@ export class Game {
       }
       if (e.code === 'KeyG') this._tryCastAbility(0);
       if (e.code === 'KeyH') this._tryCastAbility(1);
+      // Minimap is hidden by default; M toggles a UI panel. We swallow
+      // the keypress before any game system sees it, but only when the
+      // player isn't typing into a text field (so the seed input on the
+      // start menu and shop search still receive 'm'). Also gated on
+      // _waitingForStart so the lobby flow stays clean.
+      if (e.code === 'KeyM' && !this._waitingForStart) {
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+          this._toggleMinimap();
+        }
+      }
     });
     if (this.pauseMenu) {
       this.pauseMenu.onToggle = (open) => {
@@ -329,6 +341,19 @@ export class Game {
     if (this._waitingForStart) return;
     this.pauseMenu.toggle();
     this.menuPaused = this.pauseMenu.isOpen;
+  }
+
+  _toggleMinimap() {
+    // The minimap canvas is hidden via CSS (`#minimap` has display:none;
+    // `.open` flips it to display:block). `Minimap.render()` reads the
+    // same `.open` class and short-circuits when the panel is closed,
+    // so toggling here also turns the per-frame minimap work on / off
+    // (~16 drawImage calls + any pending tile bakes saved while
+    // closed). Tile / overlay caches survive across toggles so reopen
+    // is instant for the chunks that were last revealed.
+    const el = document.getElementById('minimap');
+    if (!el) return;
+    el.classList.toggle('open');
   }
 
   _tryCastAbility(slot) {
