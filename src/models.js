@@ -42,6 +42,14 @@ const NATURE_MANIFEST = {
   rock_smallB: { url: 'models/nature/rock_smallB.glb' },
   bush: { url: 'models/nature/plant_bush.glb' },
   bush_large: { url: 'models/nature/plant_bushLarge.glb' },
+  // Player-built structures that use an authored .glb instead of a
+  // procedural three.js mesh built in `structure.js`. The `wall_`
+  // prefix is what the prop loader keys off to force the source
+  // material onto the natural-rock toon palette regardless of how
+  // the DCC tool named it (the wall.glb shipped with a default white
+  // MeshStandardMaterial; without the recolour pass it'd render
+  // bright white).
+  wall_basic: { url: 'models/structures/wall.glb' },
 };
 
 // Destructible props. Both source GLBs are CC0 by Kay Lousberg — see
@@ -261,8 +269,13 @@ export function preloadModels(onProgress) {
         // green/brown forest palette. Material names in Kenney's Nature Kit
         // are inconsistent (sometimes "stone", sometimes "_defaultMat", etc.),
         // so we additionally key off the prop's filename: any prop whose
-        // identifier starts with "rock" gets forced to a gray rock palette.
+        // identifier starts with "rock" gets forced to a gray rock palette,
+        // and any prop starting with "wall" gets the same stone palette so
+        // a player-built wall reads as the same material as the boulders
+        // they mined the stone from regardless of what the DCC source
+        // material was called.
         const isRockProp = key.startsWith('rock');
+        const isWallProp = key.startsWith('wall');
         gltf.scene.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
@@ -271,7 +284,7 @@ export function preloadModels(onProgress) {
             const replaced = mats.map((m) => {
               if (!m) return m;
               let color;
-              if (isRockProp) {
+              if (isRockProp || isWallProp) {
                 color = new THREE.Color(0x8a8e95);
               } else {
                 color = remapNatureColor(m.name || '', m.color);

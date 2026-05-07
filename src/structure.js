@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { TOON_GRADIENT } from './shading.js';
+import { spawnProp, getPropKinds } from './models.js';
 
 // Procedural materials cached and shared across all structures of a kind so
 // long sessions don't accumulate THREE.Material allocations.
@@ -392,26 +393,34 @@ export function buildStructureMesh(kind, x, z) {
     return buildFenceMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'wall') {
-    // One chunky stone block per cell. Reads as a cube with clearly
-    // visible chamfered edges (RoundedBoxGeometry r=0.10 — still
-    // cube-shaped, but the bevel reads at any camera distance).
-    // Geometry fills the full 1m grid cell so a row of walls leaves
-    // only a thin shadow gap between blocks. Per-cell deterministic
-    // variation in scale + yaw keeps a row from looking cloned;
-    // ghost preview falls back to (0,0).
+    // Authored .glb model (`public/models/structures/wall.glb`) loaded
+    // via the prop pipeline in `models.js`. Falls back to the original
+    // procedural RoundedBoxGeometry block if the prop hasn't loaded
+    // yet (e.g. ghost preview racing the initial GLB fetch on first
+    // page load) or if the asset is missing — keeps build-mode usable
+    // even when the load fails.
     const wx = (typeof x === 'number') ? x : 0;
     const wz = (typeof z === 'number') ? z : 0;
     const v = _stoneVariation(wx, wz);
+    const haveGlb = getPropKinds().includes('wall_basic');
+    if (haveGlb) {
+      const block = spawnProp('wall_basic', { rotationY: v.yaw });
+      // Authored .glb already places its origin at the cell base
+      // (bottom of mesh ~y=0); only the deterministic per-cell scale
+      // jitter is layered on so a row of walls doesn't look cloned.
+      block.scale.set(v.sx, v.sy, v.sz);
+      block.traverse((c) => {
+        if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+      });
+      g.add(block);
+      return g;
+    }
     const stone = new THREE.Mesh(
       new RoundedBoxGeometry(1.00, 1.05, 1.00, 2, 0.10),
       MATERIALS.stone,
     );
     stone.scale.set(v.sx, v.sy, v.sz);
     stone.rotation.y = v.yaw;
-    // Lift so the stone bottom sits at the ground. Half-height ≈
-    // 0.525 × sy; setting y=0.525 lets the slight `sy<1` keep the
-    // bbox a hair above ground (avoids z-fighting on the ground
-    // plane).
     stone.position.set(0, 0.525, 0);
     stone.castShadow = true; stone.receiveShadow = true;
     g.add(stone);
