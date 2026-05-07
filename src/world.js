@@ -524,18 +524,21 @@ export class World {
 
   // Bake a 128×128 RGBA texture for one chunk's ground tile, painting
   // sand (low noise), light grass (mid) and dark forest grass (high)
-  // from the exact same `this.noise` field the minimap samples — so a
-  // sand patch visible on the minimap is sand under the players' feet
-  // too. 0.25 m per texel (4 px/m), four times finer than the minimap
-  // cache, so the boundary curve between biomes is sharp without
-  // visible stair-stepping at gameplay camera distance. Each texel is
-  // 2×2 super-sampled and hard-thresholded per sample, then averaged —
-  // this keeps biome *regions* crisp (no muddy gradient inside a region)
-  // while only the literal one-texel boundary line is anti-aliased,
-  // giving a smooth-but-clear edge between sand / grass / forest.
+  // from the exact same `this.noise` field the minimap samples.
+  //
+  // Boundary smoothing matches the water mesh's level (1 m cells, no
+  // more): we sample raw noise only on a 33×33 / 1 m grid (the same
+  // resolution as `_buildSmoothWaterMesh`'s marching-squares lattice),
+  // then bilinearly interpolate that 1 m-cell field at every 0.25 m
+  // texel and hard-threshold the interpolated value. The biome regions
+  // stay one solid colour (no gradient blend inside a region), while the
+  // boundary line follows a piecewise-smooth contour through 1 m cells
+  // — same granularity as the water shoreline. The 4 px/m bake just
+  // hides texel stair-stepping along that contour at gameplay distance.
   _bakeChunkGroundTexture(cx, cz) {
     const TILE_PX = 128;       // 4 px/m × 32 m chunk
     const PX_PER_M = 4;
+    const G = CHUNK_SIZE;      // 32 cells, 1 m each — matches WATER_GRID
     const minX = cx * CHUNK_SIZE;
     const minZ = cz * CHUNK_SIZE;
     const canvas = document.createElement('canvas');
@@ -554,28 +557,47 @@ export class World {
     // discrete sand / grass / forest patches, no gradient blend.
     const T1 = 0.32; // sand   → grass
     const T2 = 0.55; // grass  → forest
-    // Rotated 2×2 grid super-sample offsets inside each texel. Rotated
-    // (rather than aligned) so the AA is symmetric on both diagonal
-    // and axis-aligned edges. With 4 samples per texel the per-channel
-    // result has 5 quantisation levels, which is enough to read as a
-    // smooth curve at 0.25 m / texel.
-    const SUB_X = [0.125, 0.625, 0.375, 0.875];
-    const SUB_Y = [0.375, 0.125, 0.875, 0.625];
+    // 1. Pre-sample raw noise on the (G+1)×(G+1) cell grid — 33×33 = 1089
+    //    samples per chunk, identical layout to the water mesh's corner
+    //    grid, so chunk borders share corner samples and biome contours
+    //    join up seamlessly between adjacent chunks.
+    const N = new Float32Array((G + 1) * (G + 1));
+    for (let j = 0; j <= G; j++) {
+      for (let i = 0; i <= G; i++) {
+        N[j * (G + 1) + i] = noise(minX + i, minZ + j);
+      }
+    }
+    // 2. For every texel, bilinearly interpolate the 1 m-cell noise field
+    //    and hard-threshold the result. The interpolated field is C¹
+    //    inside each cell, so contour lines are smooth piecewise curves
+    //    — same look as the water's edge-crossing interpolation, but
+    //    rasterised into the texture instead of into geometry.
     for (let py = 0; py < TILE_PX; py++) {
+      const wz = (py + 0.5) / PX_PER_M;     // local Z, 0…CHUNK_SIZE
+      const cellZ = Math.min(wz | 0, G - 1);
+      const fz = wz - cellZ;
+      const rowA = cellZ       * (G + 1);
+      const rowB = (cellZ + 1) * (G + 1);
       for (let px = 0; px < TILE_PX; px++) {
-        let r = 0, g = 0, b = 0;
-        for (let s = 0; s < 4; s++) {
-          const wx = minX + (px + SUB_X[s]) / PX_PER_M;
-          const wz = minZ + (py + SUB_Y[s]) / PX_PER_M;
-          const n = noise(wx, wz);
-          if (n < T1)      { r += SAND_R;   g += SAND_G;   b += SAND_B; }
-          else if (n < T2) { r += GRASS_R;  g += GRASS_G;  b += GRASS_B; }
-          else             { r += FOREST_R; g += FOREST_G; b += FOREST_B; }
-        }
+        const wx = (px + 0.5) / PX_PER_M;
+        const cellX = Math.min(wx | 0, G - 1);
+        const fx = wx - cellX;
+        const n00 = N[rowA + cellX];
+        const n10 = N[rowA + cellX + 1];
+        const n01 = N[rowB + cellX];
+        const n11 = N[rowB + cellX + 1];
+        const n = n00 * (1 - fx) * (1 - fz)
+                + n10 *      fx  * (1 - fz)
+                + n01 * (1 - fx) *      fz
+                + n11 *      fx  *      fz;
+        let r, g, b;
+        if (n < T1)      { r = SAND_R;   g = SAND_G;   b = SAND_B; }
+        else if (n < T2) { r = GRASS_R;  g = GRASS_G;  b = GRASS_B; }
+        else             { r = FOREST_R; g = FOREST_G; b = FOREST_B; }
         const i = (py * TILE_PX + px) * 4;
-        data[i + 0] = (r * 0.25) | 0;
-        data[i + 1] = (g * 0.25) | 0;
-        data[i + 2] = (b * 0.25) | 0;
+        data[i + 0] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
         data[i + 3] = 255;
       }
     }
