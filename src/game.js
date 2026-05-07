@@ -345,10 +345,12 @@ export class Game {
 
   _toggleMinimap() {
     // The minimap canvas is hidden via CSS (`#minimap` has display:none;
-    // `.open` flips it to display:block). Minimap.render() runs every
-    // frame regardless, so exploration & tile bakes keep advancing while
-    // the panel is closed and the latest content is already on the
-    // canvas the moment we reveal it.
+    // `.open` flips it to display:block). `Minimap.render()` reads the
+    // same `.open` class and short-circuits when the panel is closed,
+    // so toggling here also turns the per-frame minimap work on / off
+    // (~16 drawImage calls + any pending tile bakes saved while
+    // closed). Tile / overlay caches survive across toggles so reopen
+    // is instant for the chunks that were last revealed.
     const el = document.getElementById('minimap');
     if (!el) return;
     el.classList.toggle('open');
