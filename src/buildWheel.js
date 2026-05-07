@@ -1,5 +1,5 @@
 // Build-wheel UI — radial recipe picker. One instance per player; opened
-// by KeyB (P1) / KeyM (P2), or by tapping the build button on the mobile
+// by KeyB (P1) / KeyN (P2), or by tapping the build button on the mobile
 // controller. Tapping a slice enters build mode for that recipe and
 // closes the wheel; pressing the same hotkey again, Escape, or the
 // number keys 1..N also work as quick paths.

@@ -7,7 +7,7 @@ const P1_KEYS = {
   // toggling off if the same one is already active). Stays out of the swing
   // / dash key set so it doesn't conflict with combat.
   // The first 4 RECIPE_ORDER entries get number-key fast-paths; everything
-  // beyond that is reachable only through the build-wheel UI (KeyB / KeyM)
+  // beyond that is reachable only through the build-wheel UI (KeyB / KeyN)
   // because there are only so many comfortable digits in either hand.
   build: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
   // Open the build-wheel picker. Sits next to E (interact) on the
@@ -23,8 +23,11 @@ const P2_KEYS = {
   attack: ['KeyL', 'Slash'], dash: ['KeyK', 'ShiftRight'], interact: ['KeyJ', 'Period'],
   // Right-hand digits 7..0 mirror the same 4-recipe catalog for player 2.
   build: ['Digit7', 'Digit8', 'Digit9', 'Digit0'],
-  // M sits next to J/K/L in the right-hand cluster, mirroring P1's KeyB.
-  buildMenu: ['KeyM'],
+  // N sits one row below J/K/L in the right-hand cluster, mirroring P1's
+  // KeyB. Was KeyM until M was claimed for the minimap toggle UI; KeyN
+  // is the next-best ergonomic neighbour and is unused by every other
+  // system (combat / build / pause / minimap).
+  buildMenu: ['KeyN'],
   // U is unbound by every existing system (combat / build / pause) and sits
   // in P2's right-hand cluster next to J/K/L, mirroring P1's Q.
   seedCycle: ['KeyU'],
