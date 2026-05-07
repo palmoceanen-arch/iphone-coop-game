@@ -462,6 +462,16 @@ export function buildStructureMesh(kind, x, z) {
     core.position.set(0, 0.28, 0);
     core.name = 'flameCore';
     g.add(core);
+    // Warm point light so the campfire actually casts illumination on
+    // nearby props/players. Distance/intensity tuned to match the
+    // existing world-altar bonfire feel (`world.js`'s `fireLight`) but
+    // a touch dimmer since this is a smaller fire than the altar.
+    // Intensity is modulated per-frame in Structure.update to flicker
+    // in lockstep with the flame mesh.
+    const light = new THREE.PointLight(0xff8a30, 1.6, 9.0, 1.6);
+    light.position.set(0, 0.5, 0);
+    light.name = 'flameLight';
+    g.add(light);
     return g;
   }
   if (kind === 'torch') {
@@ -499,6 +509,13 @@ export function buildStructureMesh(kind, x, z) {
     core.position.set(0, stickH + 0.23, 0);
     core.name = 'flameCore';
     g.add(core);
+    // Smaller, tighter pool of light than the campfire — torches are
+    // line-of-sight pathway lighting, not a bonfire. Sits right at the
+    // flame so the head-of-the-stick is the brightest point.
+    const light = new THREE.PointLight(0xff9a40, 1.3, 6.0, 1.6);
+    light.position.set(0, stickH + 0.27, 0);
+    light.name = 'flameLight';
+    g.add(light);
     return g;
   }
   if (kind === 'planter') {
@@ -538,6 +555,15 @@ export function buildStructureMesh(kind, x, z) {
 export function makeGhostMesh(kind, affordable = true) {
   const real = buildStructureMesh(kind);
   const tint = affordable ? 0x6cf28a : 0xff5b5b;
+  // Strip any baked-in PointLights from the preview — the player is
+  // still holding the recipe in their hand, the structure isn't lit
+  // yet, and a roaming pool of warm orange light following the ghost
+  // around is visually noisy.
+  const toRemove = [];
+  real.traverse((child) => {
+    if (child.isLight) toRemove.push(child);
+  });
+  for (const l of toRemove) l.parent?.remove(l);
   real.traverse((child) => {
     if (child.isMesh) {
       child.material = new THREE.MeshBasicMaterial({
@@ -604,7 +630,11 @@ export class Structure {
       if (!this._flameCached) {
         this._flameOuter = this.mesh.getObjectByName('flame') || null;
         this._flameInner = this.mesh.getObjectByName('flameCore') || null;
+        this._flameLight = this.mesh.getObjectByName('flameLight') || null;
         this._flameT = Math.random() * Math.PI * 2;
+        // Snapshot the spawn-time intensity so the flicker math reads
+        // a single base value regardless of which fire kind we are.
+        this._flameLightBase = this._flameLight?.intensity || 1.0;
         this._flameCached = true;
       }
       this._flameT += dt * 7.5;
@@ -612,6 +642,15 @@ export class Structure {
       const wobI = 0.80 + 0.22 * Math.sin(this._flameT * 1.6 + 1.1);
       if (this._flameOuter) this._flameOuter.scale.set(wobO, 0.9 + 0.18 * Math.sin(this._flameT * 1.3), wobO);
       if (this._flameInner) this._flameInner.scale.set(wobI, 0.85 + 0.20 * Math.sin(this._flameT * 1.9), wobI);
+      if (this._flameLight) {
+        // Two out-of-phase sines + a mild +/-3% noise ride give the
+        // pool a candle-y "breath" without going so far that the
+        // toon-banded floor visibly pops between bands every frame.
+        const breath = 0.88 + 0.10 * Math.sin(this._flameT * 0.85)
+                            + 0.06 * Math.sin(this._flameT * 2.7 + 0.6);
+        const jitter = 1 + (Math.random() - 0.5) * 0.06;
+        this._flameLight.intensity = this._flameLightBase * breath * jitter;
+      }
     }
     if (this._shake <= 0.0001) return;
     this._shakeT += dt * 22;
