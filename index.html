@@ -290,14 +290,13 @@
       }
       #fps.show { display: block; }
       /* Minimap — top-down chunk-cached map of the explored world.
-         Bottom-right corner, lifted above the FPS readout. During build
-         mode the right buildbar appears at right:14 / bottom:96 with
-         height ~30 px, so the minimap starts at bottom:140 to leave it
-         a clear gap. The canvas is rendered every frame by
-         Minimap.render(); see src/minimap.js. */
+         Anchored to the bottom-right corner with a uniform 14 px gap
+         from both edges (matches the right buildbar's right:14). The
+         canvas is rendered every frame by Minimap.render(); see
+         src/minimap.js. */
       #minimap {
-        position: absolute; bottom: 140px; right: 12px;
-        width: 168px; height: 168px;
+        position: absolute; bottom: 14px; right: 14px;
+        width: 220px; height: 220px;
         background: #0a0d12;
         border: 1px solid rgba(255,255,255,0.12);
         border-radius: 8px;
@@ -478,7 +477,7 @@
           <span class="cost" id="bb2-cost"></span>
           <span class="hint">L:поставить · K:отмена · J:поворот</span>
         </div>
-        <canvas id="minimap" width="168" height="168" aria-label="Карта местности"></canvas>
+        <canvas id="minimap" width="220" height="220" aria-label="Карта местности"></canvas>
         <div id="toast"></div>
         <div id="shop">
           <div class="shop-panel">
