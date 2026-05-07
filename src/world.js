@@ -269,6 +269,14 @@ export const KEEP_RADIUS = ACTIVE_RADIUS + 2;
 // origin so the player doesn't spawn into the void; everything else is
 // queued and amortised across subsequent frames in `processChunkQueue`.
 const SYNC_LOAD_RADIUS = 1;
+
+// Y position of the global fallback ground plane. Per-chunk ground
+// patches sit at y=0; this base plane parks 0.1 m below them so depth
+// precision can never tie the two surfaces (a 2 cm gap turned out not
+// to be enough at the camera's typical pitch — adjacent chunk patches
+// were tearing against the base plane mid-walk). 0.1 m is invisible
+// past the streaming skirt because fog already covers that distance.
+const GROUND_BASE_Y = -0.1;
 // How many queued chunks to materialise per `processChunkQueue` call.
 // Each chunk gen runs the marching-squares water mesh + dozens of
 // model clones, costing roughly 1-3ms on a low-end laptop, so 1 per
@@ -499,11 +507,18 @@ export class World {
       gradientMap: TOON_GRADIENT,
     });
     this.ground = new THREE.Mesh(geo, mat);
-    // Sit just below the per-chunk patches (which live at y=0) so the patches
-    // win the depth test inside loaded chunks but the base plane fills in
-    // the unexplored skirt that streams just past the camera.
-    this.ground.position.y = -0.02;
-    this.ground.receiveShadow = true;
+    // Sit a clear 0.1 m below the per-chunk patches (which live at y=0) so
+    // depth precision can never tie them at any reasonable camera angle.
+    // 2 cm wasn't enough at the perspective the camera sits at — adjacent
+    // chunks were tearing against this base plane mid-walk. The 0.1 m
+    // drop is invisible past the streaming skirt because fog already
+    // covers that distance.
+    this.ground.position.y = GROUND_BASE_Y;
+    // No shadow receiving on the base plane: the chunk patches cover it
+    // wherever shadows actually fall, and a flat plane stacked under the
+    // patches receiving its own shadow pass was reading as z-fighting
+    // banding through the patch's edges as the player walked.
+    this.ground.receiveShadow = false;
     this.scene.add(this.ground);
   }
 
@@ -511,9 +526,12 @@ export class World {
   // (low noise), light grass (mid) and dark forest grass (high) from the
   // exact same `this.noise` field the minimap samples — so a sand patch
   // visible on the minimap is sand under the players' feet too. 0.5 m per
-  // texel matches the minimap's 2 px/m cache; the bilinear filter on the
-  // GPU softens the sand→grass→forest steps without our having to bake a
-  // gradient pass into the texture itself.
+  // texel matches the minimap's 2 px/m cache; the texture itself bakes a
+  // smoothstep gradient between the three tiers so the biome transitions
+  // ramp continuously (like the water's shoreline) instead of cutting at
+  // hard noise thresholds — at 64 px / 32 m, a hard threshold reads as a
+  // visible 0.5 m sawtooth as the camera moves, while a smooth ramp
+  // dissolves into the bilinear filter.
   _bakeChunkGroundTexture(cx, cz) {
     const TILE_PX = 64;        // 2 px/m × 32 m chunk
     const PX_PER_M = 2;
@@ -526,21 +544,38 @@ export class World {
     const id = ctx.createImageData(TILE_PX, TILE_PX);
     const data = id.data;
     const noise = this.noise;
+    // Toon-friendly biome palette. Same hue family as the minimap, but
+    // slightly brighter so the 3-band sun ramp produces clear cel-shading.
+    const SAND   = [196, 169, 106]; // #c4a96a
+    const GRASS  = [109, 176,  80]; // #6db050 (was the global ground colour)
+    const FOREST = [ 60, 110,  65]; // #3c6e41
+    // 0.04-wide smoothstep windows centred on the minimap's 0.32 / 0.55
+    // thresholds. ~0.04 in noise space ≈ 1 m on the ground at the FBM's
+    // base frequency — wide enough to read as a soft fade under-foot,
+    // narrow enough to keep biome regions recognisable.
+    const T1_LO = 0.30, T1_HI = 0.34; // sand   → grass
+    const T2_LO = 0.53, T2_HI = 0.57; // grass  → forest
+    const smoothstep = (e0, e1, x) => {
+      const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+      return t * t * (3 - 2 * t);
+    };
     for (let py = 0; py < TILE_PX; py++) {
       const wz = minZ + (py + 0.5) / PX_PER_M;
       for (let px = 0; px < TILE_PX; px++) {
         const wx = minX + (px + 0.5) / PX_PER_M;
         const n = noise(wx, wz);
-        let r, g, b;
-        // Same thresholds as the minimap's terrain bake — sand on low
-        // noise, light grass on mid, deep forest on high. The colours
-        // here are toon-friendly (slightly brighter than the muted
-        // minimap palette) so they read well under the 3-band sun ramp.
-        if (n < 0.32)        { r = 196; g = 169; b = 106; } // sand   (#c4a96a)
-        else if (n < 0.55)   { r = 109; g = 176; b =  80; } // grass  (#6db050) — was the global ground colour
-        else                 { r =  60; g = 110; b =  65; } // forest (#3c6e41)
+        // Three weights that always sum to ≤ 1; the smoothstep windows
+        // overlap zero noise space so the residual `grassW` is exactly
+        // (1 − sandW − forestW) without negative-weight clamping in the
+        // common case.
+        const sandW   = 1 - smoothstep(T1_LO, T1_HI, n);
+        const forestW =     smoothstep(T2_LO, T2_HI, n);
+        const grassW  = Math.max(0, 1 - sandW - forestW);
         const i = (py * TILE_PX + px) * 4;
-        data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+        data[i + 0] = (SAND[0] * sandW + GRASS[0] * grassW + FOREST[0] * forestW) | 0;
+        data[i + 1] = (SAND[1] * sandW + GRASS[1] * grassW + FOREST[1] * forestW) | 0;
+        data[i + 2] = (SAND[2] * sandW + GRASS[2] * grassW + FOREST[2] * forestW) | 0;
+        data[i + 3] = 255;
       }
     }
     ctx.putImageData(id, 0, 0);
@@ -944,7 +979,9 @@ export class World {
       const sx = Math.round(cxAvg / CHUNK_SIZE) * CHUNK_SIZE;
       const sz = Math.round(czAvg / CHUNK_SIZE) * CHUNK_SIZE;
       if (sx !== this._lastGroundCx || sz !== this._lastGroundCz) {
-        this.ground.position.set(sx, 0, sz);
+        // Keep the base plane parked below the per-chunk patches (see
+        // _buildGround) — chunk-snap only translates X/Z, never Y.
+        this.ground.position.set(sx, GROUND_BASE_Y, sz);
         this._lastGroundCx = sx;
         this._lastGroundCz = sz;
       }
@@ -1012,6 +1049,15 @@ export class World {
     const groundMat = new THREE.MeshToonMaterial({
       map: groundTex,
       gradientMap: TOON_GRADIENT,
+      // Bias the chunk patch's depth slightly toward the camera so it
+      // unconditionally wins the depth test against the global base
+      // plane (which sits at y=GROUND_BASE_Y). Belt-and-suspenders with
+      // the 0.1 m Y gap — without polygon offset, mip level transitions
+      // at oblique angles still occasionally tied with the base plane
+      // and showed as a sliding green shimmer at the chunk edges.
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.position.set(minX + CHUNK_SIZE / 2, 0, minZ + CHUNK_SIZE / 2);
