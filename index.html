@@ -290,10 +290,12 @@
       }
       #fps.show { display: block; }
       /* Minimap — top-down chunk-cached map of the explored world.
-         Anchored to the bottom-right corner with a uniform 14 px gap
-         from both edges (matches the right buildbar's right:14). The
-         canvas is rendered every frame by Minimap.render(); see
-         src/minimap.js. */
+         Hidden by default; toggled with the M key (see _bindUI in
+         src/game.js). When open it sits in the bottom-right with a
+         uniform 14 px gap from both edges (matches the right
+         buildbar's right:14). Rendered every frame by
+         Minimap.render() regardless of visibility, so exploration is
+         still tracked while the panel is closed; see src/minimap.js. */
       #minimap {
         position: absolute; bottom: 14px; right: 14px;
         width: 220px; height: 220px;
@@ -305,7 +307,9 @@
         image-rendering: crisp-edges;
         pointer-events: none;
         z-index: 5;
+        display: none;
       }
+      #minimap.open { display: block; }
       /* Start menu — shown on launch before the lobby/QR screen. Mirrors the
          pause-panel chrome (dark card, blue accents, segmented buttons) so
          start, pause and altar UIs feel like the same family. */
