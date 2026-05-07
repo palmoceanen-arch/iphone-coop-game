@@ -298,24 +298,25 @@ const CHUNKS_PER_FRAME = 1;
 
 // Lake mesh resolution. Per chunk we sample noise on a (WATER_GRID+1)×
 // (WATER_GRID+1) grid of corners, then build a marching-squares mesh.
-// WATER_GRID = 16 gives 2 m cells. Noise highest fbm octave is ~12 m
-// wavelength → ~6 cells per cycle, well above Nyquist, so the lake
-// shapes themselves are unchanged. The visible cost is that
-// "all-corners-just-barely-dry" notches in the shoreline are now 2 m
-// instead of 1 m, but marching-squares interpolation still cuts the
-// boundary at sub-cell precision so the shoreline curve itself stays
-// smooth — what gets coarser is only the worst-case isolated-notch
-// size. In return: 4× fewer noise samples + cells per chunk on the
-// water bake (the most expensive single per-chunk operation, since
-// each `_waterMaskAt` does 3 fbm calls for domain warping). The same
-// grid is used by `_buildIsoBandMesh` for the sand / forest biome
-// edges so they get the same coarsening (and the same 4× perf win).
+// Both WATER_GRID and WATER_CELL are `let` instead of `const` because
+// `setTerrainQuality()` swaps the resolution at runtime (low=16/medium=24/
+// high=32) when the player picks a different terrain bucket in the
+// pause menu. ESM live bindings forward the new value to any importer
+// reading the symbol; nothing else stores a snapshot. Default is 32
+// (high) — 1 m cells, smooth biome / shoreline edges. Lower buckets
+// trade smoothness for a 4× (low) / 1.78× (medium) reduction in noise
+// samples + marching-squares cells per chunk — the water bake is the
+// most expensive single per-chunk op (each `_waterMaskAt` does 3 fbm
+// calls for domain warping) so this is the biggest absolute lever.
+// `_buildIsoBandMesh` (sand / forest biome edges) reads the same
+// values, so biome curves stay 1:1 with the water shoreline at every
+// quality level.
 // Where the noise crosses WATER_THRESHOLD on a cell edge we interpolate the
 // crossing point, giving smooth curved shorelines instead of axis-aligned
 // blocks. WATER_NOISE_FREQ scales the noise input so lakes form large
 // connected basins rather than tiny specks.
-export const WATER_GRID = 16;
-export const WATER_CELL = CHUNK_SIZE / WATER_GRID;
+export let WATER_GRID = 32;
+export let WATER_CELL = CHUNK_SIZE / WATER_GRID;
 export const WATER_THRESHOLD = 0.30;
 export const WATER_NOISE_FREQ = 0.45;
 
@@ -1725,6 +1726,69 @@ export class World {
   }
 
   isNight() { return this.dayTime < SUNRISE || this.dayTime >= SUNSET; }
+
+  // Force-unload every loaded chunk regardless of distance to the players.
+  // Used by `setTerrainQuality()` so a resolution change takes effect on
+  // already-loaded chunks: the chunk's owned BufferGeometries are disposed
+  // (`_disposeChunk`), the unload listener fires so Game can despawn the
+  // chunk's entities, and the chunks Map is cleared. The next call to
+  // `ensureChunksAround` (driven by Game's per-frame loop) regenerates
+  // each chunk deterministically from `chunkSeed(seed, cx, cz)` at the
+  // new resolution, with player-placed structures rehydrated from
+  // `placedStructures` and consumed chests / altars / breakables stripped
+  // by the existing spawn-skip logic.
+  _unloadAllChunks() {
+    if (this.chunks.size === 0) return;
+    const keys = [...this.chunks.keys()];
+    for (const key of keys) {
+      const chunk = this.chunks.get(key);
+      if (!chunk) continue;
+      if (typeof this._onChunkUnload === 'function') {
+        try { this._onChunkUnload(key); } catch { /* ignore listener errors */ }
+      }
+      this._disposeChunk(chunk);
+      this.chunks.delete(key);
+    }
+    // Drop pending async-load entries too — they were enqueued under the
+    // old resolution's coordinate system (still valid, just stale because
+    // we want a clean reload pass) and would otherwise race against the
+    // sync regeneration path.
+    this._pendingLoads.length = 0;
+    this._pendingSet.clear();
+    // Clear world-level spawn queues so Game's drainers don't try to
+    // instantiate stale descriptors against now-disposed chunk groups.
+    // Re-population happens in the next `_loadChunkSync` pass.
+    this.enemySpawns.length = 0;
+    this.chestSpawns.length = 0;
+    this.breakableSpawns.length = 0;
+    this.altarSpawns.length = 0;
+    this.resourceSpawns.length = 0;
+    this.structureSpawns.length = 0;
+  }
+
+  // Switch the terrain mesh resolution. `level` is one of 'low' / 'medium' /
+  // 'high'. Maps to a WATER_GRID value: low=16 (2 m cells), medium=24
+  // (~1.33 m cells), high=32 (1 m cells, default). The same grid drives
+  // the water marching-squares mesh AND the sand / forest biome iso-band
+  // meshes, so all three boundary curves coarsen / sharpen together (the
+  // property the user asked us to preserve when biomes were first added).
+  // Changing the value triggers a full chunk reload because the cached
+  // BufferGeometries were baked at the previous resolution.
+  setTerrainQuality(level) {
+    const grid = level === 'high' ? 32 : level === 'medium' ? 24 : 16;
+    if (grid === WATER_GRID) return;
+    WATER_GRID = grid;
+    WATER_CELL = CHUNK_SIZE / grid;
+    this._unloadAllChunks();
+    // Regeneration happens on the next tick: Game's per-frame loop calls
+    // `ensureChunksAround` for each player, which sync-loads the
+    // immediate 3×3 ring (SYNC_LOAD_RADIUS=1) and enqueues the rest.
+    // `processChunkQueue` (also per-frame) drains 1 chunk per frame, so
+    // the full new-resolution streaming ring fills in within ~25 frames
+    // (~0.4 s at 60 Hz). The pause menu is open during this transition,
+    // so the player sees their immediate surroundings update instantly
+    // and the outer ring fill in by the time they resume.
+  }
 
   // Switch the water shader's quality bucket. Called by Settings.applyVideo
   // whenever the player picks a different water tier in the pause menu. If

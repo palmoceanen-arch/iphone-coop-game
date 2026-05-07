@@ -38,6 +38,7 @@ export const VIDEO_PRESETS = {
     fog: true,
     particles: 'low',
     water: 'low',
+    terrainQuality: 'low',
     fov: 60,
   },
   medium: {
@@ -47,6 +48,7 @@ export const VIDEO_PRESETS = {
     fog: true,
     particles: 'medium',
     water: 'medium',
+    terrainQuality: 'medium',
     fov: 60,
   },
   high: {
@@ -56,6 +58,7 @@ export const VIDEO_PRESETS = {
     fog: true,
     particles: 'high',
     water: 'high',
+    terrainQuality: 'high',
     fov: 60,
   },
   ultra: {
@@ -65,6 +68,7 @@ export const VIDEO_PRESETS = {
     fog: true,
     particles: 'high',
     water: 'high',
+    terrainQuality: 'high',
     fov: 60,
   },
 };
@@ -254,6 +258,9 @@ export class Settings {
     }
     if (this.world && typeof this.world.setWaterQuality === 'function') {
       this.world.setWaterQuality(v.water);
+    }
+    if (this.world && typeof this.world.setTerrainQuality === 'function') {
+      this.world.setTerrainQuality(v.terrainQuality);
     }
   }
 
