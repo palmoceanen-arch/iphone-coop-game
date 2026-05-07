@@ -317,6 +317,20 @@ const CHUNKS_PER_FRAME = 1;
 // connected basins rather than tiny specks.
 export let WATER_GRID = 32;
 export let WATER_CELL = CHUNK_SIZE / WATER_GRID;
+// Fixed-resolution mask used for *gameplay* queries — `isWaterAt` for
+// player / enemy collision and the per-prop "is this point on water?"
+// skip used by every spawn loop in `_generateChunk` (trees, rocks,
+// bushes, enemy camps, chests, altars, breakables). This is intentionally
+// decoupled from the visual `WATER_GRID`: when the player switches
+// terrain quality, only the rendered mesh resolution changes — the
+// underlying "which world points are wet" decision stays at the
+// canonical 1 m grid so prop placement, save / load determinism and
+// player collision are bit-identical across all three quality tiers.
+// (The visible water boundary at low quality may drift up to ~1 m
+// from the gameplay boundary, but that's a cosmetic mismatch the
+// player won't feel — they'd only notice if props moved.)
+const MASK_GRID = 32;
+const MASK_CELL = CHUNK_SIZE / MASK_GRID;
 export const WATER_THRESHOLD = 0.30;
 export const WATER_NOISE_FREQ = 0.45;
 
@@ -1484,7 +1498,10 @@ export class World {
   }
 
   isWaterAt(x, z) {
-    const STEP = WATER_CELL;
+    // Always queried at the fixed gameplay-canonical 1 m grid (MASK_CELL),
+    // independent of the visual WATER_GRID set by terrain quality. Keeps
+    // prop spawn / collision deterministic across quality switches.
+    const STEP = MASK_CELL;
     const i = Math.floor(x / STEP);
     const j = Math.floor(z / STEP);
     const x0 = i * STEP, z0 = j * STEP;
