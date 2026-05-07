@@ -269,6 +269,16 @@ export const KEEP_RADIUS = ACTIVE_RADIUS + 2;
 // origin so the player doesn't spawn into the void; everything else is
 // queued and amortised across subsequent frames in `processChunkQueue`.
 const SYNC_LOAD_RADIUS = 1;
+
+// Noise thresholds for the sand and dark-forest biome bands. Identical
+// to the values the minimap baker uses, so the 3D world's biome edges
+// land on the same iso-contour the player sees on the map.
+const SAND_NOISE_MAX = 0.32;   // n < 0.32 → sand
+const FOREST_NOISE_MIN = 0.55; // n ≥ 0.55 → dark forest
+// Toon-friendly biome colours (also match the minimap palette).
+const SAND_COLOR_HEX   = 0xc4a96a;
+const GRASS_COLOR_HEX  = 0x6db050;
+const FOREST_COLOR_HEX = 0x3c6e41;
 // How many queued chunks to materialise per `processChunkQueue` call.
 // Each chunk gen runs the marching-squares water mesh + dozens of
 // model clones, costing roughly 1-3ms on a low-end laptop, so 1 per
@@ -482,21 +492,145 @@ export class World {
     this.scene.add(this.moonHelper);
   }
 
-  // Ground = a single large flat plane (toon-shaded grass) that follows the
-  // centroid of the players. Snapped to a multiple of CHUNK_SIZE so its
-  // texture does not visibly slide. With a flat colour and no displacement
-  // there are no self-shadowing artifacts.
+  // Ground = a single large flat plane (toon-shaded grass) that follows
+  // the centroid of the players. This is the *grass* tier of the biome
+  // map — sand and dark-forest patches are added per-chunk as marching-
+  // squares meshes (`_buildIsoBandMesh`) sitting at the same y=0 with
+  // polygonOffset, so the biome boundary line is true geometry (same
+  // sub-pixel AA as the water shoreline) instead of a texel-aligned
+  // texture edge. With a flat colour and no displacement there are no
+  // self-shadowing artifacts.
   _buildGround() {
     const size = (ACTIVE_RADIUS * 2 + 4) * CHUNK_SIZE; // ~320m
     const geo = new THREE.PlaneGeometry(size, size, 1, 1);
     geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshToonMaterial({
-      color: 0x6db050,
+      color: GRASS_COLOR_HEX,
       gradientMap: TOON_GRADIENT,
     });
     this.ground = new THREE.Mesh(geo, mat);
+    this.ground.position.y = 0;
     this.ground.receiveShadow = true;
     this.scene.add(this.ground);
+  }
+
+  // Marching-squares mesh over the same 1 m lattice the water mesh uses
+  // (`WATER_GRID` / `WATER_CELL`). Returns a flat THREE.Mesh whose
+  // boundary traces the noise iso-contour where `n == threshold`. With
+  // `insideBelow=true` the mesh fills cells where the noise is BELOW
+  // the threshold (sand band); with `insideBelow=false` it fills cells
+  // where the noise is AT or ABOVE the threshold (dark-forest band).
+  // Returns null when the band doesn't intersect this chunk.
+  //
+  // This is a direct twin of `_buildSmoothWaterMesh`'s topology pass —
+  // same edge-crossing interpolation, same saddle disambiguation —
+  // minus the per-vertex shore-distance attribute the water shader
+  // needs. Because corner samples are taken at exact 1 m world
+  // coordinates, adjacent chunks see identical samples on their shared
+  // boundary and the resulting polygons join seamlessly. The biome
+  // boundary therefore has the same level of edge smoothing as the
+  // water shoreline (true vector geometry rasterised with sub-pixel AA
+  // by the GPU), and no more.
+  _buildIsoBandMesh(minX, minZ, threshold, insideBelow, material, y) {
+    const G = WATER_GRID;
+    const STEP = WATER_CELL;
+    const N = new Float32Array((G + 1) * (G + 1));
+    for (let j = 0; j <= G; j++) {
+      for (let i = 0; i <= G; i++) {
+        N[j * (G + 1) + i] = this.noise(minX + i * STEP, minZ + j * STEP);
+      }
+    }
+    const inside = insideBelow
+      ? (n) => n < threshold
+      : (n) => n >= threshold;
+
+    const positions = [];
+    const indices = [];
+    let nextIdx = 0;
+    const pushVert = (x, z) => {
+      positions.push(x, y, z);
+      return nextIdx++;
+    };
+    const pushTri = (a, b, c) => { indices.push(a, b, c); };
+
+    for (let j = 0; j < G; j++) {
+      for (let i = 0; i < G; i++) {
+        const x0 = minX + i * STEP, z0 = minZ + j * STEP;
+        const x1 = x0 + STEP,        z1 = z0 + STEP;
+        const nBL = N[j*(G+1) + i],         nTL = N[(j+1)*(G+1) + i];
+        const nTR = N[(j+1)*(G+1) + i + 1], nBR = N[j*(G+1) + i + 1];
+        const wBL = inside(nBL) ? 1 : 0;
+        const wTL = inside(nTL) ? 1 : 0;
+        const wTR = inside(nTR) ? 1 : 0;
+        const wBR = inside(nBR) ? 1 : 0;
+        const cmask = (wBL) | (wTL << 1) | (wTR << 2) | (wBR << 3);
+        if (cmask === 0) continue;          // entirely outside the band
+        if (cmask === 15) {                  // entirely inside — full quad
+          const a = pushVert(x0, z0);
+          const b = pushVert(x0, z1);
+          const cc = pushVert(x1, z1);
+          const d = pushVert(x1, z0);
+          pushTri(a, b, cc);
+          pushTri(a, cc, d);
+          continue;
+        }
+        // CCW from BL: BL→TL→TR→BR. For each edge with one wet and one
+        // dry corner, linearly interpolate the noise to the threshold so
+        // the boundary cuts the cell at sub-cell precision (= sub-metre
+        // sub-pixel curve once rasterised).
+        const corners = [
+          { wet: wBL, x: x0, z: z0, n: nBL },
+          { wet: wTL, x: x0, z: z1, n: nTL },
+          { wet: wTR, x: x1, z: z1, n: nTR },
+          { wet: wBR, x: x1, z: z0, n: nBR },
+        ];
+        const poly = [];
+        for (let k = 0; k < 4; k++) {
+          const a = corners[k];
+          const b = corners[(k + 1) % 4];
+          if (a.wet) poly.push([a.x, a.z]);
+          if (a.wet !== b.wet) {
+            const t = (threshold - a.n) / (b.n - a.n);
+            const px = a.x + (b.x - a.x) * t;
+            const pz = a.z + (b.z - a.z) * t;
+            poly.push([px, pz]);
+          }
+        }
+        // Saddle disambiguation — same as the water mesh.
+        if ((cmask === 5 || cmask === 10) && poly.length === 6) {
+          const cxw = (x0 + x1) * 0.5, czw = (z0 + z1) * 0.5;
+          const nC = this.noise(cxw, czw);
+          const centerInside = inside(nC);
+          if (!centerInside) {
+            const baseIdx = nextIdx;
+            for (const p of poly) pushVert(p[0], p[1]);
+            if (cmask === 5) {
+              pushTri(baseIdx + 0, baseIdx + 1, baseIdx + 5);
+              pushTri(baseIdx + 3, baseIdx + 4, baseIdx + 2);
+            } else {
+              pushTri(baseIdx + 1, baseIdx + 2, baseIdx + 0);
+              pushTri(baseIdx + 4, baseIdx + 5, baseIdx + 3);
+            }
+            continue;
+          }
+        }
+        if (poly.length < 3) continue;
+        const baseIdx = nextIdx;
+        for (const p of poly) pushVert(p[0], p[1]);
+        for (let k = 1; k < poly.length - 1; k++) {
+          pushTri(baseIdx, baseIdx + k, baseIdx + k + 1);
+        }
+      }
+    }
+
+    if (indices.length === 0) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.receiveShadow = true;
+    return mesh;
   }
 
   _buildCampfire() {
@@ -882,6 +1016,8 @@ export class World {
       const sx = Math.round(cxAvg / CHUNK_SIZE) * CHUNK_SIZE;
       const sz = Math.round(czAvg / CHUNK_SIZE) * CHUNK_SIZE;
       if (sx !== this._lastGroundCx || sz !== this._lastGroundCz) {
+        // Chunk-snap only translates X/Z; Y stays at the grass level
+        // (sand and forest meshes use polygonOffset to sit on top).
         this.ground.position.set(sx, 0, sz);
         this._lastGroundCx = sx;
         this._lastGroundCz = sz;
@@ -922,10 +1058,13 @@ export class World {
     // `_placeCliffCluster` pushes one entry per rock so the cluster
     // reads as a chunky pile of dots rather than a single point.
     const naturalProps = [];
-    // BufferGeometries we own (fresh-allocated for this chunk and not
-    // returned to a shared cache). Currently just the marching-squares
-    // water mesh, but the array is generic so future per-chunk meshes
-    // can hook in. `_disposeChunk` walks this list on unload.
+    // BufferGeometries / Materials / Textures we own (fresh-allocated
+    // for this chunk and not returned to a shared cache). The water
+    // mesh's BufferGeometry is one entry; the per-chunk ground patch
+    // contributes another three (geometry, material, baked texture).
+    // `_disposeChunk` walks this list on unload and calls .dispose() on
+    // anything that has one — so any future per-chunk GPU resource can
+    // just be pushed here without touching the unload path.
     const ownedGeos = [];
 
     const isOrigin = (cx === 0 && cz === 0);
@@ -933,6 +1072,45 @@ export class World {
     const localCenter = (x, z) => Math.hypot(x, z);
 
     const sampleN = (x, z) => this.noise(x, z);
+
+    // 1. Biome bands. The global ground plane (`_buildGround`) is the
+    // grass tier. Per-chunk we add up to two marching-squares meshes
+    // tracing the sand band (n < SAND_NOISE_MAX) and the dark-forest
+    // band (n ≥ FOREST_NOISE_MIN) over the same 1 m lattice the water
+    // mesh uses — so the biome boundaries are true vector geometry
+    // with the same sub-pixel AA the water shoreline gets, and no
+    // hand-baked texture edges. Both bands sit at y=0 and use
+    // polygonOffset to win the depth test over the grass plane.
+    if (!this._sandMaterial) {
+      this._sandMaterial = new THREE.MeshToonMaterial({
+        color: SAND_COLOR_HEX,
+        gradientMap: TOON_GRADIENT,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -2,
+      });
+      this._forestMaterial = new THREE.MeshToonMaterial({
+        color: FOREST_COLOR_HEX,
+        gradientMap: TOON_GRADIENT,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -2,
+      });
+    }
+    const sandMesh = this._buildIsoBandMesh(
+      minX, minZ, SAND_NOISE_MAX, true, this._sandMaterial, 0
+    );
+    if (sandMesh) {
+      group.add(sandMesh);
+      if (sandMesh.geometry) ownedGeos.push(sandMesh.geometry);
+    }
+    const forestMesh = this._buildIsoBandMesh(
+      minX, minZ, FOREST_NOISE_MIN, false, this._forestMaterial, 0
+    );
+    if (forestMesh) {
+      group.add(forestMesh);
+      if (forestMesh.geometry) ownedGeos.push(forestMesh.geometry);
+    }
 
     // 2. Water — marching-squares lake mesh. Sample noise at corners of a
     // (WATER_GRID+1)² grid covering this chunk; build a smooth curved
