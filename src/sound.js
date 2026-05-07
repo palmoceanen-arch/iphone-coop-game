@@ -512,18 +512,26 @@ export class Sound {
     };
 
     this._ambient = {
-      // Constant low-bandwidth wind across the meadow. Cutoff slowly drifts
-      // 250 → 900 Hz so gusts feel like real moving air, not a static hiss.
-      wind:    layer({ filterType: 'lowpass',  cutoff: 600,  q: 0.5,  baseGain: 0.0 }),
-      // Pondside lapping — narrow bandpass on the brown noise (~350 Hz)
-      // gives a wet, swishy character without needing a real sample.
-      water:   layer({ filterType: 'bandpass', cutoff: 380,  q: 1.6,  baseGain: 0.0 }),
+      // Wind across the meadow. Bandpass (rather than lowpass) cuts the
+      // sub-bass that made the previous wind layer read as an HVAC hum;
+      // mid-frequency content is what the ear interprets as moving air
+      // rustling through grass. Cutoff drifts via `_windLfoTimer` and
+      // gain gusts via `windGust` LFO computed in updateAmbient — both
+      // together prevent the bed from feeling static.
+      wind:    layer({ filterType: 'bandpass', cutoff: 1100, q: 0.7,  baseGain: 0.0 }),
+      // Pondside lapping — bandpass on the brown noise. Slightly wider
+      // (lower Q) than before so it reads as water swishing rather than
+      // a single tonal whoosh.
+      water:   layer({ filterType: 'bandpass', cutoff: 420,  q: 1.1,  baseGain: 0.0 }),
       // Forest hum — slightly higher cutoff so leaf rustle/insect chorus
       // sits over the wind without competing for the same band.
       forest:  layer({ filterType: 'bandpass', cutoff: 1500, q: 0.9,  baseGain: 0.0 }),
-      // Campfire crackle — high passed brown noise for the bed, with a
-      // separate `_scheduleCrackle` job firing tiny snaps on top.
-      fire:    layer({ filterType: 'highpass', cutoff: 1200, q: 0.4,  baseGain: 0.0 }),
+      // Campfire bed — bandpass at ~900 Hz captures more energy from the
+      // brown noise than a 1200 Hz highpass did (brown noise rolls off at
+      // -6 dB/oct, so above 1200 Hz there's barely anything to filter).
+      // The result is a warmer hum that actually reads as fire even before
+      // `_scheduleCrackle` adds the snaps on top.
+      fire:    layer({ filterType: 'bandpass', cutoff: 900,  q: 0.6,  baseGain: 0.0 }),
     };
 
     // Crackle scheduler. We don't want a setInterval — the audio thread
@@ -593,13 +601,20 @@ export class Sound {
     for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len) * (1 - i / len);
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1500 + Math.random() * 800;
+    // Bandpass at ~750-1300 Hz (rather than the previous 1500-2300 Hz
+    // highpass) keeps the snap warm and woody — high-pass-only crackles
+    // come out as thin spark-tick that doesn't pair with the new
+    // bandpassed campfire bed.
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 750 + Math.random() * 550;
+    bp.Q.value = 0.7;
     const g = ctx.createGain();
-    g.gain.value = (0.18 + Math.random() * 0.18) * fireGain;
-    src.connect(hp).connect(g).connect(this.ambBus);
+    g.gain.value = (0.22 + Math.random() * 0.22) * fireGain;
+    src.connect(bp).connect(g).connect(this.ambBus);
     src.start(t);
     src.stop(t + dur + 0.02);
-    src.onended = () => { try { src.disconnect(); hp.disconnect(); g.disconnect(); } catch { /* */ } };
+    src.onended = () => { try { src.disconnect(); bp.disconnect(); g.disconnect(); } catch { /* */ } };
   }
 
   // Day-time bird chirps + night-time cricket pulses. One scheduler drives
@@ -694,21 +709,38 @@ export class Sound {
     const world = ctx?.world ?? this._world;
 
     // Wind: always present, gusts louder during the day, dies at night.
-    // Trimmed ~33% from the original 0.18 / 0.28 envelope so the gusts
-    // stay audible on quiet maps without crowding combat SFX.
-    a.windTarget = 0.12 + dayWeight * 0.07;
+    // The `gust` factor is a sum of two out-of-phase sines (~5.5s and
+    // ~2s periods) so the bed swells up and down between roughly 0.5×
+    // and 1.5× of the base level. Without it, the ear locks onto the
+    // looping noise buffer within a few seconds and the wind starts
+    // reading as static rather than weather.
+    const slow = Math.sin(t * 0.18 * Math.PI * 2);
+    const fast = Math.sin(t * 0.50 * Math.PI * 2 + 1.3);
+    const windGust = 1 + 0.32 * slow + 0.18 * fast;
+    a.windTarget = (0.10 + dayWeight * 0.06) * windGust;
 
-    // Water: scan a small ring around the player for water cells. The
-    // closer a water cell is, the louder the lap. Caps at ~12m radius.
+    // Water: scan a denser ring around the player for water cells. The
+    // previous 12-probe ring at 4 m / 10 m left a 6-8 m gap that small
+    // ponds could fall entirely inside, so a player standing right next
+    // to the shore could hear nothing. New ring covers 4 m / 6 m / 8 m /
+    // 11 m / 14 m so the closest probe is never further than ~3 m from
+    // any direction the player is facing.
     let waterDist = Infinity;
     if (world && typeof world.isWaterAt === 'function') {
-      // 8 cardinal/diagonal probes at 4m & 10m. Quick + good enough — the
-      // perceptual radius of "I can hear the pond" is much fuzzier than
-      // any geometric one we'd compute.
       const RING = [
+        // 4 m — touch radius
         [4, 0], [-4, 0], [0, 4], [0, -4],
         [3, 3], [-3, 3], [3, -3], [-3, -3],
-        [10, 0], [-10, 0], [0, 10], [0, -10],
+        // 6 m — fills the gap between the inner and outer rings
+        [6, 0], [-6, 0], [0, 6], [0, -6],
+        // 8 m — mid range
+        [8, 0], [-8, 0], [0, 8], [0, -8],
+        [6, 6], [-6, 6], [6, -6], [-6, -6],
+        // 11 m — fade-out approach
+        [11, 0], [-11, 0], [0, 11], [0, -11],
+        // 14 m — outer cap, only contributes if nothing closer hit
+        [14, 0], [-14, 0], [0, 14], [0, -14],
+        [10, 10], [-10, 10], [10, -10], [-10, -10],
       ];
       for (const [dx, dz] of RING) {
         const rx = playerX + dx;
@@ -719,8 +751,8 @@ export class Sound {
         }
       }
     }
-    if (waterDist < 12) {
-      a.waterTarget = clamp01(1 - waterDist / 12) * 0.45;
+    if (waterDist < 14) {
+      a.waterTarget = clamp01(1 - waterDist / 14) * 0.55;
     } else {
       a.waterTarget = 0;
     }
@@ -741,9 +773,42 @@ export class Sound {
     }
     a.forestTarget = clamp01(treeN - 0.25) * 0.7 * (0.5 + dayWeight * 0.5);
 
-    // Campfire: only audible near origin (where world.js plants the ring).
-    const fireDist = Math.hypot(playerX, playerZ);
-    a.fireTarget = fireDist < 14 ? clamp01(1 - fireDist / 14) * 0.55 : 0;
+    // Campfires: aggregate proximity over
+    //   1. The world-spawned starter campfire (positioned by World._buildCampfire,
+    //      typically a few metres off origin — Math.hypot(x, z) was treating
+    //      this as if it were at (0, 0), so the gain peaked when the player
+    //      walked past origin instead of the actual fire pit).
+    //   2. Every player-placed `campfire` structure in `world.placedStructures`.
+    //   3. Every `torch` structure, contributing at TORCH_W weight with a
+    //      tighter TORCH_R falloff so a row of torches lining a path reads
+    //      as a faint flicker without ever drowning out a real campfire.
+    // Score is summed (not maxed) so a cluster of fires/torches reads as a
+    // louder pit than a single one, then clamped at 1 before scaling so the
+    // fire bus can't blow past its own cap.
+    const FIRE_R = 14;
+    const TORCH_R = 5;
+    const TORCH_W = 0.35;
+    let fireScore = 0;
+    if (world?.campfire?.position) {
+      const fx = world.campfire.position.x;
+      const fz = world.campfire.position.z;
+      const d = Math.hypot(playerX - fx, playerZ - fz);
+      if (d < FIRE_R) fireScore += clamp01(1 - d / FIRE_R);
+    }
+    if (world?.placedStructures) {
+      for (const arr of world.placedStructures.values()) {
+        for (const desc of arr) {
+          if (desc.kind === 'campfire') {
+            const d = Math.hypot(playerX - desc.x, playerZ - desc.z);
+            if (d < FIRE_R) fireScore += clamp01(1 - d / FIRE_R);
+          } else if (desc.kind === 'torch') {
+            const d = Math.hypot(playerX - desc.x, playerZ - desc.z);
+            if (d < TORCH_R) fireScore += TORCH_W * clamp01(1 - d / TORCH_R);
+          }
+        }
+      }
+    }
+    a.fireTarget = clamp01(fireScore) * 0.55;
 
     // Day/night chorus.
     // Birds: bumped p(emit) so the meadow actually has a daytime chorus
