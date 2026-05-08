@@ -125,6 +125,40 @@ const ATTACK_INPUT_BUFFER = 0.15;
 // (~0.55s / 0.42s) so it never delays a follow-up tap.
 const SPELL_CAST_DELAY = 0.15;
 
+// -- Per-character charge attack tuning ----------------------------
+// (See CHARACTERS.charSuper in models.js + `_triggerCharSuper` below.)
+//
+// Knight Block_Attack damage soak. Incoming damage is multiplied by
+// this value while the shield-bash swing is mid-animation so the
+// charge attack doubles as a deliberate damage trade.
+const BLOCK_DAMAGE_REDUCTION = 0.5;
+// Stun applied on Block_Attack connect. Long enough to give the
+// knight a free counter window after the bash resolves.
+const BLOCK_STUN_DURATION = 1.2;
+
+// Rogue dash-strike forward speed (m/s) and total dash duration. The
+// stab impact frame and the sweep hitbox both run during the dash so
+// the strike lands in the middle of the lunge — not after the
+// character has stopped moving — matching the user's spec of "dash
+// with strike in the moment of dash".
+const DASH_STRIKE_SPEED = 14;
+const DASH_STRIKE_DURATION = 0.25;
+// Gold stolen per dash-strike hit (range, inclusive). Spawns directly
+// into the rogue's purse + a `+Ng` floating number for feedback.
+const DASH_STRIKE_GOLD_MIN = 3;
+const DASH_STRIKE_GOLD_MAX = 6;
+
+// Mage weapon enchant — charge binds the player's currently-slotted
+// ability element (or 'arcane' if no ability) to the weapon. The next
+// `ENCHANT_HITS` connecting attacks consume one charge each, expiring
+// after `ENCHANT_DURATION` seconds even if unused so the player can't
+// stockpile elemental hits between encounters.
+const ENCHANT_HITS = 3;
+const ENCHANT_DURATION = 6.0;
+// Flat damage bonus applied on every enchanted hit (on top of any
+// element-specific status effect). Multiplicative with crit/affinity.
+const ENCHANT_DAMAGE_BONUS = 1.30;
+
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
     this.index = index;
@@ -208,6 +242,23 @@ export class Player {
     this.dashTimer = 0;
     this.dashCooldown = 0;
     this.knockback = { x: 0, z: 0 };
+
+    // Per-character charge attack state (see CHARACTERS.charSuper in
+    // models.js + `_triggerCharSuper` below for the per-kind handlers).
+    //
+    //  - `_blockReductionT` (Knight) ticks down through the duration of
+    //    a Block_Attack swing; while > 0, `takeDamage` halves incoming
+    //    damage so the shield bash visibly soaks a hit.
+    //  - `_dashStrikeT` (Rogue) ticks down through the lunge; while > 0
+    //    movement is overridden to a forward dash in `_dashStrikeDir`
+    //    and the player gets brief i-frames.
+    //  - `_weaponEnchant` (Mage) holds the active weapon enchant
+    //    `{ element, color, hits, ttl }`. Each connecting attack
+    //    consumes one `hits`; expires when hits <= 0 or ttl <= 0.
+    this._blockReductionT = 0;
+    this._dashStrikeT = 0;
+    this._dashStrikeDir = { x: 0, z: 1 };
+    this._weaponEnchant = null;
     // Revive progress (filled by partner holding dash near a downed body).
     this.reviveProgress = 0;
 
@@ -325,6 +376,15 @@ export class Player {
     }
     let amt = tdCtx.amount;
 
+    // Knight Block_Attack: while the shield-bash swing is mid-animation
+    // halve incoming damage so the charge attack doubles as a
+    // deliberate damage soak. Applies before the shield orb so the
+    // active shield still eats the same fraction of the reduced hit.
+    if (this._blockReductionT > 0) {
+      amt *= BLOCK_DAMAGE_REDUCTION;
+      this.effects.flashSphere(this.pos.x, 1.0, this.pos.z, 0xffe066, 1.0, 0.18);
+    }
+
     // Active shield orb absorbs damage before HP is touched.
     if (this._shield && this._shield.hp > 0) {
       const absorbed = Math.min(this._shield.hp, amt);
@@ -368,6 +428,13 @@ export class Player {
   die() {
     this.alive = false;
     this.invuln = 999;
+    // Cancel any in-flight charge-attack state so a post-revive frame
+    // doesn't accidentally re-enter mid-dash, mid-block or with a
+    // half-consumed enchant.
+    this._blockReductionT = 0;
+    this._dashStrikeT = 0;
+    this._weaponEnchant = null;
+    this._pendingRangedShot = null;
     // Player death keeps the longest of the hit-stops, but trimmed
     // hard from the older 0.12s — anything noticeably longer feels
     // like the game stuttered rather than punctuated the death.
@@ -459,6 +526,21 @@ export class Player {
     this.abilityCd = Math.max(0, this.abilityCd - dt);
     if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
 
+    // Per-character charge attack timers (see constructor for the
+    // `_blockReductionT` / `_dashStrikeT` / `_weaponEnchant` contracts).
+    if (this._blockReductionT > 0) {
+      this._blockReductionT = Math.max(0, this._blockReductionT - dt);
+    }
+    if (this._dashStrikeT > 0) {
+      this._dashStrikeT = Math.max(0, this._dashStrikeT - dt);
+    }
+    if (this._weaponEnchant) {
+      this._weaponEnchant.ttl -= dt;
+      if (this._weaponEnchant.ttl <= 0 || this._weaponEnchant.hits <= 0) {
+        this._weaponEnchant = null;
+      }
+    }
+
     // Tick the deferred staff/wand spell. The bolt was scheduled in
     // `_triggerRangedAttack`; we hold it for ~0.2s so the cast
     // animation reads before the projectile appears, then fire it.
@@ -469,8 +551,9 @@ export class Player {
       }
     }
 
-    // Dash trigger
-    if (intent.dash && this.dashCooldown <= 0) {
+    // Dash trigger — suppressed during a Rogue dash-strike so the
+    // player can't stack a regular dash on top of the charge lunge.
+    if (intent.dash && this.dashCooldown <= 0 && this._dashStrikeT <= 0) {
       // dash in current move direction or facing
       let dx = intent.moveX, dz = intent.moveZ;
       if (Math.hypot(dx, dz) < 0.1) { dx = this.facing.x; dz = this.facing.z; }
@@ -501,6 +584,18 @@ export class Player {
     const wp = this.weaponProfile;
     const wpHasRanged = !!wp.rangedAttack;
     const wpHasSuper = !!wp.superAttack;
+    // Per-character charge attack override. When set, this kind
+    // replaces (or augments) the weapon's default charge:
+    //  - 'shieldBash' (Knight 1H+shield): hold past threshold triggers
+    //    a stunning shield bash with 50% damage soak during the swing.
+    //  - 'dualSlice'  (Barbarian 1H axe + permanent off-hand axe):
+    //    hold past threshold triggers a Dualwield_Slice double-strike.
+    //  - 'dashStrike' (Rogue knife): hold past threshold lunges
+    //    forward with a stab during the dash, force-crit + gold steal.
+    //  - 'enchant'    (Mage staff/wand): hold past threshold replaces
+    //    the melee fallback with a Spellcast_Raise that binds the
+    //    player's ability element to their next 3 attacks.
+    const charSuperKind = this._character?.def?.charSuper?.[this._weaponKind]?.kind || null;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
@@ -535,16 +630,22 @@ export class Player {
           this._chargeFired = false;
         } else {
           this._chargeTime += dt;
-          // Auto-fire the melee swing the moment the hold crosses the
+          // Auto-fire the held action the moment the hold crosses the
           // threshold so the player doesn't have to release to trigger
-          // it — same UX feel as the sword_2h spin super.
+          // it — same UX feel as the sword_2h spin super. For the Mage
+          // (charSuperKind == 'enchant') the held action is the weapon
+          // enchant; for everyone else it's the weapon's melee fallback.
           if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            this._triggerAttack(false);
+            if (charSuperKind === 'enchant') {
+              this._triggerCharSuper('enchant');
+            } else {
+              this._triggerAttack(false);
+            }
             this._chargeFired = true;
           }
         }
       } else if (wasHeld) {
-        // Release edge. If the melee swing already auto-fired, do
+        // Release edge. If the held action already auto-fired, do
         // nothing — we already swung. Otherwise this was a short tap;
         // fire the spell bolt now if cd is open, else stash it in the
         // input buffer so it auto-fires when cd opens.
@@ -591,6 +692,37 @@ export class Player {
         this._chargeTime = 0;
         this._chargeFired = false;
       }
+    } else if (charSuperKind) {
+      // Per-character charge: weapon has no ranged or generic super
+      // profile, but the character class adds a charge attack on this
+      // weapon (Knight shield bash on sword_1h, Barbarian dual-slice
+      // on axe_1h, Rogue dash-strike on sword_1h). Press-and-hold
+      // pattern same as wpHasSuper — release before threshold = the
+      // weapon's tap slice, hold past threshold = char-specific
+      // charge.
+      if (isHeld) {
+        if (!wasHeld) {
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
+            this._triggerCharSuper(charSuperKind);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerAttack(false);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'tap';
+          }
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
+      }
     } else if (intent.attack) {
       // Weapons without a charge attack — instant tap on press if cd
       // is open, otherwise buffer the press for ATTACK_INPUT_BUFFER
@@ -623,6 +755,15 @@ export class Player {
 
     // Apply movement intent (kinematic)
     const m = { x: intent.moveX, z: intent.moveZ };
+    // Rogue dash-strike overrides the player's movement intent for the
+    // duration of the lunge: speed and direction are locked to the
+    // values captured at trigger time so the player can't redirect
+    // mid-stab and the lunge feels committed.
+    if (this._dashStrikeT > 0) {
+      m.x = this._dashStrikeDir.x;
+      m.z = this._dashStrikeDir.z;
+      speed = DASH_STRIKE_SPEED;
+    }
     if (Math.abs(m.x) > 0.01 || Math.abs(m.z) > 0.01) {
       this.facing.x = m.x; this.facing.z = m.z;
       const fl = Math.hypot(this.facing.x, this.facing.z);
@@ -843,6 +984,185 @@ export class Player {
     }
   }
 
+  // Per-character charge attack handlers ---------------------------
+  //
+  // Each kind sets up `_activeSwing` (so the existing swing pipeline
+  // reads damageMult, range, arc, slash, etc.) and starts the matching
+  // animation. Per-kind side effects — the Knight's damage soak, the
+  // Rogue's lunge, the Mage's enchant binding — are kicked off here
+  // too. `_activeSwing.charKind` is the tag that Game._onPlayerHitsEnemy
+  // reads to apply post-damage effects (stun / gold steal / forced
+  // crit) from a single hook so this code stays focused on the
+  // animation + state setup.
+  _triggerCharSuper(kind) {
+    if (kind === 'shieldBash') return this._triggerShieldBash();
+    if (kind === 'dualSlice')  return this._triggerDualSlice();
+    if (kind === 'dashStrike') return this._triggerDashStrike();
+    if (kind === 'enchant')    return this._triggerEnchant();
+  }
+
+  // Common swing setup — mirrors `_triggerAttack` but driven by an
+  // explicit spec instead of the weapon profile's tap/super entries,
+  // so per-character charge attacks can pick clip + reach + damage
+  // independently of the weapon's stock numbers.
+  _startSwingFromSpec(spec) {
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const swingMult = Math.max(SWING_SCALE_MIN, attackCdMult);
+    const swing = (spec.swing ?? 0.6) * swingMult;
+    this.attackTimer = (spec.cooldown ?? 0.8) * attackCdMult;
+    this.attackAnim = 0;
+    this.swingActive = true;
+    this._swingHitSet.clear();
+    this._swingShookCam = false;
+    this.swingFxFired = false;
+    this._activeSwing = {
+      swing,
+      impactAt:   spec.impactAt   ?? 0.5,
+      range:      spec.range      ?? 2.0,
+      arc:        spec.arc        ?? Math.PI * 0.6,
+      slash:      spec.slash      ?? null,
+      damageMult: spec.damageMult ?? 1.0,
+      isSuper:    !!spec.isSuper,
+      animKey:    spec.animKey,
+      ringColor:  spec.ringColor  ?? null,
+      // Charge-attack tags consumed by Game._onPlayerHitsEnemy.
+      charKind:      spec.charKind   ?? null,
+      stunDuration:  spec.stunDuration ?? 0,
+      forceCrit:     !!spec.forceCrit,
+      goldStealMin:  spec.goldStealMin ?? 0,
+      goldStealMax:  spec.goldStealMax ?? 0,
+    };
+    const action = this._character?.actions?.[spec.animKey];
+    if (action) {
+      action.reset();
+      const srcDur = Math.max(action.getClip().duration, 0.05);
+      action.timeScale = srcDur / Math.max(swing, 0.1);
+      action.setEffectiveWeight(10.0);
+      action.fadeIn(0.05).play();
+    }
+    return swing;
+  }
+
+  _triggerShieldBash() {
+    const swing = this._startSwingFromSpec({
+      swing: 0.65,
+      impactAt: 0.55,
+      range: 2.4,
+      arc: Math.PI * 0.55,
+      slash: { color: 0xffe066, height: 1.05 },
+      damageMult: 1.4,
+      cooldown: 1.0,
+      animKey: 'attack_block',
+      ringColor: 0xffe066,
+      isSuper: true,
+      charKind: 'shieldBash',
+      stunDuration: BLOCK_STUN_DURATION,
+    });
+    // Damage soak active for the entire swing animation — the knight
+    // visibly tanks 50% of any incoming hit during the bash. A small
+    // tail past the animation prevents off-by-one frames where the
+    // anim has clamped but the soak "feels" still on.
+    this._blockReductionT = swing + 0.05;
+    this.effects?.flashSphere?.(this.pos.x, 1.0, this.pos.z, 0xffe066, 0.7, 0.20);
+    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, 0xffe066, 1.6, 0.30);
+    this.sound?.tone?.({ freq: 320, type: 'square', dur: 0.20, gain: 0.30 });
+  }
+
+  _triggerDualSlice() {
+    this._startSwingFromSpec({
+      swing: 0.85,
+      impactAt: 0.55,
+      range: 2.5,
+      arc: Math.PI * 0.85,
+      slash: { color: 0xffae6a, height: 1.05 },
+      damageMult: 1.8,
+      cooldown: 0.95,
+      animKey: 'attack_dual_slice',
+      ringColor: 0xffae6a,
+      isSuper: true,
+      charKind: 'dualSlice',
+    });
+    this.effects?.burst?.(this.pos.x, 0.5, this.pos.z, 0xffae6a, 6, 4, 0.22);
+  }
+
+  _triggerDashStrike() {
+    // Lock dash direction to the current facing — the strike commits
+    // to the angle at trigger time, so the player can't redirect
+    // mid-stab. Brief i-frames cover the lunge so the rogue can
+    // pierce a ranged shot they see coming.
+    this._dashStrikeDir.x = this.facing.x;
+    this._dashStrikeDir.z = this.facing.z;
+    this._dashStrikeT = DASH_STRIKE_DURATION;
+    this.invuln = Math.max(this.invuln, DASH_STRIKE_DURATION + 0.05);
+    this._startSwingFromSpec({
+      // Swing duration matches the dash + a short followthrough so the
+      // stab visually lands during the lunge ("strike in the moment of
+      // dash") rather than after the rogue stops moving.
+      swing: 0.40,
+      impactAt: 0.65,
+      range: 1.9,
+      arc: Math.PI * 1.4,
+      slash: { color: 0x9adfff, height: 0.8 },
+      damageMult: 1.6,
+      cooldown: 0.85,
+      animKey: 'dodge_forward',
+      ringColor: 0x9adfff,
+      isSuper: true,
+      charKind: 'dashStrike',
+      forceCrit: true,
+      goldStealMin: DASH_STRIKE_GOLD_MIN,
+      goldStealMax: DASH_STRIKE_GOLD_MAX,
+    });
+    this.sound?.dash?.();
+    this.effects?.burst?.(this.pos.x, 0.6, this.pos.z, 0xffffff, 8, 5, 0.25);
+  }
+
+  _triggerEnchant() {
+    // Resolve element from the player's currently-slotted ability —
+    // if none, fall back to a neutral 'arcane' colour so the cast
+    // still feels distinct from a plain bolt.
+    const ability = this.ability ? ABILITY_BY_ID[this.ability] : null;
+    const element = ability?.element || 'arcane';
+    const colors = {
+      fire:      0xff8a30,
+      ice:       0x9dfcff,
+      lightning: 0xfff7a0,
+      heal:      0x7aff8a,
+      arcane:    0xc9a3ff,
+    };
+    const color = colors[element] || colors.arcane;
+    this._weaponEnchant = {
+      element,
+      color,
+      hits: ENCHANT_HITS,
+      ttl:  ENCHANT_DURATION,
+      // Flat damage bonus applied per enchanted hit on top of any
+      // element-specific status effect. Read by game.js's
+      // _onPlayerHitsEnemy so the multiplier lives on the enchant
+      // state instead of being hardcoded into the hit pipeline.
+      damageMult: ENCHANT_DAMAGE_BONUS,
+    };
+    // Cast animation only — no damage swing. Cooldown is short so the
+    // cast doesn't stall the player out of combat for a beat after
+    // committing to charge; the empowered shots are the payoff.
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    this.attackTimer = 0.45 * attackCdMult;
+    const animKey = 'attack_spell_raise';
+    const action = this._character?.actions?.[animKey];
+    if (action) {
+      action.reset();
+      const srcDur = Math.max(action.getClip().duration, 0.05);
+      action.timeScale = srcDur / Math.max(0.55 * attackCdMult, 0.1);
+      action.setEffectiveWeight(10.0);
+      action.fadeIn(0.05).play();
+    }
+    // Visual: ring + flash in the bound element's colour, plus a
+    // higher cast tone so the ear distinguishes enchant from bolt.
+    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, color, 1.4, 0.40);
+    this.effects?.flashSphere?.(this.pos.x, 1.1, this.pos.z, color, 1.2, 0.25);
+    this.sound?.tone?.({ freq: 720, type: 'sine', dur: 0.35, gain: 0.28, slide: 220 });
+  }
+
   // Begin the staff/wand tap-spell. Plays the cast animation + SFX
   // immediately and *defers* the actual projectile spawn by
   // SPELL_CAST_DELAY seconds (see below), so the bolt visibly leaves
@@ -895,8 +1215,11 @@ export class Player {
 
     // Cape colour is set per-player when the character is built; fall
     // back to the player's body tint and finally to a neutral spell
-    // blue so we never spawn a black projectile.
-    const color = this._capeColorHex ?? this._colorHex ?? 0x9adfff;
+    // blue so we never spawn a black projectile. Mage's weapon enchant
+    // overrides the bolt colour to its bound element so the player
+    // gets clear visual feedback that their next bolts are charged.
+    const baseColor = this._capeColorHex ?? this._colorHex ?? 0x9adfff;
+    const color = this._weaponEnchant ? this._weaponEnchant.color : baseColor;
 
     // Cast animation — short forward jab/cast clip, scaled to the
     // ranged profile's `swing` so the spell gesture is visibly
