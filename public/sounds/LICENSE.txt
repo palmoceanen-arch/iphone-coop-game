@@ -1,0 +1,67 @@
+Bundled audio assets — all under Creative Commons Zero (CC0 1.0 Universal)
+=========================================================================
+
+Every `.ogg` file in this folder is released into the public domain
+under CC0 — free to use in personal and commercial projects with no
+attribution required, though credit is always appreciated.
+
+Sources:
+
+  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio
+  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds
+  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/
+  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx
+  rubberduck — 40 water sfx https://opengameart.org/content/40-cc0-water-splash-slime-sfx
+  rubberduck — 30 SFX loops https://opengameart.org/content/30-cc0-sfx-loops
+  ambient_fire.ogg — supplied by the project owner under the same
+                     CC0 terms as the rest of the bundle.
+
+Licence: Creative Commons Zero, CC0
+         http://creativecommons.org/publicdomain/zero/1.0/
+
+File mapping
+------------
+swing_whoosh_a.ogg    <- freesound.org/s/59992 (Swosh Sword Swing)        (qubodup)
+swing_whoosh_b.ogg    <- freesound.org/s/59988 (Swosh / Whoosh / Air Cut) (qubodup)
+swing_whoosh_c.ogg    <- freesound.org/s/59995 (swosh-08, stick cuts air) (qubodup)
+swing_whoosh_d.ogg    <- freesound.org/s/60023 (sharp swosh)              (qubodup)
+hit_flesh_a/b/c.ogg   <- impactPunch_medium_000..002       (Kenney Impact)
+hit_heavy_a/b.ogg     <- impactPunch_heavy_000..001        (Kenney Impact)
+hit_wood_a/b/c.ogg    <- impactPlank_medium_000 / 002 / 004 (Kenney Impact)
+hit_stone_a/b/c.ogg   <- impactMining_000 / 002 / 004      (Kenney Impact)
+hurt_armor_a/b.ogg    <- impactPlate_light_000 / 002       (Kenney Impact)
+enemy_die_a/b.ogg     <- impactGeneric_light_000 / 002     (Kenney Impact)
+wood_break_a/b/c.ogg  <- impactWood_heavy_000 / 002 / 004  (Kenney Impact)
+pot_break_a/b.ogg     <- impactGlass_medium_000 / 002      (Kenney Impact)
+coin_a/b.ogg          <- handleCoins / handleCoins2        (Kenney RPG)
+tree_creak_a/b.ogg    <- creak1 / creak2                   (Kenney RPG)
+enemy_voice_a.ogg     <- cute_02      (rubberduck, 80 CC0 creature SFX)
+enemy_voice_b.ogg     <- cute_07      (rubberduck, 80 CC0 creature SFX)
+enemy_voice_c.ogg     <- grunt_02     (rubberduck, 80 CC0 creature SFX)
+enemy_voice_d.ogg     <- hurt_03      (rubberduck, 80 CC0 creature SFX)
+ambient_wind.ogg      <- ambient_03    (rubberduck, 30 CC0 SFX loops)
+ambient_water.ogg     <- loop_water_02 (rubberduck, 40 CC0 water/splash SFX)
+ambient_fire.ogg      <- supplied by the project owner; re-encoded from
+                         the original 20 s stereo MP3 to mono 44.1 kHz
+                         OGG Vorbis q=4 to match the rest of the bundle.
+
+The four enemy_voice_*.ogg files were normalised to roughly -18 LUFS
+peak so they sit ~6 dB under the hit_flesh impact (which leads on the
+combat-hit voice mix in src/sound.js). Source clips were re-encoded to
+mono, 44.1 kHz OGG Vorbis q=4 to match the rest of the bundle.
+
+The qubodup whoosh files were re-encoded from their original CC0
+preview MP3s on freesound.org to OGG Vorbis (mono, q=4, 44.1 kHz) so
+they match the rest of the bundle's encoding.
+
+Ambient nature layers split into sample-based and procedural:
+  wind / water / fire   — the three `ambient_*.ogg` files above, played
+                          as looping AudioBufferSourceNodes (see
+                          src/sound.js:_buildAmbient).
+  forest / birds /      — generated procedurally in src/sound.js from
+  crickets                shaped noise + scheduled chirps. No looping
+                          recording reads as a generic windless
+                          leaf-rustle hum or a sparse meadow chorus
+                          without locking the soundscape to a specific
+                          real-world location.
+
