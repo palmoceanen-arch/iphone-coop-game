@@ -105,6 +105,18 @@ const CHARGE_THRESHOLD_MIN = 0.10;
 // even when the swing animation has hit this floor.
 const SWING_SCALE_MIN = 0.60;
 
+// Input buffer window for tap attacks. A tap that lands while the
+// player's attack is still on cooldown is queued for this many
+// seconds; if the cooldown expires before the timer runs out, the
+// queued tap auto-fires on the next frame. This is what makes
+// spamming feel responsive in normal action games (Hades, Dark
+// Souls, character-action) — the player doesn't have to wait for
+// "click is ready" feedback, they can press a few frames early and
+// the input is honoured. 0.15s matches what most tap-friendly
+// games converge on; longer feels rubbery, shorter feels like the
+// buffer doesn't help at all.
+const ATTACK_INPUT_BUFFER = 0.15;
+
 // Wind-up time for the staff/wand tap-spell. The cast animation and
 // SFX play immediately on press, but the actual projectile is held
 // for this long so the bolt visibly leaves the weapon mid-cast
@@ -179,6 +191,19 @@ export class Player {
     this._chargeTime = 0;
     this._chargeFired = false;
     this._wasAttackHeld = false;
+    // Tap-input buffer. When a tap lands during attackTimer cooldown
+    // we don't drop it on the floor — it's stashed here for up to
+    // ATTACK_INPUT_BUFFER seconds and auto-fired the moment the
+    // cooldown expires. `kind` decides which trigger to call:
+    //   - 'tap'        -> _triggerAttack(false) (basic + sword_2h/axe_2h
+    //                     normal slice on release)
+    //   - 'rangedTap'  -> _triggerRangedAttack(combatCtx) (staff/wand
+    //                     spell on release)
+    // Cleared on death. Charge auto-fire (heavy on threshold cross)
+    // doesn't go through the buffer — it polls `attackTimer` every
+    // hold-frame so it already self-corrects when cd opens.
+    this._attackBuffered = 0;
+    this._attackBufferKind = null;
     this.invuln = 0; // i-frames
     this.dashTimer = 0;
     this.dashCooldown = 0;
@@ -379,6 +404,9 @@ export class Player {
       // Cancel any spell that was mid-wind-up — dying mid-cast must
       // not fire the bolt 0.2s later when the player can't react.
       this._pendingRangedShot = null;
+      // Drop any buffered tap so it doesn't auto-fire when revived.
+      this._attackBuffered = 0;
+      this._attackBufferKind = null;
       // Keep mesh visible to show death pose; just freeze physics & animation.
       this._character?.mixer?.update(dt);
       return;
@@ -488,6 +516,15 @@ export class Player {
     const chargeMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
     const chargeThreshold = Math.max(CHARGE_THRESHOLD_MIN, CHARGE_THRESHOLD_BASE * chargeMult);
 
+    // Decay the tap-input buffer set on the previous frame. Done here
+    // (after attackTimer ticks but before this frame's input branches)
+    // so a tap pressed `dt` ago has a chance to convert to a fire on
+    // this frame's drain step below.
+    if (this._attackBuffered > 0) {
+      this._attackBuffered = Math.max(0, this._attackBuffered - dt);
+      if (this._attackBuffered <= 0) this._attackBufferKind = null;
+    }
+
     if (wpHasRanged) {
       if (isHeld) {
         if (!wasHeld) {
@@ -508,10 +545,16 @@ export class Player {
         }
       } else if (wasHeld) {
         // Release edge. If the melee swing already auto-fired, do
-        // nothing — we already swung. Otherwise this was a short tap,
-        // fire the spell bolt (deferred from the press edge).
-        if (!this._chargeFired && this.attackTimer <= 0) {
-          this._triggerRangedAttack(combatCtx);
+        // nothing — we already swung. Otherwise this was a short tap;
+        // fire the spell bolt now if cd is open, else stash it in the
+        // input buffer so it auto-fires when cd opens.
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerRangedAttack(combatCtx);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'rangedTap';
+          }
         }
         this._chargeTime = 0;
         this._chargeFired = false;
@@ -534,17 +577,48 @@ export class Player {
         }
       } else if (wasHeld) {
         // Release edge. If the super already auto-fired, do nothing —
-        // we already swung. Otherwise this was a short tap, fire the
-        // normal slice (deferred from the press edge).
-        if (!this._chargeFired && this.attackTimer <= 0) {
-          this._triggerAttack(false);
+        // we already swung. Otherwise this was a short tap; fire the
+        // normal slice now if cd is open, else stash it in the input
+        // buffer so it auto-fires when cd opens.
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerAttack(false);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'tap';
+          }
         }
         this._chargeTime = 0;
         this._chargeFired = false;
       }
-    } else if (intent.attack && this.attackTimer <= 0) {
-      // Weapons without a charge attack — instant tap.
-      this._triggerAttack(false);
+    } else if (intent.attack) {
+      // Weapons without a charge attack — instant tap on press if cd
+      // is open, otherwise buffer the press for ATTACK_INPUT_BUFFER
+      // seconds. This is what makes spamming feel responsive: the
+      // player doesn't have to time the click to the exact frame the
+      // cooldown ends, presses landing a few frames early still
+      // count.
+      if (this.attackTimer <= 0) {
+        this._triggerAttack(false);
+      } else {
+        this._attackBuffered = ATTACK_INPUT_BUFFER;
+        this._attackBufferKind = 'tap';
+      }
+    }
+
+    // Drain the buffered tap if the cooldown is now open. Runs after
+    // the input branches so a fresh same-frame press has fired first
+    // (and would have cleared the buffer along the way). The "fresh
+    // press wins" ordering means the buffer never auto-fires on top
+    // of a brand-new press.
+    if (this._attackBuffered > 0 && this.attackTimer <= 0) {
+      if (this._attackBufferKind === 'rangedTap') {
+        this._triggerRangedAttack(combatCtx);
+      } else {
+        this._triggerAttack(false);
+      }
+      this._attackBuffered = 0;
+      this._attackBufferKind = null;
     }
 
     // Apply movement intent (kinematic)
