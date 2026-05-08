@@ -229,7 +229,7 @@ export class AbilityProjectile {
 
 export const ABILITIES = [
   {
-    id: 'fireball', name: 'Фаербол', icon: 'flame', color: 0xff8a30, cd: 6,
+    id: 'fireball', name: 'Фаербол', icon: 'flame', color: 0xff8a30, cd: 12,
     element: 'fire',
     desc: 'Огненный снаряд, летящий вперёд. Взрывается при попадании, 45 AoE-урона в 2.5м.',
     cast(player, ctx) {
@@ -246,7 +246,7 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'icebolt', name: 'Ледяная стрела', icon: 'snowflake', color: 0x9dfcff, cd: 5,
+    id: 'icebolt', name: 'Ледяная стрела', icon: 'snowflake', color: 0x9dfcff, cd: 10,
     element: 'ice',
     desc: 'Ледяной снаряд в ближайшего врага. 30 урона и заморозка на 2с в радиусе 2.5м.',
     cast(player, ctx) {
@@ -369,7 +369,12 @@ export const ABILITIES = [
   },
   {
     id: 'slowtime', name: 'Замедление времени', icon: 'clock', color: 0xc9a3ff, cd: 14,
-    element: 'ice',
+    // 'timeslow' is its own enchant element so a Mage binding this
+    // ability slows enemies on every hit (without freezing them).
+    // The ability cast itself uses `_slow` directly; the enchant
+    // mirrors the same effect on weapon hits via the on-hit handler
+    // in game.js _applyWeaponEnchantEffect.
+    element: 'timeslow',
     desc: 'Замедляет всех врагов в 6м до ×0.35 на 3с.',
     cast(player, ctx) {
       const slowDur = 3.0 + freezeDurationBonus(player);
@@ -384,38 +389,25 @@ export const ABILITIES = [
     },
   },
   {
-    id: 'windpush', name: 'Ветер удар', icon: 'wind', color: 0xa0e8ff, cd: 8,
-    element: 'lightning',
+    id: 'windpush', name: 'Ветер удар', icon: 'wind', color: 0xffffff, cd: 8,
+    // 'wind' enchant element (white) — hits push enemies harder via
+    // an extra knockback impulse on top of the weapon's normal kb.
+    // Damage stays the same as a regular swing; the wind read is
+    // pure displacement.
+    element: 'wind',
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
-      const lightMult = elementDamageMult(player, 'lightning');
-      // Wind push damages and knocks back real enemies only — auto-firing
-      // it next to your own fortress shouldn't dent your walls.
+      // Wind push has no element-tied damage scaling — it's a raw
+      // displacement spell, so the cast damage is flat.
       const list = enemiesInRadius(player, livingEnemiesFromCtx(ctx), 4);
       for (const { e } of list) {
-        e.takeDamage(20 * lightMult, player.pos.x, player.pos.z, 14);
+        e.takeDamage(20, player.pos.x, player.pos.z, 14);
         if (!e.alive) e._deathCredit = player;
       }
-      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xa0e8ff, 4, 0.35);
-      ctx.effects.flashSphere(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 2.5, 0.2);
-      ctx.effects.burst(player.pos.x, 0.6, player.pos.z, 0xa0e8ff, 10, 5, 0.3);
+      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xffffff, 4, 0.35);
+      ctx.effects.flashSphere(player.pos.x, 0.6, player.pos.z, 0xffffff, 2.5, 0.2);
+      ctx.effects.burst(player.pos.x, 0.6, player.pos.z, 0xffffff, 10, 5, 0.3);
       ctx.sound.tone?.({ freq: 200, type: 'sawtooth', dur: 0.35, gain: 0.3, slide: 150 });
-    },
-  },
-  {
-    id: 'berserk', name: 'Берсерк', icon: 'skull', color: 0xff5050, cd: 14,
-    element: 'fire',
-    desc: 'Урон ×1.4 и атака ×1.3 быстрее на 5с.',
-    cast(player, ctx) {
-      // Pyromancer scales the bonus damage portion of berserk (the "+0.4"
-      // over 1.0): at higher tiers the buff hits harder. The base attack
-      // speed bonus is unchanged so the tempo stays the same.
-      const fireMult = elementDamageMult(player, 'fire');
-      const dmgBonus = 0.4 * fireMult;
-      player._berserk = { ttl: 5, dmg: 1.0 + dmgBonus, atk: 1.3 };
-      ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xff5050, 1.6, 0.4);
-      ctx.effects.burst(player.pos.x, 0.8, player.pos.z, 0xff5050, 10, 4, 0.3);
-      ctx.sound.tone?.({ freq: 140, type: 'sawtooth', dur: 0.4, gain: 0.4 });
     },
   },
 ];

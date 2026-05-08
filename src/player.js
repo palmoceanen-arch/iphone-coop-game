@@ -149,15 +149,21 @@ const DASH_STRIKE_GOLD_MIN = 3;
 const DASH_STRIKE_GOLD_MAX = 6;
 
 // Mage weapon enchant — charge binds the player's currently-slotted
-// ability element (or 'arcane' if no ability) to the weapon. The next
-// `ENCHANT_HITS` connecting attacks consume one charge each, expiring
-// after `ENCHANT_DURATION` seconds even if unused so the player can't
-// stockpile elemental hits between encounters.
-const ENCHANT_HITS = 3;
-const ENCHANT_DURATION = 6.0;
+// ability element to the weapon. Every connecting attack during the
+// `ENCHANT_DURATION` window applies the bound element's effect and
+// the flat `ENCHANT_DAMAGE_BONUS`; the enchant doesn't get consumed
+// per-hit, it just runs out on the timer ("works for 5 seconds").
+// Binding requires that the Mage's ability is *not* on cooldown; the
+// bind also puts the ability on cooldown, so the player trades one
+// cast of their ability for one enchant window.
+const ENCHANT_DURATION = 5.0;
 // Flat damage bonus applied on every enchanted hit (on top of any
 // element-specific status effect). Multiplicative with crit/affinity.
 const ENCHANT_DAMAGE_BONUS = 1.30;
+// Mage's identity: their ability cooldowns are halved relative to the
+// other characters, since the enchant charge spends an ability cd
+// every time it binds. Other characters keep `abilityCdMult = 1.0`.
+const MAGE_ABILITY_CD_MULT = 0.5;
 
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
@@ -200,7 +206,20 @@ export class Player {
       hpRegen: 0.4, // hp/sec
       goldFind: 1.0,
       attackSpeedMult: 1.0,   // < 1 = faster
+      // Multiplier on every ability cooldown. < 1 = faster ability
+      // cycle. Mage gets MAGE_ABILITY_CD_MULT (0.5); see character
+      // override block below. Read by `tryCastAbility`,
+      // `_triggerEnchant` (which puts the ability on cd to bind the
+      // enchant) and the ability HUD (so the cooldown ring scales
+      // to the player's effective cd, not the ability's base cd).
+      abilityCdMult: 1.0,
     };
+    // Per-character stat overrides. Kept here so a single line of
+    // truth maps id→tweaks rather than scattering `if char id ===`
+    // checks across the file.
+    if (this._characterId === 'mage') {
+      this.stats.abilityCdMult = MAGE_ABILITY_CD_MULT;
+    }
     this.upgradeLevels = { damage: 0, hp: 0, speed: 0, attackSpeed: 0 };
 
     this.attackTimer = 0;
@@ -342,6 +361,15 @@ export class Player {
   setWeapon(weaponKind) {
     const profile = WEAPONS[weaponKind];
     if (!profile) return;
+    // If a Mage enchant VFX is currently painted onto the old
+    // attachment / extras, tear it down before they're detached. The
+    // material clones we swapped in are about to lose their last live
+    // reference; restoring puts the originals back and disposes the
+    // clones so the next attachment (loaded fresh by setEquippedWeapon)
+    // starts from a clean baseline. The enchant *state* is preserved on
+    // `_weaponEnchant`, so the update tick will re-apply the VFX onto
+    // the new attachment as soon as it's in place.
+    if (this._enchantVfx) this._restoreEnchantVfx();
     this._weaponKind = weaponKind;
     this.weaponProfile = profile;
     this._attackActionKey = profile.attackAnim;
@@ -380,9 +408,11 @@ export class Player {
     // halve incoming damage so the charge attack doubles as a
     // deliberate damage soak. Applies before the shield orb so the
     // active shield still eats the same fraction of the reduced hit.
+    // The on-hit yellow shimmer that used to play here was removed
+    // along with the rest of the "blocking" audiovisual cues — the
+    // soak is now silent gameplay-only state, not a visual mode.
     if (this._blockReductionT > 0) {
       amt *= BLOCK_DAMAGE_REDUCTION;
-      this.effects.flashSphere(this.pos.x, 1.0, this.pos.z, 0xffe066, 1.0, 0.18);
     }
 
     // Active shield orb absorbs damage before HP is touched.
@@ -536,9 +566,22 @@ export class Player {
     }
     if (this._weaponEnchant) {
       this._weaponEnchant.ttl -= dt;
-      if (this._weaponEnchant.ttl <= 0 || this._weaponEnchant.hits <= 0) {
+      if (this._weaponEnchant.ttl <= 0) {
         this._weaponEnchant = null;
       }
+    }
+    // Mage enchant VFX sync — keeps the painted weapon (tinted +
+    // 4× scale) in lockstep with the `_weaponEnchant` state. The
+    // state can clear from any of three places (TTL expiry above,
+    // `die()`, or game.js when `hits` drops to 0 on a connecting
+    // hit), so handling the transition here in the tick keeps every
+    // call site free of bookkeeping. Apply transitions whenever the
+    // attachment is present — if the weapon was just swapped, the
+    // new attachment may not have loaded yet; we re-check next frame.
+    if (this._weaponEnchant && !this._enchantVfx) {
+      this._applyEnchantVfx();
+    } else if (!this._weaponEnchant && this._enchantVfx) {
+      this._restoreEnchantVfx();
     }
 
     // Tick the deferred staff/wand spell. The bolt was scheduled in
@@ -567,35 +610,41 @@ export class Player {
       runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
-    // Attack trigger — three button-handling modes, picked by the weapon
-    // profile:
+    // Attack trigger — four button-handling modes, picked in priority
+    // order by what the weapon + character offer:
     //
     //   1. Weapons with a `rangedAttack` profile (staff, wand): tap fires
     //      the homing spell bolt; hold past `CHARGE_THRESHOLD` falls
-    //      through to the melee swing the weapon profile defines. Tap
-    //      and hold are decided on release vs hold-time, mirroring the
-    //      sword_2h super flow but with the meanings swapped (here the
-    //      *tap* is the spell, the *hold* is the heavy hit).
-    //   2. Weapons with a `superAttack` profile (greatsword, battle axe):
+    //      through to the weapon's melee strong-attack fallback. Mage
+    //      keeps this branch for caster weapons — his enchant bind only
+    //      kicks in when he's wielding a melee weapon (case 2).
+    //   2. Per-character charge override (`charSuper`): the character's
+    //      class adds a charge attack on this weapon kind (Knight shield
+    //      bash, Barbarian dual-slice spin, Rogue dash-strike, Mage
+    //      weapon enchant on swords/axes). Takes priority over the
+    //      weapon profile's generic `superAttack` so e.g. a Mage holding
+    //      a 2H sword binds an enchant instead of swinging the spin.
+    //   3. Weapons with a `superAttack` profile (greatsword, battle axe):
     //      tap fires the normal slice on release, hold past threshold
-    //      fires the spin super. Same charge bookkeeping as case 1.
-    //   3. Everything else (sword, axe, …): instant tap-to-swing on the
+    //      fires the spin super.
+    //   4. Everything else (sword, axe, …): instant tap-to-swing on the
     //      press edge so basic combat stays snappy.
     const wp = this.weaponProfile;
     const wpHasRanged = !!wp.rangedAttack;
     const wpHasSuper = !!wp.superAttack;
     // Per-character charge attack override. When set, this kind
-    // replaces (or augments) the weapon's default charge:
+    // replaces the weapon's default charge:
     //  - 'shieldBash' (Knight 1H+shield): hold past threshold triggers
     //    a stunning shield bash with 50% damage soak during the swing.
-    //  - 'dualSlice'  (Barbarian 1H axe + permanent off-hand axe):
-    //    hold past threshold triggers a Dualwield_Slice double-strike.
+    //  - 'dualSlice'  (Barbarian 1H axe / 1H sword): hold past
+    //    threshold triggers a 360° dual-wield spin attack.
     //  - 'dashStrike' (Rogue knife): hold past threshold lunges
     //    forward with a stab during the dash, force-crit + gold steal.
-    //  - 'enchant'    (Mage staff/wand): hold past threshold replaces
-    //    the melee fallback with a Spellcast_Raise that binds the
-    //    player's ability element to their next 3 attacks.
-    const charSuperKind = this._character?.def?.charSuper?.[this._weaponKind]?.kind || null;
+    //  - 'enchant'    (Mage 1H/2H sword + axe): hold past threshold
+    //    binds the player's ability element to the weapon so the next
+    //    connecting swing applies that element's on-hit effect.
+    const charSuperCfg = this._character?.def?.charSuper?.[this._weaponKind] || null;
+    const charSuperKind = charSuperCfg?.kind || null;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
@@ -630,17 +679,16 @@ export class Player {
           this._chargeFired = false;
         } else {
           this._chargeTime += dt;
-          // Auto-fire the held action the moment the hold crosses the
-          // threshold so the player doesn't have to release to trigger
-          // it — same UX feel as the sword_2h spin super. For the Mage
-          // (charSuperKind == 'enchant') the held action is the weapon
-          // enchant; for everyone else it's the weapon's melee fallback.
+          // Auto-fire the held melee fallback the moment the hold
+          // crosses the threshold so the player doesn't have to
+          // release to trigger it — same UX feel as the sword_2h
+          // spin super. For the Mage holding staff/wand this is
+          // intentionally the WEAPONS profile's melee strong attack
+          // (a close-range bonk), not the enchant — enchant only
+          // binds when he's wielding a melee weapon (handled in the
+          // charSuperKind branch below).
           if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            if (charSuperKind === 'enchant') {
-              this._triggerCharSuper('enchant');
-            } else {
-              this._triggerAttack(false);
-            }
+            this._triggerAttack(false);
             this._chargeFired = true;
           }
         }
@@ -655,6 +703,36 @@ export class Player {
           } else {
             this._attackBuffered = ATTACK_INPUT_BUFFER;
             this._attackBufferKind = 'rangedTap';
+          }
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
+      }
+    } else if (charSuperKind) {
+      // Per-character charge takes priority over the weapon's generic
+      // `superAttack`: e.g. a Mage holding a 2H sword binds an enchant
+      // (charSuperKind='enchant') instead of swinging the weapon's
+      // 360° spin super. Press-and-hold pattern: release before
+      // threshold = the weapon's tap slice, hold past threshold =
+      // char-specific charge attack.
+      if (isHeld) {
+        if (!wasHeld) {
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
+            this._triggerCharSuper(charSuperKind, charSuperCfg);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerAttack(false);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'tap';
           }
         }
         this._chargeTime = 0;
@@ -681,37 +759,6 @@ export class Player {
         // we already swung. Otherwise this was a short tap; fire the
         // normal slice now if cd is open, else stash it in the input
         // buffer so it auto-fires when cd opens.
-        if (!this._chargeFired) {
-          if (this.attackTimer <= 0) {
-            this._triggerAttack(false);
-          } else {
-            this._attackBuffered = ATTACK_INPUT_BUFFER;
-            this._attackBufferKind = 'tap';
-          }
-        }
-        this._chargeTime = 0;
-        this._chargeFired = false;
-      }
-    } else if (charSuperKind) {
-      // Per-character charge: weapon has no ranged or generic super
-      // profile, but the character class adds a charge attack on this
-      // weapon (Knight shield bash on sword_1h, Barbarian dual-slice
-      // on axe_1h, Rogue dash-strike on sword_1h). Press-and-hold
-      // pattern same as wpHasSuper — release before threshold = the
-      // weapon's tap slice, hold past threshold = char-specific
-      // charge.
-      if (isHeld) {
-        if (!wasHeld) {
-          this._chargeTime = 0;
-          this._chargeFired = false;
-        } else {
-          this._chargeTime += dt;
-          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            this._triggerCharSuper(charSuperKind);
-            this._chargeFired = true;
-          }
-        }
-      } else if (wasHeld) {
         if (!this._chargeFired) {
           if (this.attackTimer <= 0) {
             this._triggerAttack(false);
@@ -815,23 +862,33 @@ export class Player {
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
+        // The shield bash intentionally has no impact VFX (no swept
+        // arc, no solid flash) — the user wants the strike to be
+        // animation-only. Other charge / tap swings still paint a
+        // slashArc strip below.
         if (as.slash) {
-          // Same slashArc strip for both tap and the spin super — the super
-          // just passes its full-circle `arc` (2π) so the strip sweeps the
-          // whole way around. Parented to the character mesh so the strip
-          // tracks the player if they keep moving / rotating during the
-          // followthrough. The super:
-          //  • is rotated by π (180°) so its u=1 endpoint (where the bright
-          //    leading edge sits at t=0 since `direction:-1` makes
-          //    lead=1−uProgress) lines up with the player's *forward*
-          //    instead of dropping behind them — same starting side as
-          //    the normal slice.
-          //  • uses sweepRatio 0.92 so the sweep almost fills the full
-          //    duration (short fade tail) — without this, the painted
-          //    arc lingers visibly after the swing already finished.
-          //  • stretches duration to ~1.5× tap so the spin reads as a
-          //    sustained sweep but doesn't drag.
+          // Same slashArc strip for both tap and charge attacks. The
+          // strip is parented to the character mesh so it tracks the
+          // player if they keep moving / rotating during the
+          // followthrough.
+          //
+          // The 180° yaw offset + extended sweepRatio used to be applied
+          // to *every* `isSuper` swing, but that put the bright leading
+          // edge BEHIND the player for non-full-circle charges (Knight
+          // shield bash, Rogue dash strike, the previous Barbarian
+          // dual-slice). We now gate that treatment on a true full
+          // 360° spin (arc ≥ 2π): only the spin needs the extra
+          // rotation to line up with the player's forward, and only
+          // the spin needs the longer paint phase. Everything else
+          // — tap or charge — paints out front like a normal slice.
+          const isFullSpin = as.arc >= Math.PI * 1.99;
           const tapDur = Math.min(as.swing * (1 - fxAt) * 0.55, 0.28);
+          // `as.slash.sweepRatio` lets a swing opt out of the painted-
+          // sweep animation entirely — used by the Knight shield bash
+          // (sweepRatio: 0) so the strip pops in fully formed and just
+          // fades, instead of tracing along its arc like a sword cut.
+          const defaultSweep = isFullSpin ? 0.92 : 0.70;
+          const sweepRatio = as.slash.sweepRatio ?? defaultSweep;
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
@@ -841,8 +898,8 @@ export class Player {
               duration: as.isSuper ? tapDur * 1.5 : tapDur,
               color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
-              yawOffset: as.isSuper ? Math.PI : 0,
-              sweepRatio: as.isSuper ? 0.92 : 0.70,
+              yawOffset: isFullSpin ? Math.PI : 0,
+              sweepRatio,
             }
           );
         }
@@ -934,13 +991,30 @@ export class Player {
     if (isSuper && !sp) return;
     const baseSwing  = sp?.swing      ?? wp.swing;
     const impactAt   = sp?.impactAt   ?? wp.impactAt;
-    const range      = sp?.range      ?? wp.range;
+    let range        = sp?.range      ?? wp.range;
     const arc        = sp?.arc        ?? wp.arc;
     const slash      = sp?.slash      ?? wp.slash;
     const damageMult = sp?.damageMult ?? wp.damageMult;
     const cooldown   = sp?.cooldown   ?? wp.cooldown;
     const animKey    = sp?.attackAnim ?? this._attackActionKey;
     const ringColor  = sp?.ringColor  ?? null;
+
+    // Mage enchant reach boost — while a charge is bound, the next
+    // melee swing has its collision *radius* doubled. The angular
+    // arc is intentionally left untouched: stock weapon arcs are
+    // already wide (~0.85π for swords/axes), so doubling them used
+    // to wrap the slashArc strip into an almost-full circle around
+    // the player, which read as a 360° spin rather than an
+    // empowered slash. Keeping arc at the weapon's stock value
+    // means the slashArc paints the normal wedge shape, just
+    // farther out — pairs with the 3× weapon-mesh scale in
+    // `_applyEnchantVfx` (the visible blade looks like it has the
+    // reach to back the bigger hitbox). Enchant only ever binds on
+    // melee weapons (sword/axe slots in CHARACTERS.charSuper), so
+    // staff / wand don't get boosted.
+    if (this._weaponEnchant) {
+      range *= 2;
+    }
 
     // The full multiplier — same one cooldown uses — speeds the
     // visible swing up too (animation timeScale is derived from
@@ -994,11 +1068,11 @@ export class Player {
   // reads to apply post-damage effects (stun / gold steal / forced
   // crit) from a single hook so this code stays focused on the
   // animation + state setup.
-  _triggerCharSuper(kind) {
-    if (kind === 'shieldBash') return this._triggerShieldBash();
-    if (kind === 'dualSlice')  return this._triggerDualSlice();
-    if (kind === 'dashStrike') return this._triggerDashStrike();
-    if (kind === 'enchant')    return this._triggerEnchant();
+  _triggerCharSuper(kind, cfg = null) {
+    if (kind === 'shieldBash') return this._triggerShieldBash(cfg);
+    if (kind === 'dualSlice')  return this._triggerDualSlice(cfg);
+    if (kind === 'dashStrike') return this._triggerDashStrike(cfg);
+    if (kind === 'enchant')    return this._triggerEnchant(cfg);
   }
 
   // Common swing setup — mirrors `_triggerAttack` but driven by an
@@ -1048,44 +1122,60 @@ export class Player {
       swing: 0.65,
       impactAt: 0.55,
       range: 2.4,
-      arc: Math.PI * 0.55,
-      slash: { color: 0xffe066, height: 1.05 },
+      // π/2 wedge in front of the player — doubles as the damage
+      // hit-cone (read by `_processSwing`) and the slashArc shape.
+      arc: Math.PI / 2,
+      // White slashArc with `sweepRatio: 0` so the strip appears
+      // fully painted on the first frame and only fades over the
+      // swing's life — no swept blade-trace animation. Reads as a
+      // static line in front of the player at impact time, which
+      // is the visual the user wants for the shield bash.
+      slash: { color: 0xffffff, height: 1.05, sweepRatio: 0 },
       damageMult: 1.4,
       cooldown: 1.0,
       animKey: 'attack_block',
-      ringColor: 0xffe066,
       isSuper: true,
       charKind: 'shieldBash',
       stunDuration: BLOCK_STUN_DURATION,
     });
     // Damage soak active for the entire swing animation — the knight
-    // visibly tanks 50% of any incoming hit during the bash. A small
-    // tail past the animation prevents off-by-one frames where the
-    // anim has clamped but the soak "feels" still on.
+    // tanks 50% of any incoming hit during the bash. The previous
+    // yellow flash + ground ring + block tone + on-hit shimmer (the
+    // "blocking" audiovisual cues) were removed; the soak is now a
+    // silent gameplay-only effect.
     this._blockReductionT = swing + 0.05;
-    this.effects?.flashSphere?.(this.pos.x, 1.0, this.pos.z, 0xffe066, 0.7, 0.20);
-    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, 0xffe066, 1.6, 0.30);
-    this.sound?.tone?.({ freq: 320, type: 'square', dur: 0.20, gain: 0.30 });
   }
 
   _triggerDualSlice() {
+    // Barbarian whirlwind: a 360° dual-wield spin that hits everything
+    // around the player, mirroring the Knight 2H spin super. Reuses the
+    // 2H spinning clip (continuous rotation, no anticipation/recovery)
+    // so the rig actually rotates instead of just twin-slicing in front
+    // — each hand still visibly swings whichever 1H weapon is equipped.
+    //
+    // Color picks per equipped weapon: gold for axes (matches the
+    // "heavy weapon" feel) and white for swords (cleaner blade arc).
+    // No extra ring / burst on top of the slashArc — the user wants
+    // only the circular sweep VFX, the same shape as the Knight 2H
+    // spin, just colored to match what's in hand.
+    const isSword = this._weaponKind === 'sword_1h';
+    const swirlColor = isSword ? 0xffffff : 0xffae6a;
     this._startSwingFromSpec({
-      swing: 0.85,
-      impactAt: 0.55,
-      range: 2.5,
-      arc: Math.PI * 0.85,
-      slash: { color: 0xffae6a, height: 1.05 },
-      damageMult: 1.8,
-      cooldown: 0.95,
-      animKey: 'attack_dual_slice',
-      ringColor: 0xffae6a,
+      swing: 0.70,
+      impactAt: 0.50,
+      range: 3.0,
+      arc: Math.PI * 2,        // full circle
+      slash: { color: swirlColor, height: 1.05 },
+      damageMult: 2.2,
+      cooldown: 1.20,
+      animKey: 'attack_2h_spinning',
+      ringColor: swirlColor,
       isSuper: true,
       charKind: 'dualSlice',
     });
-    this.effects?.burst?.(this.pos.x, 0.5, this.pos.z, 0xffae6a, 6, 4, 0.22);
   }
 
-  _triggerDashStrike() {
+  _triggerDashStrike(cfg = null) {
     // Lock dash direction to the current facing — the strike commits
     // to the angle at trigger time, so the player can't redirect
     // mid-stab. Brief i-frames cover the lunge so the rogue can
@@ -1094,6 +1184,12 @@ export class Player {
     this._dashStrikeDir.z = this.facing.z;
     this._dashStrikeT = DASH_STRIKE_DURATION;
     this.invuln = Math.max(this.invuln, DASH_STRIKE_DURATION + 0.05);
+    // Per-weapon tuning from CHARACTERS.charSuper[<kind>] in models.js.
+    // The Rogue's dagger uses the default fast/light values; equipping a
+    // 1H axe overrides damageMult + cooldown for a heavier, slower
+    // commitment that still uses the same lunge geometry.
+    const damageMult = cfg?.damageMult ?? 1.6;
+    const cooldown   = cfg?.cooldown   ?? 0.85;
     this._startSwingFromSpec({
       // Swing duration matches the dash + a short followthrough so the
       // stab visually lands during the lunge ("strike in the moment of
@@ -1103,8 +1199,8 @@ export class Player {
       range: 1.9,
       arc: Math.PI * 1.4,
       slash: { color: 0x9adfff, height: 0.8 },
-      damageMult: 1.6,
-      cooldown: 0.85,
+      damageMult,
+      cooldown,
       animKey: 'dodge_forward',
       ringColor: 0x9adfff,
       isSuper: true,
@@ -1118,15 +1214,33 @@ export class Player {
   }
 
   _triggerEnchant() {
-    // Resolve element from the player's currently-slotted ability —
-    // if none, fall back to a neutral 'arcane' colour so the cast
-    // still feels distinct from a plain bolt.
+    // Bind requires an ability slot to draw element from AND that
+    // ability not be on cooldown — the enchant *spends* the ability
+    // cooldown on bind, so casting the spell and binding the
+    // weapon-enchant trade against the same resource. Without a
+    // slotted ability, there's no element to bind. We bail silently;
+    // `_chargeFired` is already set by the caller so the same hold
+    // won't keep retrying every frame, and the player can still
+    // tap-attack normally on the same weapon.
     const ability = this.ability ? ABILITY_BY_ID[this.ability] : null;
-    const element = ability?.element || 'arcane';
+    if (!ability) return;
+    if (this.abilityCd > 0) return;
+    const element = ability.element || 'arcane';
+    // Per-element enchant tint. Each entry is paired with an on-hit
+    // effect in game.js _applyWeaponEnchantEffect:
+    //   fire      \u2014 burn DoT
+    //   ice       \u2014 freeze (the *only* freeze/stun source from enchant)
+    //   lightning \u2014 chain wave to nearby (no stun, no slow)
+    //   wind      \u2014 extra knockback (no stun, no slow)
+    //   timeslow  \u2014 slow on hit (no freeze, no stun)
+    //   heal      \u2014 lifesteal
+    //   arcane    \u2014 fallback colour, no special on-hit
     const colors = {
       fire:      0xff8a30,
       ice:       0x9dfcff,
       lightning: 0xfff7a0,
+      wind:      0xffffff,
+      timeslow:  0xc9a3ff,
       heal:      0x7aff8a,
       arcane:    0xc9a3ff,
     };
@@ -1134,14 +1248,19 @@ export class Player {
     this._weaponEnchant = {
       element,
       color,
-      hits: ENCHANT_HITS,
       ttl:  ENCHANT_DURATION,
-      // Flat damage bonus applied per enchanted hit on top of any
-      // element-specific status effect. Read by game.js's
+      // Flat damage bonus applied on every enchanted hit on top of
+      // any element-specific status effect. Read by game.js's
       // _onPlayerHitsEnemy so the multiplier lives on the enchant
       // state instead of being hardcoded into the hit pipeline.
       damageMult: ENCHANT_DAMAGE_BONUS,
     };
+    // Spend the ability's cooldown (per the user spec: binding the
+    // enchant puts the ability on cd, just like casting it would).
+    // Scaled by `abilityCdMult` so the Mage's halved cd stat applies
+    // to bind-cost too — they get the enchant *and* their next cast
+    // back twice as fast as other characters would.
+    this.abilityCd = ability.cd * (this.stats.abilityCdMult ?? 1);
     // Cast animation only — no damage swing. Cooldown is short so the
     // cast doesn't stall the player out of combat for a beat after
     // committing to charge; the empowered shots are the payoff.
@@ -1161,6 +1280,85 @@ export class Player {
     this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, color, 1.4, 0.40);
     this.effects?.flashSphere?.(this.pos.x, 1.1, this.pos.z, color, 1.2, 0.25);
     this.sound?.tone?.({ freq: 720, type: 'sine', dur: 0.35, gain: 0.28, slide: 220 });
+    // Tint + scale the attached melee weapon to telegraph the bound
+    // enchant on the weapon itself — the next swing visibly carries
+    // the element. The update tick keeps this synced to the state
+    // and tears it down when the enchant clears.
+    this._applyEnchantVfx();
+  }
+
+  // Paint the Mage's bound enchant onto the equipped weapon mesh:
+  // colour every Mesh's material(s) toward the enchant colour and
+  // scale the attachment by 4× so the next swing visibly carries
+  // the element. The original materials and scales are stashed on
+  // `_enchantVfx` so `_restoreEnchantVfx()` can put them back when
+  // the enchant is consumed, expires or the player swaps weapons.
+  //
+  // We clone each mesh's material before tinting so the donor source
+  // material (shared across all clones of the same weapon GLB — e.g.
+  // every player using a Knight 1H sword) stays pristine. Without the
+  // clone, painting one player's enchant would re-colour every other
+  // player's identical weapon too.
+  _applyEnchantVfx() {
+    if (this._enchantVfx) return;
+    const enchant = this._weaponEnchant;
+    if (!enchant) return;
+    const ch = this._character;
+    if (!ch) return;
+    const targets = [];
+    if (ch._equippedAttachment) targets.push(ch._equippedAttachment);
+    if (Array.isArray(ch._equippedExtras)) targets.push(...ch._equippedExtras);
+    if (targets.length === 0) return;
+    const matSwaps = [];
+    const scaleSwaps = [];
+    const tintColor = new THREE.Color(enchant.color);
+    for (const root of targets) {
+      // Stash and apply scale at the attachment root so children
+      // (blade, hilt, guard …) all grow uniformly. 3× per the spec
+      // — keep this in sync with `ENCHANT_REACH_MULT` below: the
+      // bigger the visible weapon, the more the player expects its
+      // strike radius to extend, and the two numbers are tuned
+      // together (3× scale + 2× reach feels readable in playtest).
+      const origScale = root.scale.clone();
+      root.scale.set(origScale.x * 3, origScale.y * 3, origScale.z * 3);
+      scaleSwaps.push({ root, origScale });
+      root.traverse((obj) => {
+        if (!obj.isMesh || !obj.material) return;
+        const orig = obj.material;
+        const list = Array.isArray(orig) ? orig : [orig];
+        const cloned = list.map((m) => {
+          const c = m.clone();
+          if (c.color && typeof c.color.copy === 'function') {
+            c.color.copy(tintColor);
+          }
+          if (c.emissive && typeof c.emissive.copy === 'function') {
+            c.emissive.copy(tintColor);
+            if ('emissiveIntensity' in c) c.emissiveIntensity = 1.6;
+          }
+          return c;
+        });
+        obj.material = Array.isArray(orig) ? cloned : cloned[0];
+        matSwaps.push({ mesh: obj, orig });
+      });
+    }
+    this._enchantVfx = { matSwaps, scaleSwaps };
+  }
+
+  _restoreEnchantVfx() {
+    const vfx = this._enchantVfx;
+    if (!vfx) return;
+    for (const { root, origScale } of vfx.scaleSwaps) {
+      root.scale.copy(origScale);
+    }
+    for (const { mesh, orig } of vfx.matSwaps) {
+      // Dispose the clones we swapped in so they don't leak GPU
+      // resources — these are not the originals, those are stashed
+      // in `orig`.
+      const cur = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of cur) m?.dispose?.();
+      mesh.material = orig;
+    }
+    this._enchantVfx = null;
   }
 
   // Begin the staff/wand tap-spell. Plays the cast animation + SFX
@@ -1428,7 +1626,11 @@ export class Player {
       console.warn('[ability cast]', this.ability, err);
       return false;
     }
-    this.abilityCd = def.cd;
+    // Per-character ability cd multiplier (Mage = 0.5, everyone
+    // else = 1.0). The HUD reads `def.cd * abilityCdMult` for cdMax
+    // so the cooldown ring still starts full and ticks to empty
+    // even though the absolute time is halved for the Mage.
+    this.abilityCd = def.cd * (this.stats.abilityCdMult ?? 1);
     return true;
   }
 

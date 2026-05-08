@@ -101,12 +101,16 @@ export const CHARACTERS = [
       sword_2h: ['2H_Sword'],
     },
     weaponAffinity: { sword_1h: CLASS_AFFINITY, sword_2h: CLASS_AFFINITY },
-    // Knight's 1H sword + shield charges into a Block_Attack — a stunning
-    // shield bash that also halves incoming damage for the duration of
-    // its swing animation, so the player can deliberately tank a hit
-    // they see coming. See player.js `_triggerCharSuper`.
+    // Knight's 1H weapons + shield charge into a Block_Attack — a
+    // stunning shield bash that also halves incoming damage for the
+    // duration of its swing animation, so the player can deliberately
+    // tank a hit they see coming. Both the 1H sword and the 1H axe
+    // share the same shield + bash combo (the WEAPONS axe_1h profile
+    // already toggles `Round_Shield` on the Knight body, so the visual
+    // is identical to sword + shield). See player.js `_triggerCharSuper`.
     charSuper: {
       sword_1h: { kind: 'shieldBash' },
+      axe_1h:   { kind: 'shieldBash' },
     },
   },
   {
@@ -125,15 +129,24 @@ export const CHARACTERS = [
       axe_1h: ['1H_Axe', '1H_Axe_Offhand'],
       axe_2h: ['2H_Axe'],
     },
-    weaponAffinity: { axe_1h: CLASS_AFFINITY, axe_2h: CLASS_AFFINITY },
+    // Dual-wield offhand attachments for weapons the Barbarian doesn't
+    // ship a baked offhand mesh for. The primary sword is still attached
+    // via the WEAPONS profile's `attach` to handslot.r (Knight donor);
+    // this list adds the second sword onto handslot.l so the Barbarian
+    // visibly carries one in each hand.
+    extraAttach: {
+      sword_1h: [{ slot: 'handslotl', cacheKey: 'sword_1h_offhand_donor' }],
+    },
+    weaponAffinity: { axe_1h: CLASS_AFFINITY, axe_2h: CLASS_AFFINITY, sword_1h: CLASS_AFFINITY },
     // Per-character charge attack overrides. When the player holds the
     // attack button past the charge threshold while wielding the keyed
     // weapon, this kind-handler is invoked instead of the weapon's
-    // generic `superAttack` (or, for staff/wand, instead of the melee
-    // fallback). See player.js `_triggerCharSuper` for the per-kind
-    // implementations.
+    // generic `superAttack`. See player.js `_triggerCharSuper` for the
+    // per-kind implementations. The dual-slice spin attack covers all
+    // 1H weapons the Barbarian dual-wields.
     charSuper: {
-      axe_1h: { kind: 'dualSlice' },
+      axe_1h:   { kind: 'dualSlice' },
+      sword_1h: { kind: 'dualSlice' },
     },
   },
   {
@@ -147,14 +160,18 @@ export const CHARACTERS = [
       wand: ['1H_Wand'],
     },
     weaponAffinity: { staff: CLASS_AFFINITY, wand: CLASS_AFFINITY },
-    // Mage's charge attack enchants the weapon with the player's current
-    // ability element so the next few attacks fire elemental shots
-    // instead of swinging into a 360° spin. Replaces the staff's melee
-    // fallback on hold (was the slice from the WEAPONS profile) — only
-    // the Mage gets the enchant per user spec.
+    // Mage's charge attack enchants a melee weapon with the player's
+    // currently-slotted ability element so the very next swing carries
+    // an elemental on-hit effect (one charge → one empowered swing).
+    // Staff and wand are intentionally NOT enchantable — when the Mage
+    // wields a caster weapon, holding the attack button falls through
+    // to the WEAPONS profile's melee fallback (a strong close-range
+    // bonk) instead of binding an enchant.
     charSuper: {
-      staff: { kind: 'enchant' },
-      wand: { kind: 'enchant' },
+      sword_1h: { kind: 'enchant' },
+      sword_2h: { kind: 'enchant' },
+      axe_1h:   { kind: 'enchant' },
+      axe_2h:   { kind: 'enchant' },
     },
   },
   {
@@ -174,11 +191,14 @@ export const CHARACTERS = [
     // both of which sit at the fast end of the cooldown table.
     weaponAffinity: { sword_1h: CLASS_AFFINITY, wand: CLASS_AFFINITY },
     // Knife charge: lunge dash with a stab during the dash (not after) —
-    // forced crit, brief i-frames and a small gold steal per hit. Only
-    // applies to the Rogue's dagger; their wand keeps the generic mage-
-    // style spell+melee flow from WEAPONS.
+    // forced crit, brief i-frames and a small gold steal per hit.
+    // Axe_1h reuses the same dash-strike mechanic but tuned for a
+    // heavier weapon: longer cooldown so it can't be spammed and a
+    // bigger damage multiplier so the commitment pays off. Wand keeps
+    // the generic mage-style spell+melee flow from WEAPONS.
     charSuper: {
       sword_1h: { kind: 'dashStrike' },
+      axe_1h:   { kind: 'dashStrike', damageMult: 2.4, cooldown: 1.40 },
     },
   },
 ];
@@ -1253,6 +1273,9 @@ const KNIGHT_TOGGLEABLE_NODES = [
 const SWORD_DONOR_KEYS = {
   '1H_Sword': 'sword_1h_donor',
   '2H_Sword': 'sword_2h_donor',
+  // Knight's left-hand sword mesh, donated to Barbarian when he
+  // dual-wields a 1H sword (handslot.l side).
+  '1H_Sword_Offhand': 'sword_1h_offhand_donor',
 };
 
 // Pull standalone weapon donors out of the Knight scene so non-Knight
@@ -1403,6 +1426,45 @@ export function setEquippedWeapon(character, weaponKind) {
         console.warn('[models] right-hand slot bone not found on character');
       }
     }
+  }
+
+  // 4) Per-character extra attachments — used by characters that
+  //    dual-wield a weapon they don't have baked-in offhand meshes
+  //    for (e.g. Barbarian wielding sword_1h gets a Knight donor sword
+  //    in both hands, with the offhand donor going to handslot.l).
+  if (character._equippedExtras) {
+    for (const inst of character._equippedExtras) inst.parent?.remove(inst);
+    character._equippedExtras = null;
+  }
+  const extras = (def && def.extraAttach && def.extraAttach[weaponKind]) || null;
+  if (extras && Array.isArray(extras)) {
+    const list = [];
+    for (const ext of extras) {
+      const src = weaponCache[ext.cacheKey];
+      if (!src) {
+        console.warn('[models] extra attach mesh not loaded:', ext.cacheKey);
+        continue;
+      }
+      const slotCandidates = [ext.slot, ext.slot.replace('.', ''), ext.slot.replace('.', '_')];
+      let extSlot = null;
+      for (const n of slotCandidates) {
+        extSlot = root.getObjectByName(n);
+        if (extSlot) break;
+      }
+      if (!extSlot) {
+        console.warn('[models] extra attach slot not found:', ext.slot);
+        continue;
+      }
+      const inst = src.clone(true);
+      // Donor's local transform was authored in its source bone slot's
+      // local space (handslot.l for the offhand sword), so re-parenting
+      // to the same slot type on another Adventurer preserves the in-
+      // hand pose without needing the position/quaternion overrides the
+      // main `attach` branch applies for external GLBs.
+      extSlot.add(inst);
+      list.push(inst);
+    }
+    character._equippedExtras = list;
   }
 
   character._equippedWeapon = weaponKind;
