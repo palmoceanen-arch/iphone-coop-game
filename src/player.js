@@ -149,15 +149,21 @@ const DASH_STRIKE_GOLD_MIN = 3;
 const DASH_STRIKE_GOLD_MAX = 6;
 
 // Mage weapon enchant — charge binds the player's currently-slotted
-// ability element (or 'arcane' if no ability) to the weapon. The very
-// next connecting attack consumes the enchant and applies the bound
-// element's effect, expiring after `ENCHANT_DURATION` seconds even if
-// unused so the player can't stockpile elemental hits between fights.
-const ENCHANT_HITS = 1;
-const ENCHANT_DURATION = 6.0;
+// ability element to the weapon. Every connecting attack during the
+// `ENCHANT_DURATION` window applies the bound element's effect and
+// the flat `ENCHANT_DAMAGE_BONUS`; the enchant doesn't get consumed
+// per-hit, it just runs out on the timer ("works for 5 seconds").
+// Binding requires that the Mage's ability is *not* on cooldown; the
+// bind also puts the ability on cooldown, so the player trades one
+// cast of their ability for one enchant window.
+const ENCHANT_DURATION = 5.0;
 // Flat damage bonus applied on every enchanted hit (on top of any
 // element-specific status effect). Multiplicative with crit/affinity.
 const ENCHANT_DAMAGE_BONUS = 1.30;
+// Mage's identity: their ability cooldowns are halved relative to the
+// other characters, since the enchant charge spends an ability cd
+// every time it binds. Other characters keep `abilityCdMult = 1.0`.
+const MAGE_ABILITY_CD_MULT = 0.5;
 
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
@@ -200,7 +206,20 @@ export class Player {
       hpRegen: 0.4, // hp/sec
       goldFind: 1.0,
       attackSpeedMult: 1.0,   // < 1 = faster
+      // Multiplier on every ability cooldown. < 1 = faster ability
+      // cycle. Mage gets MAGE_ABILITY_CD_MULT (0.5); see character
+      // override block below. Read by `tryCastAbility`,
+      // `_triggerEnchant` (which puts the ability on cd to bind the
+      // enchant) and the ability HUD (so the cooldown ring scales
+      // to the player's effective cd, not the ability's base cd).
+      abilityCdMult: 1.0,
     };
+    // Per-character stat overrides. Kept here so a single line of
+    // truth maps id→tweaks rather than scattering `if char id ===`
+    // checks across the file.
+    if (this._characterId === 'mage') {
+      this.stats.abilityCdMult = MAGE_ABILITY_CD_MULT;
+    }
     this.upgradeLevels = { damage: 0, hp: 0, speed: 0, attackSpeed: 0 };
 
     this.attackTimer = 0;
@@ -547,7 +566,7 @@ export class Player {
     }
     if (this._weaponEnchant) {
       this._weaponEnchant.ttl -= dt;
-      if (this._weaponEnchant.ttl <= 0 || this._weaponEnchant.hits <= 0) {
+      if (this._weaponEnchant.ttl <= 0) {
         this._weaponEnchant = null;
       }
     }
@@ -1195,11 +1214,18 @@ export class Player {
   }
 
   _triggerEnchant() {
-    // Resolve element from the player's currently-slotted ability —
-    // if none, fall back to a neutral 'arcane' colour so the cast
-    // still feels distinct from a plain bolt.
+    // Bind requires an ability slot to draw element from AND that
+    // ability not be on cooldown — the enchant *spends* the ability
+    // cooldown on bind, so casting the spell and binding the
+    // weapon-enchant trade against the same resource. Without a
+    // slotted ability, there's no element to bind. We bail silently;
+    // `_chargeFired` is already set by the caller so the same hold
+    // won't keep retrying every frame, and the player can still
+    // tap-attack normally on the same weapon.
     const ability = this.ability ? ABILITY_BY_ID[this.ability] : null;
-    const element = ability?.element || 'arcane';
+    if (!ability) return;
+    if (this.abilityCd > 0) return;
+    const element = ability.element || 'arcane';
     const colors = {
       fire:      0xff8a30,
       ice:       0x9dfcff,
@@ -1211,14 +1237,19 @@ export class Player {
     this._weaponEnchant = {
       element,
       color,
-      hits: ENCHANT_HITS,
       ttl:  ENCHANT_DURATION,
-      // Flat damage bonus applied per enchanted hit on top of any
-      // element-specific status effect. Read by game.js's
+      // Flat damage bonus applied on every enchanted hit on top of
+      // any element-specific status effect. Read by game.js's
       // _onPlayerHitsEnemy so the multiplier lives on the enchant
       // state instead of being hardcoded into the hit pipeline.
       damageMult: ENCHANT_DAMAGE_BONUS,
     };
+    // Spend the ability's cooldown (per the user spec: binding the
+    // enchant puts the ability on cd, just like casting it would).
+    // Scaled by `abilityCdMult` so the Mage's halved cd stat applies
+    // to bind-cost too — they get the enchant *and* their next cast
+    // back twice as fast as other characters would.
+    this.abilityCd = ability.cd * (this.stats.abilityCdMult ?? 1);
     // Cast animation only — no damage swing. Cooldown is short so the
     // cast doesn't stall the player out of combat for a beat after
     // committing to charge; the empowered shots are the payoff.
@@ -1584,7 +1615,11 @@ export class Player {
       console.warn('[ability cast]', this.ability, err);
       return false;
     }
-    this.abilityCd = def.cd;
+    // Per-character ability cd multiplier (Mage = 0.5, everyone
+    // else = 1.0). The HUD reads `def.cd * abilityCdMult` for cdMax
+    // so the cooldown ring still starts full and ticks to empty
+    // even though the absolute time is halved for the Mage.
+    this.abilityCd = def.cd * (this.stats.abilityCdMult ?? 1);
     return true;
   }
 

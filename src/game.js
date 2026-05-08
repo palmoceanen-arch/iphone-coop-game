@@ -518,6 +518,11 @@ export class Game {
     if (p.ability) {
       const def = ABILITY_BY_ID[p.ability];
       if (def) {
+        // Scale `cdMax` by the player's `abilityCdMult` so the phone
+        // HUD's cooldown ring uses the player's *effective* cd —
+        // matters for the Mage (0.5×), whose ring would otherwise
+        // start half-empty after a cast instead of full.
+        const cdMult = p.stats?.abilityCdMult ?? 1;
         ability = {
           id: p.ability,
           name: def.name,
@@ -525,7 +530,7 @@ export class Game {
           icon: def.icon,
           color: '#' + def.color.toString(16).padStart(6, '0'),
           cd: Math.max(0, p.abilityCd || 0),
-          cdMax: def.cd,
+          cdMax: def.cd * cdMult,
         };
       }
     }
@@ -1686,12 +1691,12 @@ export class Game {
           `+${stolen}`, '#ffd166'
         );
       }
-      // Mage enchant on-hit element effects. One charge consumed per
-      // connecting attack; expires when hits drop to 0.
+      // Mage enchant on-hit element effects. The enchant is purely
+      // duration-based now — every connecting attack during the
+      // bind window applies the bound element + the flat damage
+      // bonus. The state is cleared by Player.update's TTL tick.
       if (enchant) {
         this._applyWeaponEnchantEffect(player, enemy, enchant, ctx.dmg);
-        enchant.hits -= 1;
-        if (enchant.hits <= 0) player._weaponEnchant = null;
       }
       if (!enemy.alive) {
         runItemHook(player, 'onKill', ctx);
@@ -2465,7 +2470,11 @@ export class Game {
       el.querySelector('.ab-name').textContent = def.name;
       el.querySelector('.icon-wrap').style.boxShadow = `inset 0 0 0 2px #${def.color.toString(16).padStart(6, '0')}`;
     }
-    const cdMax = def.cd;
+    // Same scaling as `_pushPlayerState`: the desktop ring should
+    // start full (cd / cdMax === 1) right after a cast even when
+    // the player has an `abilityCdMult` < 1.
+    const cdMult = player.stats?.abilityCdMult ?? 1;
+    const cdMax = def.cd * cdMult;
     const cd = player.abilityCd;
     const ready = cd <= 0;
     const circle = el.querySelector('circle');
