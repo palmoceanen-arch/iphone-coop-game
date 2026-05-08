@@ -149,11 +149,11 @@ const DASH_STRIKE_GOLD_MIN = 3;
 const DASH_STRIKE_GOLD_MAX = 6;
 
 // Mage weapon enchant — charge binds the player's currently-slotted
-// ability element (or 'arcane' if no ability) to the weapon. The next
-// `ENCHANT_HITS` connecting attacks consume one charge each, expiring
-// after `ENCHANT_DURATION` seconds even if unused so the player can't
-// stockpile elemental hits between encounters.
-const ENCHANT_HITS = 3;
+// ability element (or 'arcane' if no ability) to the weapon. The very
+// next connecting attack consumes the enchant and applies the bound
+// element's effect, expiring after `ENCHANT_DURATION` seconds even if
+// unused so the player can't stockpile elemental hits between fights.
+const ENCHANT_HITS = 1;
 const ENCHANT_DURATION = 6.0;
 // Flat damage bonus applied on every enchanted hit (on top of any
 // element-specific status effect). Multiplicative with crit/affinity.
@@ -567,34 +567,39 @@ export class Player {
       runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
-    // Attack trigger — three button-handling modes, picked by the weapon
-    // profile:
+    // Attack trigger — four button-handling modes, picked in priority
+    // order by what the weapon + character offer:
     //
     //   1. Weapons with a `rangedAttack` profile (staff, wand): tap fires
     //      the homing spell bolt; hold past `CHARGE_THRESHOLD` falls
-    //      through to the melee swing the weapon profile defines. Tap
-    //      and hold are decided on release vs hold-time, mirroring the
-    //      sword_2h super flow but with the meanings swapped (here the
-    //      *tap* is the spell, the *hold* is the heavy hit).
-    //   2. Weapons with a `superAttack` profile (greatsword, battle axe):
+    //      through to the weapon's melee strong-attack fallback. Mage
+    //      keeps this branch for caster weapons — his enchant bind only
+    //      kicks in when he's wielding a melee weapon (case 2).
+    //   2. Per-character charge override (`charSuper`): the character's
+    //      class adds a charge attack on this weapon kind (Knight shield
+    //      bash, Barbarian dual-slice spin, Rogue dash-strike, Mage
+    //      weapon enchant on swords/axes). Takes priority over the
+    //      weapon profile's generic `superAttack` so e.g. a Mage holding
+    //      a 2H sword binds an enchant instead of swinging the spin.
+    //   3. Weapons with a `superAttack` profile (greatsword, battle axe):
     //      tap fires the normal slice on release, hold past threshold
-    //      fires the spin super. Same charge bookkeeping as case 1.
-    //   3. Everything else (sword, axe, …): instant tap-to-swing on the
+    //      fires the spin super.
+    //   4. Everything else (sword, axe, …): instant tap-to-swing on the
     //      press edge so basic combat stays snappy.
     const wp = this.weaponProfile;
     const wpHasRanged = !!wp.rangedAttack;
     const wpHasSuper = !!wp.superAttack;
     // Per-character charge attack override. When set, this kind
-    // replaces (or augments) the weapon's default charge:
+    // replaces the weapon's default charge:
     //  - 'shieldBash' (Knight 1H+shield): hold past threshold triggers
     //    a stunning shield bash with 50% damage soak during the swing.
-    //  - 'dualSlice'  (Barbarian 1H axe + permanent off-hand axe):
-    //    hold past threshold triggers a Dualwield_Slice double-strike.
+    //  - 'dualSlice'  (Barbarian 1H axe / 1H sword): hold past
+    //    threshold triggers a 360° dual-wield spin attack.
     //  - 'dashStrike' (Rogue knife): hold past threshold lunges
     //    forward with a stab during the dash, force-crit + gold steal.
-    //  - 'enchant'    (Mage staff/wand): hold past threshold replaces
-    //    the melee fallback with a Spellcast_Raise that binds the
-    //    player's ability element to their next 3 attacks.
+    //  - 'enchant'    (Mage 1H/2H sword + axe): hold past threshold
+    //    binds the player's ability element to the weapon so the next
+    //    connecting swing applies that element's on-hit effect.
     const charSuperKind = this._character?.def?.charSuper?.[this._weaponKind]?.kind || null;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
@@ -630,17 +635,16 @@ export class Player {
           this._chargeFired = false;
         } else {
           this._chargeTime += dt;
-          // Auto-fire the held action the moment the hold crosses the
-          // threshold so the player doesn't have to release to trigger
-          // it — same UX feel as the sword_2h spin super. For the Mage
-          // (charSuperKind == 'enchant') the held action is the weapon
-          // enchant; for everyone else it's the weapon's melee fallback.
+          // Auto-fire the held melee fallback the moment the hold
+          // crosses the threshold so the player doesn't have to
+          // release to trigger it — same UX feel as the sword_2h
+          // spin super. For the Mage holding staff/wand this is
+          // intentionally the WEAPONS profile's melee strong attack
+          // (a close-range bonk), not the enchant — enchant only
+          // binds when he's wielding a melee weapon (handled in the
+          // charSuperKind branch below).
           if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            if (charSuperKind === 'enchant') {
-              this._triggerCharSuper('enchant');
-            } else {
-              this._triggerAttack(false);
-            }
+            this._triggerAttack(false);
             this._chargeFired = true;
           }
         }
@@ -655,6 +659,36 @@ export class Player {
           } else {
             this._attackBuffered = ATTACK_INPUT_BUFFER;
             this._attackBufferKind = 'rangedTap';
+          }
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
+      }
+    } else if (charSuperKind) {
+      // Per-character charge takes priority over the weapon's generic
+      // `superAttack`: e.g. a Mage holding a 2H sword binds an enchant
+      // (charSuperKind='enchant') instead of swinging the weapon's
+      // 360° spin super. Press-and-hold pattern: release before
+      // threshold = the weapon's tap slice, hold past threshold =
+      // char-specific charge attack.
+      if (isHeld) {
+        if (!wasHeld) {
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
+            this._triggerCharSuper(charSuperKind);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerAttack(false);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'tap';
           }
         }
         this._chargeTime = 0;
@@ -681,37 +715,6 @@ export class Player {
         // we already swung. Otherwise this was a short tap; fire the
         // normal slice now if cd is open, else stash it in the input
         // buffer so it auto-fires when cd opens.
-        if (!this._chargeFired) {
-          if (this.attackTimer <= 0) {
-            this._triggerAttack(false);
-          } else {
-            this._attackBuffered = ATTACK_INPUT_BUFFER;
-            this._attackBufferKind = 'tap';
-          }
-        }
-        this._chargeTime = 0;
-        this._chargeFired = false;
-      }
-    } else if (charSuperKind) {
-      // Per-character charge: weapon has no ranged or generic super
-      // profile, but the character class adds a charge attack on this
-      // weapon (Knight shield bash on sword_1h, Barbarian dual-slice
-      // on axe_1h, Rogue dash-strike on sword_1h). Press-and-hold
-      // pattern same as wpHasSuper — release before threshold = the
-      // weapon's tap slice, hold past threshold = char-specific
-      // charge.
-      if (isHeld) {
-        if (!wasHeld) {
-          this._chargeTime = 0;
-          this._chargeFired = false;
-        } else {
-          this._chargeTime += dt;
-          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            this._triggerCharSuper(charSuperKind);
-            this._chargeFired = true;
-          }
-        }
-      } else if (wasHeld) {
         if (!this._chargeFired) {
           if (this.attackTimer <= 0) {
             this._triggerAttack(false);
@@ -816,21 +819,21 @@ export class Player {
         this.swingFxFired = true;
         this.sound.swing();
         if (as.slash) {
-          // Same slashArc strip for both tap and the spin super — the super
-          // just passes its full-circle `arc` (2π) so the strip sweeps the
-          // whole way around. Parented to the character mesh so the strip
-          // tracks the player if they keep moving / rotating during the
-          // followthrough. The super:
-          //  • is rotated by π (180°) so its u=1 endpoint (where the bright
-          //    leading edge sits at t=0 since `direction:-1` makes
-          //    lead=1−uProgress) lines up with the player's *forward*
-          //    instead of dropping behind them — same starting side as
-          //    the normal slice.
-          //  • uses sweepRatio 0.92 so the sweep almost fills the full
-          //    duration (short fade tail) — without this, the painted
-          //    arc lingers visibly after the swing already finished.
-          //  • stretches duration to ~1.5× tap so the spin reads as a
-          //    sustained sweep but doesn't drag.
+          // Same slashArc strip for both tap and charge attacks. The
+          // strip is parented to the character mesh so it tracks the
+          // player if they keep moving / rotating during the
+          // followthrough.
+          //
+          // The 180° yaw offset + extended sweepRatio used to be applied
+          // to *every* `isSuper` swing, but that put the bright leading
+          // edge BEHIND the player for non-full-circle charges (Knight
+          // shield bash, Rogue dash strike, the previous Barbarian
+          // dual-slice). We now gate that treatment on a true full
+          // 360° spin (arc ≥ 2π): only the spin needs the extra
+          // rotation to line up with the player's forward, and only
+          // the spin needs the longer paint phase. Everything else
+          // — tap or charge — paints out front like a normal slice.
+          const isFullSpin = as.arc >= Math.PI * 1.99;
           const tapDur = Math.min(as.swing * (1 - fxAt) * 0.55, 0.28);
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
@@ -841,8 +844,8 @@ export class Player {
               duration: as.isSuper ? tapDur * 1.5 : tapDur,
               color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
-              yawOffset: as.isSuper ? Math.PI : 0,
-              sweepRatio: as.isSuper ? 0.92 : 0.70,
+              yawOffset: isFullSpin ? Math.PI : 0,
+              sweepRatio: isFullSpin ? 0.92 : 0.70,
             }
           );
         }
@@ -1069,19 +1072,25 @@ export class Player {
   }
 
   _triggerDualSlice() {
+    // Barbarian whirlwind: a 360° dual-wield spin that hits everything
+    // around the player, mirroring the Knight 2H spin super. Reuses the
+    // 2H spinning clip (continuous rotation, no anticipation/recovery)
+    // so the rig actually rotates instead of just twin-slicing in front
+    // — each hand still visibly swings whichever 1H weapon is equipped.
     this._startSwingFromSpec({
-      swing: 0.85,
-      impactAt: 0.55,
-      range: 2.5,
-      arc: Math.PI * 0.85,
+      swing: 0.70,
+      impactAt: 0.50,
+      range: 3.0,
+      arc: Math.PI * 2,        // full circle
       slash: { color: 0xffae6a, height: 1.05 },
-      damageMult: 1.8,
-      cooldown: 0.95,
-      animKey: 'attack_dual_slice',
+      damageMult: 2.2,
+      cooldown: 1.20,
+      animKey: 'attack_2h_spinning',
       ringColor: 0xffae6a,
       isSuper: true,
       charKind: 'dualSlice',
     });
+    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, 0xffae6a, 1.6, 0.30);
     this.effects?.burst?.(this.pos.x, 0.5, this.pos.z, 0xffae6a, 6, 4, 0.22);
   }
 
