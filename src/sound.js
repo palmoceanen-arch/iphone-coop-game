@@ -1,19 +1,26 @@
-// Hybrid sample-based + procedural audio for Twin Hearts.
+// Sample-based audio for Twin Hearts.
 //
 // One-shot SFX (sword swing, hits, hurt, breakables, pickups) play short
 // CC0 .ogg samples from `public/sounds/` — variants are picked at random
 // and the buffer cache is loaded lazily so cold-boot has zero audio cost.
 //
-// Ambient nature (wind, water lap, forest hum, campfire crackle, crickets,
-// distant birds) is generated procedurally from a single pre-rendered noise
-// buffer that loops forever, with biquad filters + slow LFOs shaping the
-// texture. Layer gains are modulated each frame from world context (player
-// proximity to ponds, day/night phase, …) so the soundscape responds to
-// where the players are without ever rebuilding the WebAudio graph.
+// Ambient nature (wind, water lap, campfire bed) is also sample-based:
+// each layer owns one looping AudioBufferSourceNode pointing at a CC0
+// field recording. Forest hum stays procedural (shaped noise + bandpass)
+// because no single recording reads as "leaf rustle on a windless day"
+// without sounding like a specific real-world location. Day/night chorus
+// (birds, crickets) is procedural — many tiny chirps scheduled with
+// per-frame probability — so the meadow gets a sparse, randomised chorus
+// instead of a looping recording with an audible seam.
+//
+// Layer gains are modulated each frame from world context (player
+// proximity to ponds & campfires, day/night phase, tree-density noise),
+// so the soundscape responds to where the players are without ever
+// rebuilding the WebAudio graph.
 //
 // Routing:
 //   one-shot SFX  → sfxBus  →┐
-//   procedural    → ambBus  →┴→ master → ctx.destination
+//   ambient       → ambBus  →┴→ master → ctx.destination
 //
 // Volume sliders in the pause menu (`settings.applyAudio`) feed live values
 // into setMasterVolume / setSfxVolume / setAmbientVolume / setMuted without
@@ -98,10 +105,26 @@ const VOICE_CAP = {
 
 const SOUNDS_BASE = 'sounds/';
 
-// 8 seconds of pre-rendered seeded noise. Ambient sources loop through
-// this single buffer with different filter profiles, so the entire ambient
-// stack costs one decode + one source node per layer for the lifetime of
-// the page. Long enough that the loop seam isn't audible under modulation.
+// File names (under SOUNDS_BASE) for the three sample-based ambient layers.
+// All three are CC0 / Public Domain, sourced as documented in
+// public/sounds/LICENSE.txt:
+//   wind   — ngwoo "Winter Wind"  (~25s, Public Domain)
+//   water  — rubberduck loop_water_02 from "40 CC0 water/splash/slime SFX"
+//            (~7s, CC0)
+//   fire   — Wolfman007 "Fire Crackling" (~3.5s, CC0)
+// Each loads on `ensure()` and is then played as a single looping
+// AudioBufferSourceNode for the lifetime of the page. Loop seams are
+// long enough (or busy enough) that they aren't perceptible at the
+// modulated gain levels the meadow uses.
+const AMBIENT_SAMPLES = {
+  wind:  'ambient_wind.ogg',
+  water: 'ambient_water.ogg',
+  fire:  'ambient_fire.ogg',
+};
+
+// 8 seconds of pre-rendered seeded noise. Used only by the procedural
+// forest layer (no good single-source recording reads as a generic
+// leaf-rustle hum without sounding like a specific real location).
 const AMBIENT_NOISE_SECONDS = 8.0;
 
 // 32-bit LCG so the ambient noise buffer is identical across reloads
@@ -483,20 +506,64 @@ export class Sound {
     };
   }
 
-  // ---- Procedural ambient layers ----------------------------------------
+  // ---- Ambient layers ---------------------------------------------------
   //
-  // Each layer owns a single AudioBufferSourceNode that loops the shared
-  // brown-noise buffer for the lifetime of the page. We modulate the
-  // post-filter gain (and one biquad cutoff for wind) at frame-rate from
-  // updateAmbient() — never recreating nodes — so the audio thread sees
-  // a fixed graph with a handful of param updates per second.
+  // Wind / water / fire are real CC0 field recordings, played as a single
+  // looping AudioBufferSourceNode each (created once the .ogg has
+  // decoded). Forest is procedural — shaped brown noise → bandpass —
+  // because no single recording sounds like a generic windless leaf-rustle
+  // hum without locking the player to a specific real location.
+  //
+  // updateAmbient() modulates the per-layer GainNode each frame from world
+  // context. The graph itself is fixed once built; we never recreate nodes.
   _buildAmbient() {
     if (!this.ctx || this._ambient) return;
     const ctx = this.ctx;
+
+    // Procedural noise source for the forest layer only.
     const noise = shapedNoiseBuffer(ctx, AMBIENT_NOISE_SECONDS, 0.99, 0xC0FFEE);
 
-    // Helper: looping noise source with a biquad → gain chain feeding ambBus.
-    const layer = ({ filterType = 'lowpass', cutoff = 800, q = 0.6, baseGain = 0.0 } = {}) => {
+    // Sample-based layer. Returns the gain handle immediately; the
+    // BufferSourceNode is plugged in once the fetch+decode resolves.
+    // Until then the layer sits silently in the graph (gain = 0). On a
+    // warm reload the buffer is already cached, so this resolves on the
+    // next microtask.
+    //
+    // Topology: src → [optional lowpass] → gain → ambBus
+    const sampleLayer = (file, { lowpass = 0 } = {}) => {
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      gain.connect(this.ambBus);
+      let inputNode = gain;
+      let filt = null;
+      if (lowpass > 0) {
+        // Used on the wind sample to soften the winter-recording's icy
+        // treble down to a meadow breeze. Q stays low so the cutoff
+        // shoulders gently rather than ringing.
+        filt = ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.value = lowpass;
+        filt.Q.value = 0.5;
+        filt.connect(gain);
+        inputNode = filt;
+      }
+      const layer = { src: null, gain, filt, ready: false };
+      Promise.resolve(this._loadBuffer(file)).then((buf) => {
+        if (!buf || !this.ctx) return;
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        src.connect(inputNode);
+        // Stagger the start so the three samples don't loop in lockstep.
+        src.start(ctx.currentTime + Math.random() * 0.6);
+        layer.src = src;
+        layer.ready = true;
+      });
+      return layer;
+    };
+
+    // Procedural shaped-noise layer (forest only).
+    const noiseLayer = ({ filterType = 'lowpass', cutoff = 800, q = 0.6, baseGain = 0.0 } = {}) => {
       const src = ctx.createBufferSource();
       src.buffer = noise;
       src.loop = true;
@@ -508,41 +575,26 @@ export class Sound {
       gain.gain.value = baseGain;
       src.connect(filt).connect(gain).connect(this.ambBus);
       src.start(ctx.currentTime + Math.random() * 0.1);
-      return { src, filt, gain };
+      return { src, filt, gain, ready: true };
     };
 
     this._ambient = {
-      // Wind across the meadow. Bandpass (rather than lowpass) cuts the
-      // sub-bass that made the previous wind layer read as an HVAC hum;
-      // mid-frequency content is what the ear interprets as moving air
-      // rustling through grass. Cutoff drifts via `_windLfoTimer` and
-      // gain gusts via `windGust` LFO computed in updateAmbient — both
-      // together prevent the bed from feeling static.
-      wind:    layer({ filterType: 'bandpass', cutoff: 1100, q: 0.7,  baseGain: 0.0 }),
-      // Pondside lapping — bandpass on the brown noise. Slightly wider
-      // (lower Q) than before so it reads as water swishing rather than
-      // a single tonal whoosh.
-      water:   layer({ filterType: 'bandpass', cutoff: 420,  q: 1.1,  baseGain: 0.0 }),
-      // Forest hum — slightly higher cutoff so leaf rustle/insect chorus
-      // sits over the wind without competing for the same band.
-      forest:  layer({ filterType: 'bandpass', cutoff: 1500, q: 0.9,  baseGain: 0.0 }),
-      // Campfire bed — bandpass at ~900 Hz captures more energy from the
-      // brown noise than a 1200 Hz highpass did (brown noise rolls off at
-      // -6 dB/oct, so above 1200 Hz there's barely anything to filter).
-      // The result is a warmer hum that actually reads as fire even before
-      // `_scheduleCrackle` adds the snaps on top.
-      fire:    layer({ filterType: 'bandpass', cutoff: 900,  q: 0.6,  baseGain: 0.0 }),
+      // Wind: "Winter Wind" by ngwoo (Public Domain). Lowpassed at 1800 Hz
+      // to clip the icy treble down to a soft meadow breeze.
+      wind:   sampleLayer(AMBIENT_SAMPLES.wind,  { lowpass: 1800 }),
+      // Water: rubberduck loop_water_02 (CC0).
+      water:  sampleLayer(AMBIENT_SAMPLES.water),
+      // Fire: Wolfman007 fire-1 (CC0). Sample already contains crackles —
+      // no separate procedural crackle scheduler needed.
+      fire:   sampleLayer(AMBIENT_SAMPLES.fire),
+      // Forest hum stays procedural: bandpass on shaped brown noise gives
+      // a generic leaf-rustle/insect-chorus tail that mixes under any
+      // real-world location without sounding out of place.
+      forest: noiseLayer({ filterType: 'bandpass', cutoff: 1500, q: 0.9, baseGain: 0.0 }),
     };
 
-    // Crackle scheduler. We don't want a setInterval — the audio thread
-    // drifts off the 60 Hz timer when the tab is inactive. Instead we
-    // walk forward in `ctx.currentTime` and queue the next crackle from
-    // an onended callback off a tiny silent buffer source.
-    this._fireCrackleStop = false;
-    this._scheduleCrackle();
-
-    // Cricket / bird chorus also runs on a recursive scheduler. Day/night
-    // weight chooses which to emit (or nothing during dawn/dusk transition).
+    // Cricket / bird chorus runs on a recursive scheduler. Day/night weight
+    // chooses which to emit (or nothing during dawn/dusk transition).
     this._dayNoctStop = false;
     this._scheduleDayNoct();
 
@@ -552,69 +604,6 @@ export class Sound {
       windTarget: 0.10, waterTarget: 0, forestTarget: 0, fireTarget: 0,
       cricketsTarget: 0, birdsTarget: 0,
     };
-
-    // LFO-on-cutoff for wind. We piggy-back on the noise buffer source's
-    // playbackRate listener — no extra oscillators — by running a small
-    // setInterval that pokes setTargetAtTime. Cheaper than an OscillatorNode
-    // → ConstantSourceNode chain wired into BiquadFilter.frequency, and
-    // imprecise jitter actually sounds better here than a perfect sine.
-    this._windLfoTimer = setInterval(() => {
-      if (!this.ctx || !this._ambient) return;
-      const t = this.ctx.currentTime;
-      // Cutoff 250..900 Hz wandering at 0.07 Hz.
-      const c = 575 + Math.sin(t * 0.07 * 2 * Math.PI) * 325 + (Math.random() - 0.5) * 80;
-      this._ambient.wind.filt.frequency.setTargetAtTime(c, t, 0.6);
-    }, 250);
-  }
-
-  // Schedule one campfire crack at a random time in the next ~2.5s, then
-  // recursively schedule the next one. Each crack is a tiny shaped noise
-  // burst routed through the ambient bus so the master "campfire" gain
-  // dampens it together with the bed.
-  _scheduleCrackle() {
-    if (!this.ctx || this._fireCrackleStop) return;
-    const ctx = this.ctx;
-    const wait = 0.15 + Math.random() * 2.3;
-    const dummyBuf = ctx.createBuffer(1, Math.max(2, Math.floor(ctx.sampleRate * wait)), ctx.sampleRate);
-    const dummy = ctx.createBufferSource();
-    dummy.buffer = dummyBuf;
-    dummy.connect(ctx.destination);
-    dummy.start();
-    dummy.onended = () => {
-      try { dummy.disconnect(); } catch { /* already detached */ }
-      this._fireCrack();
-      this._scheduleCrackle();
-    };
-  }
-
-  _fireCrack() {
-    if (!this.ctx || !this._ambient) return;
-    const fireGain = this._ambient.fire.gain.gain.value;
-    if (fireGain < 0.005) return;
-    const ctx = this.ctx;
-    const t = ctx.currentTime;
-    const dur = 0.04 + Math.random() * 0.05;
-    const sr = ctx.sampleRate;
-    const len = Math.floor(sr * dur);
-    const buf = ctx.createBuffer(1, len, sr);
-    const ch = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len) * (1 - i / len);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    // Bandpass at ~750-1300 Hz (rather than the previous 1500-2300 Hz
-    // highpass) keeps the snap warm and woody — high-pass-only crackles
-    // come out as thin spark-tick that doesn't pair with the new
-    // bandpassed campfire bed.
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 750 + Math.random() * 550;
-    bp.Q.value = 0.7;
-    const g = ctx.createGain();
-    g.gain.value = (0.22 + Math.random() * 0.22) * fireGain;
-    src.connect(bp).connect(g).connect(this.ambBus);
-    src.start(t);
-    src.stop(t + dur + 0.02);
-    src.onended = () => { try { src.disconnect(); bp.disconnect(); g.disconnect(); } catch { /* */ } };
   }
 
   // Day-time bird chirps + night-time cricket pulses. One scheduler drives
@@ -708,16 +697,11 @@ export class Sound {
     const dayWeight = clamp01(ctx?.dayWeight ?? 1.0); // 1=full day, 0=full night
     const world = ctx?.world ?? this._world;
 
-    // Wind: always present, gusts louder during the day, dies at night.
-    // The `gust` factor is a sum of two out-of-phase sines (~5.5s and
-    // ~2s periods) so the bed swells up and down between roughly 0.5×
-    // and 1.5× of the base level. Without it, the ear locks onto the
-    // looping noise buffer within a few seconds and the wind starts
-    // reading as static rather than weather.
-    const slow = Math.sin(t * 0.18 * Math.PI * 2);
-    const fast = Math.sin(t * 0.50 * Math.PI * 2 + 1.3);
-    const windGust = 1 + 0.32 * slow + 0.18 * fast;
-    a.windTarget = (0.10 + dayWeight * 0.06) * windGust;
+    // Wind: always present, slightly louder during the day, dies at
+    // night. The "Winter Wind" sample already has natural gust dynamics
+    // baked into its 25-second loop, so we don't apply a procedural LFO
+    // on top — that would just fight the recording's own swells.
+    a.windTarget = 0.13 + dayWeight * 0.07;
 
     // Water: scan a denser ring around the player for water cells. The
     // previous 12-probe ring at 4 m / 10 m left a 6-8 m gap that small
