@@ -1622,6 +1622,22 @@ export class Game {
       echo: false,
     };
     runItemHook(player, 'onAttack', ctx);
+    // Per-character charge attacks may force a guaranteed crit on top
+    // of any item-rolled crit chance — Rogue dash-strike does this so
+    // the lunge always lands as a punchy critical. Mirrors the crit
+    // item's behaviour (sets the flag + doubles dmgMult) so item
+    // hooks like Echo still chain off the crit.
+    const swing = player._activeSwing;
+    if (swing?.forceCrit && !ctx.crit) {
+      ctx.crit = true;
+      ctx.dmgMult *= 2;
+    }
+    // Mage weapon enchant — every connecting attack while the enchant
+    // is active gets a flat damage bonus (read from the enchant state
+    // so all the tuning lives in player.js) on top of any element-
+    // specific status effect applied below in the post-damage block.
+    const enchant = player._weaponEnchant;
+    if (enchant) ctx.dmgMult *= enchant.damageMult || 1;
     // Weapon profile scales base damage — a 2H battle axe hits much harder
     // than a wand, but the wand swings ~40% faster so DPS stays comparable.
     // The active-swing snapshot wins over the weapon profile so the spin
@@ -1646,11 +1662,82 @@ export class Game {
       runItemHook(player, 'onHit', ctx);
       const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
       this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, flashColor, ctx.crit ? 0.7 : 0.5, 0.12);
+      // Per-character charge attack post-hit effects ----------------
+      // Knight Block_Attack stuns every enemy it connects with, giving
+      // the player a free counter window after the bash resolves.
+      if (swing?.charKind === 'shieldBash' && swing.stunDuration > 0) {
+        enemy._frozen = Math.max(enemy._frozen || 0, swing.stunDuration);
+        this.effects.ring(enemy.pos.x, 0.05, enemy.pos.z, 0xffe066, 1.2, 0.25);
+      }
+      // Rogue dash-strike steals a small amount of gold from each
+      // enemy hit during the lunge. Only steals from real enemies
+      // (skipping breakables / structures / resources where gold
+      // theft is meaningless) and only on living enemies — a hit
+      // that immediately kills routes its loot through the regular
+      // drop pipeline instead.
+      if (swing?.charKind === 'dashStrike' && enemy.alive
+          && swing.goldStealMax > 0 && enemy.gold) {
+        const min = swing.goldStealMin;
+        const max = swing.goldStealMax;
+        const stolen = Math.max(1, Math.floor(min + defaultRandom() * (max - min + 1)));
+        player.gold += stolen;
+        this.effects.damageNumber(
+          new THREE.Vector3(enemy.pos.x, 1.8, enemy.pos.z),
+          `+${stolen}`, '#ffd166'
+        );
+      }
+      // Mage enchant on-hit element effects. One charge consumed per
+      // connecting attack; expires when hits drop to 0.
+      if (enchant) {
+        this._applyWeaponEnchantEffect(player, enemy, enchant, ctx.dmg);
+        enchant.hits -= 1;
+        if (enchant.hits <= 0) player._weaponEnchant = null;
+      }
       if (!enemy.alive) {
         runItemHook(player, 'onKill', ctx);
         this._onEnemyDies(player, enemy);
       }
     }
+  }
+
+  // Apply a Mage weapon-enchant element on a connecting hit. Element
+  // is bound at cast time (Player._triggerEnchant) and resolves to one
+  // of fire/ice/lightning/heal/arcane based on the player's currently-
+  // slotted ability — the +30% damage bonus is already baked in via
+  // ctx.dmgMult in the hit caller, so each branch here just layers a
+  // distinct on-hit effect on top.
+  _applyWeaponEnchantEffect(player, enemy, enchant, dmgDealt) {
+    const element = enchant.element;
+    if (element === 'fire') {
+      // Burn for 4s at 5% maxHP/s — same _poison pipeline the fang
+      // item uses, so the dot stacks/refreshes consistently.
+      enemy._poison = { dur: 4, dps: enemy.maxHP * 0.05, src: player };
+    } else if (element === 'ice') {
+      enemy._frozen = Math.max(enemy._frozen || 0, 1.0);
+    } else if (element === 'lightning') {
+      // Brief stun + a chain to one nearest other living enemy for
+      // half damage. Only chains between real creatures (the same
+      // filter the chainLightning ability uses).
+      enemy._frozen = Math.max(enemy._frozen || 0, 0.4);
+      let best = null, bestD = 4;
+      for (const e of (this._damageables || this.enemies)) {
+        if (!e || !e.alive || e === enemy) continue;
+        if (typeof e.gold === 'undefined') continue; // skip non-creature damageables (rocks, walls)
+        const d = Math.hypot(e.pos.x - enemy.pos.x, e.pos.z - enemy.pos.z);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (best) {
+        best.takeDamage(dmgDealt * 0.5, enemy.pos.x, enemy.pos.z, 4);
+        this.effects.flashSphere(best.pos.x, 1.0, best.pos.z, 0xfff7a0, 0.7, 0.18);
+      }
+    } else if (element === 'heal') {
+      // Lifesteal: 4% of player maxHP per enchanted hit so heal
+      // mages get a felt benefit even in long fights.
+      player.heal(player.maxHP * 0.04);
+    }
+    // Visual: enchant flash in the bound element's colour, on top of
+    // the regular hit flash so the player sees the enchant did fire.
+    this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, enchant.color, 0.7, 0.18);
   }
 
   _onEnemyDies(killer, enemy) {

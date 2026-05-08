@@ -101,6 +101,13 @@ export const CHARACTERS = [
       sword_2h: ['2H_Sword'],
     },
     weaponAffinity: { sword_1h: CLASS_AFFINITY, sword_2h: CLASS_AFFINITY },
+    // Knight's 1H sword + shield charges into a Block_Attack — a stunning
+    // shield bash that also halves incoming damage for the duration of
+    // its swing animation, so the player can deliberately tank a hit
+    // they see coming. See player.js `_triggerCharSuper`.
+    charSuper: {
+      sword_1h: { kind: 'shieldBash' },
+    },
   },
   {
     id: 'barbarian', kind: 'barbarian', label: 'Варвар',
@@ -110,10 +117,24 @@ export const CHARACTERS = [
       'Mug', 'Barbarian_Round_Shield',
     ],
     weaponNodes: {
-      axe_1h: ['1H_Axe', 'Barbarian_Round_Shield'],
+      // Barbarian wields two axes when holding the 1H slot — no shield.
+      // The off-hand axe is always visible (not just during the dual-
+      // wield charge attack); the right-hand main axe drives the normal
+      // slice and the left-hand axe joins in for the Dualwield_Slice
+      // charge attack.
+      axe_1h: ['1H_Axe', '1H_Axe_Offhand'],
       axe_2h: ['2H_Axe'],
     },
     weaponAffinity: { axe_1h: CLASS_AFFINITY, axe_2h: CLASS_AFFINITY },
+    // Per-character charge attack overrides. When the player holds the
+    // attack button past the charge threshold while wielding the keyed
+    // weapon, this kind-handler is invoked instead of the weapon's
+    // generic `superAttack` (or, for staff/wand, instead of the melee
+    // fallback). See player.js `_triggerCharSuper` for the per-kind
+    // implementations.
+    charSuper: {
+      axe_1h: { kind: 'dualSlice' },
+    },
   },
   {
     id: 'mage', kind: 'mage', label: 'Маг',
@@ -126,6 +147,15 @@ export const CHARACTERS = [
       wand: ['1H_Wand'],
     },
     weaponAffinity: { staff: CLASS_AFFINITY, wand: CLASS_AFFINITY },
+    // Mage's charge attack enchants the weapon with the player's current
+    // ability element so the next few attacks fire elemental shots
+    // instead of swinging into a 360° spin. Replaces the staff's melee
+    // fallback on hold (was the slice from the WEAPONS profile) — only
+    // the Mage gets the enchant per user spec.
+    charSuper: {
+      staff: { kind: 'enchant' },
+      wand: { kind: 'enchant' },
+    },
   },
   {
     id: 'rogue', kind: 'rogue', label: 'Разбойник',
@@ -143,6 +173,13 @@ export const CHARACTERS = [
     // damage bonus on the 1H sword (their dagger) and the wand,
     // both of which sit at the fast end of the cooldown table.
     weaponAffinity: { sword_1h: CLASS_AFFINITY, wand: CLASS_AFFINITY },
+    // Knife charge: lunge dash with a stab during the dash (not after) —
+    // forced crit, brief i-frames and a small gold steal per hit. Only
+    // applies to the Rogue's dagger; their wand keeps the generic mage-
+    // style spell+melee flow from WEAPONS.
+    charSuper: {
+      sword_1h: { kind: 'dashStrike' },
+    },
   },
 ];
 
@@ -225,6 +262,12 @@ const ANIM_MAP = {
   attack_spell_long:  'Spellcast_Long',
   attack_throw:       'Throw',
   attack_unarmed:     'Unarmed_Melee_Attack_Punch_A',
+  // Per-character charge attack clips (see CHARACTERS.charSuper):
+  attack_block:       'Block_Attack',         // Knight shield bash
+  attack_block_hit:   'Block_Hit',            // (reserved for later: hit while blocking)
+  attack_blocking:    'Blocking',             // (reserved for later: held block stance)
+  attack_spell_raise: 'Spellcast_Raise',      // Mage weapon enchant
+  dodge_forward:      'Dodge_Forward',        // Rogue dash strike body motion
   // legacy aliases — keep `attack_melee` and `attack_melee_heavy` working for
   // any callsite that hasn't been migrated to the per-weapon map yet.
   attack_melee:       '1H_Melee_Attack_Slice_Diagonal',
@@ -276,6 +319,11 @@ const UPPER_BODY_SLOT_PREFIXES = ['attack_'];
 // out the actual rotation and leaves a static pose).
 const FULL_BODY_SLOTS = new Set([
   'attack_2h_spinning',
+  // Rogue's dash strike — the dodge clip drives the legs forward as
+  // the actual lunge motion, so filtering it to upper-body would strip
+  // the dash itself out and the character would just stand still and
+  // stab.
+  'dodge_forward',
 ]);
 
 // Per-slot clip trimming ratios. KayKit's `2H_Melee_Attack_Spin` is a 2.4s
@@ -900,6 +948,11 @@ export function spawnCharacter(kind, {
     'attack_dual_chop', 'attack_dual_slice', 'attack_dual_stab',
     'attack_ranged', 'attack_spell', 'attack_spell_long', 'attack_throw',
     'attack_unarmed', 'attack_melee', 'attack_melee_heavy',
+    // Per-character charge attacks — these all fire once per press and
+    // need to clamp on the followthrough pose, otherwise LoopRepeat
+    // would re-trigger the windup mid-swing.
+    'attack_block', 'attack_block_hit', 'attack_blocking',
+    'attack_spell_raise', 'dodge_forward',
     'hit', 'hit_b', 'block',
   ]) {
     if (actions[k]) {
