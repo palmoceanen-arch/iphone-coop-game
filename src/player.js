@@ -842,6 +842,12 @@ export class Player {
           // — tap or charge — paints out front like a normal slice.
           const isFullSpin = as.arc >= Math.PI * 1.99;
           const tapDur = Math.min(as.swing * (1 - fxAt) * 0.55, 0.28);
+          // `as.slash.sweepRatio` lets a swing opt out of the painted-
+          // sweep animation entirely — used by the Knight shield bash
+          // (sweepRatio: 0) so the strip pops in fully formed and just
+          // fades, instead of tracing along its arc like a sword cut.
+          const defaultSweep = isFullSpin ? 0.92 : 0.70;
+          const sweepRatio = as.slash.sweepRatio ?? defaultSweep;
           this.effects.slashArc(
             this.smoothPos.x, 0, this.smoothPos.z, this.yaw,
             {
@@ -852,7 +858,7 @@ export class Player {
               color: as.ringColor ?? as.slash.color,
               height: as.slash.height,
               yawOffset: isFullSpin ? Math.PI : 0,
-              sweepRatio: isFullSpin ? 0.92 : 0.70,
+              sweepRatio,
             }
           );
         }
@@ -1058,11 +1064,15 @@ export class Player {
       swing: 0.65,
       impactAt: 0.55,
       range: 2.4,
-      arc: Math.PI * 0.55,
-      // No impact VFX at all — no swept slashArc, no solid flash.
-      // The user wants the bash to be animation-only so the strike
-      // visually reads as the shield itself making contact, without
-      // any trail or burst of light.
+      // π/2 wedge in front of the player — doubles as the damage
+      // hit-cone (read by `_processSwing`) and the slashArc shape.
+      arc: Math.PI / 2,
+      // White slashArc with `sweepRatio: 0` so the strip appears
+      // fully painted on the first frame and only fades over the
+      // swing's life — no swept blade-trace animation. Reads as a
+      // static line in front of the player at impact time, which
+      // is the visual the user wants for the shield bash.
+      slash: { color: 0xffffff, height: 1.05, sweepRatio: 0 },
       damageMult: 1.4,
       cooldown: 1.0,
       animKey: 'attack_block',

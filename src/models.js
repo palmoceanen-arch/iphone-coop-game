@@ -101,12 +101,16 @@ export const CHARACTERS = [
       sword_2h: ['2H_Sword'],
     },
     weaponAffinity: { sword_1h: CLASS_AFFINITY, sword_2h: CLASS_AFFINITY },
-    // Knight's 1H sword + shield charges into a Block_Attack — a stunning
-    // shield bash that also halves incoming damage for the duration of
-    // its swing animation, so the player can deliberately tank a hit
-    // they see coming. See player.js `_triggerCharSuper`.
+    // Knight's 1H weapons + shield charge into a Block_Attack — a
+    // stunning shield bash that also halves incoming damage for the
+    // duration of its swing animation, so the player can deliberately
+    // tank a hit they see coming. Both the 1H sword and the 1H axe
+    // share the same shield + bash combo (the WEAPONS axe_1h profile
+    // already toggles `Round_Shield` on the Knight body, so the visual
+    // is identical to sword + shield). See player.js `_triggerCharSuper`.
     charSuper: {
       sword_1h: { kind: 'shieldBash' },
+      axe_1h:   { kind: 'shieldBash' },
     },
   },
   {

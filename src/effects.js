@@ -417,7 +417,10 @@ export class Effects {
         // The default 0.70 reads as a snappy slice; the spin super passes
         // a higher value (closer to 1.0) so it sweeps almost the full
         // life and the fade-out tail is short.
-        const sweep = f._sweepRatio || 0.70;
+        // `??` (not `||`) so a caller passing `sweepRatio: 0` opts
+        // out of the painted-sweep animation entirely — used by the
+        // Knight shield bash to render its slash strip statically.
+        const sweep = f._sweepRatio ?? 0.70;
         let progress;
         if (t < sweep) {
           const p = t / sweep;
