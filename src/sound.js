@@ -106,12 +106,13 @@ const VOICE_CAP = {
 const SOUNDS_BASE = 'sounds/';
 
 // File names (under SOUNDS_BASE) for the three sample-based ambient layers.
-// All three are CC0 / Public Domain, sourced as documented in
-// public/sounds/LICENSE.txt:
-//   wind   — ngwoo "Winter Wind"  (~25s, Public Domain)
+// All three are CC0, sourced as documented in public/sounds/LICENSE.txt:
+//   wind   — rubberduck ambient_03 from "30 CC0 SFX loops" (~7s, broadband
+//            air-noise loop — picked because the spectrogram is clean
+//            broadband noise with no tonal/melodic content)
 //   water  — rubberduck loop_water_02 from "40 CC0 water/splash/slime SFX"
-//            (~7s, CC0)
-//   fire   — Wolfman007 "Fire Crackling" (~3.5s, CC0)
+//            (~7s)
+//   fire   — Wolfman007 "Fire Crackling" (~3.5s)
 // Each loads on `ensure()` and is then played as a single looping
 // AudioBufferSourceNode for the lifetime of the page. Loop seams are
 // long enough (or busy enough) that they aren't perceptible at the
@@ -579,9 +580,10 @@ export class Sound {
     };
 
     this._ambient = {
-      // Wind: "Winter Wind" by ngwoo (Public Domain). Lowpassed at 1800 Hz
-      // to clip the icy treble down to a soft meadow breeze.
-      wind:   sampleLayer(AMBIENT_SAMPLES.wind,  { lowpass: 1800 }),
+      // Wind: rubberduck ambient_03 from "30 CC0 SFX loops". Played raw
+      // (no lowpass) — the sample is already broadband air-noise, no icy
+      // treble to soften.
+      wind:   sampleLayer(AMBIENT_SAMPLES.wind),
       // Water: rubberduck loop_water_02 (CC0).
       water:  sampleLayer(AMBIENT_SAMPLES.water),
       // Fire: Wolfman007 fire-1 (CC0). Sample already contains crackles —
@@ -698,10 +700,10 @@ export class Sound {
     const world = ctx?.world ?? this._world;
 
     // Wind: always present, slightly louder during the day, dies at
-    // night. The "Winter Wind" sample already has natural gust dynamics
-    // baked into its 25-second loop, so we don't apply a procedural LFO
-    // on top — that would just fight the recording's own swells.
-    a.windTarget = 0.13 + dayWeight * 0.07;
+    // night. The sample is a steady broadband air-noise loop, so we keep
+    // the bus quiet by default and let dayWeight nudge it up — the loop
+    // would otherwise read as a constant hiss in the player's ear.
+    a.windTarget = 0.10 + dayWeight * 0.05;
 
     // Water: scan a denser ring around the player for water cells. The
     // previous 12-probe ring at 4 m / 10 m left a 6-8 m gap that small
