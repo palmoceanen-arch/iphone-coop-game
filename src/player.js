@@ -973,7 +973,7 @@ export class Player {
     const baseSwing  = sp?.swing      ?? wp.swing;
     const impactAt   = sp?.impactAt   ?? wp.impactAt;
     let range        = sp?.range      ?? wp.range;
-    let arc          = sp?.arc        ?? wp.arc;
+    const arc        = sp?.arc        ?? wp.arc;
     const slash      = sp?.slash      ?? wp.slash;
     const damageMult = sp?.damageMult ?? wp.damageMult;
     const cooldown   = sp?.cooldown   ?? wp.cooldown;
@@ -981,16 +981,20 @@ export class Player {
     const ringColor  = sp?.ringColor  ?? null;
 
     // Mage enchant reach boost — while a charge is bound, the next
-    // melee swing has its collision radius and VFX arc both doubled
-    // so the empowered strike sweeps through a noticeably bigger
-    // wedge. Pairs with the 3× weapon-mesh scale in
+    // melee swing has its collision *radius* doubled. The angular
+    // arc is intentionally left untouched: stock weapon arcs are
+    // already wide (~0.85π for swords/axes), so doubling them used
+    // to wrap the slashArc strip into an almost-full circle around
+    // the player, which read as a 360° spin rather than an
+    // empowered slash. Keeping arc at the weapon's stock value
+    // means the slashArc paints the normal wedge shape, just
+    // farther out — pairs with the 3× weapon-mesh scale in
     // `_applyEnchantVfx` (the visible blade looks like it has the
     // reach to back the bigger hitbox). Enchant only ever binds on
     // melee weapons (sword/axe slots in CHARACTERS.charSuper), so
     // staff / wand don't get boosted.
     if (this._weaponEnchant) {
       range *= 2;
-      arc   *= 2;
     }
 
     // The full multiplier — same one cooldown uses — speeds the
