@@ -407,6 +407,22 @@
       }
       .start-weapon-chip:hover { background: #20262e; }
       .start-weapon-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
+      /* Character picker. Uses the same chip language as the weapon
+         picker but laid out in a 2-column grid because the labels are
+         longer ("Скелет-разбой" etc.) and would clip in 3 narrow
+         columns. Active chip mirrors the highlight from the weapon
+         and color rows so the three pickers feel uniform. */
+      .start-character-grid {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;
+        margin: 4px 0 8px;
+      }
+      .start-character-chip {
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 6px 4px; border-radius: 6px; cursor: pointer;
+        font-size: 11px; font-weight: 600; text-align: center; line-height: 1.2;
+      }
+      .start-character-chip:hover { background: #20262e; }
+      .start-character-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
       .start-load-empty {
         background: #0e1218; border-radius: 12px; padding: 26px;
         text-align: center; opacity: 0.7; font-size: 13px; line-height: 1.6;

@@ -62,6 +62,15 @@ function posKey(x, z) {
 // transient timers (attackTimer, dashTimer, etc.) — only progression
 // fields are persisted. Re-applying the snapshot on load goes via
 // applyPlayerState() below.
+//
+// `character`, `color` and `capeColor` are cosmetic constructor-time
+// fields — they're decided when the Player is built (the start-menu
+// resolves them or they default per-slot) and can't be changed after
+// the skinned mesh has been instantiated. The load path therefore
+// reads these out of the save *before* `Game` constructs Players, then
+// `applyPlayerState` below restores the runtime/progression fields on
+// top. We still snapshot them here so the same JSON blob carries
+// everything a future "Загрузить" needs.
 function snapshotPlayer(p) {
   return {
     pos: { x: p.pos.x, z: p.pos.z },
@@ -78,6 +87,9 @@ function snapshotPlayer(p) {
     weaponKind: p._weaponKind || null,
     selectedCropKind: p.selectedCropKind || null,
     alive: !!p.alive,
+    character: p._characterId || null,
+    color: (typeof p._colorHex === 'number') ? p._colorHex : null,
+    capeColor: (typeof p._capeColorHex === 'number') ? p._capeColorHex : null,
   };
 }
 

@@ -16,7 +16,14 @@
 //     world before SaveSystem.apply() restores entity state on top.
 import * as THREE from 'three';
 import { PLAYER_COLOR_PRESETS, CAPE_COLOR_PRESETS } from './player.js';
-import { WEAPONS, applyCharacterTint, setEquippedWeapon, spawnCharacter } from './models.js';
+import {
+  WEAPONS,
+  CHARACTERS,
+  CHARACTER_BY_ID,
+  applyCharacterTint,
+  setEquippedWeapon,
+  spawnCharacter,
+} from './models.js';
 import { SaveSystem } from './saveSystem.js';
 
 // Default picks per slot — closest equivalents to the historical
@@ -26,6 +33,11 @@ import { SaveSystem } from './saveSystem.js';
 const DEFAULT_BODY_BY_INDEX = ['sky', 'red'];
 const DEFAULT_CAPE_BY_INDEX = ['royal', 'crimson'];
 const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
+// Default character per slot. Both default to Knight so the "click
+// Применить without touching anything" path matches the historical
+// behaviour where both players were the hardcoded Knight model. The
+// picker still lets either slot switch to one of the Skeleton variants.
+const DEFAULT_CHARACTER_BY_INDEX = ['knight', 'knight'];
 
 const SLOT_TITLES = ['Игрок 1', 'Игрок 2'];
 
@@ -59,10 +71,23 @@ export class StartMenu {
 
     this.onStart = null;
 
-    // Per-slot working state, mutated as the user clicks swatches / weapons.
+    // Per-slot working state, mutated as the user clicks swatches /
+    // weapons / characters. `character` is a CHARACTERS[].id (e.g.
+    // 'knight', 'skel_mage'); `color` and `cape` are PLAYER_COLOR_PRESETS
+    // / CAPE_COLOR_PRESETS .id values; `weapon` is a key from WEAPONS.
     this.config = [
-      { color: DEFAULT_BODY_BY_INDEX[0], cape: DEFAULT_CAPE_BY_INDEX[0], weapon: DEFAULT_WEAPON_BY_INDEX[0] },
-      { color: DEFAULT_BODY_BY_INDEX[1], cape: DEFAULT_CAPE_BY_INDEX[1], weapon: DEFAULT_WEAPON_BY_INDEX[1] },
+      {
+        character: DEFAULT_CHARACTER_BY_INDEX[0],
+        color: DEFAULT_BODY_BY_INDEX[0],
+        cape: DEFAULT_CAPE_BY_INDEX[0],
+        weapon: DEFAULT_WEAPON_BY_INDEX[0],
+      },
+      {
+        character: DEFAULT_CHARACTER_BY_INDEX[1],
+        color: DEFAULT_BODY_BY_INDEX[1],
+        cape: DEFAULT_CAPE_BY_INDEX[1],
+        weapon: DEFAULT_WEAPON_BY_INDEX[1],
+      },
     ];
     this.seed = initialSeed();
 
@@ -131,6 +156,7 @@ export class StartMenu {
     r.querySelector('#start-btn-confirm').addEventListener('click', () => {
       const seed = (this.seed && this.seed.length > 0) ? this.seed : randomSeed();
       const players = this.config.map((c) => ({
+        character: c.character,
         color: presetHex(PLAYER_COLOR_PRESETS, c.color),
         capeColor: presetHex(CAPE_COLOR_PRESETS, c.cape),
         weapon: c.weapon,
@@ -142,13 +168,24 @@ export class StartMenu {
     // Confirm button on the load view — visible only when a save was
     // detected. Hands the saved seed back to main.js so the world is
     // rebuilt deterministically before SaveSystem.apply() lays the
-    // saved entity state on top.
+    // saved entity state on top. We also pass back the per-player
+    // cosmetic snapshot (character / body / cape / weapon) — those are
+    // resolved at Player construction time, so the load path needs them
+    // *before* `Game` builds the players, not later in apply().
     r.querySelector('#start-btn-load-confirm')?.addEventListener('click', () => {
       const blob = SaveSystem.read();
       if (!blob) return;
       const seed = blob.seed || this.seed || randomSeed();
+      const players = Array.isArray(blob.players)
+        ? blob.players.map((p) => ({
+          character: (p && CHARACTER_BY_ID[p.character]) ? p.character : 'knight',
+          color: (p && typeof p.color === 'number') ? p.color : null,
+          capeColor: (p && typeof p.capeColor === 'number') ? p.capeColor : null,
+          weapon: (p && typeof p.weaponKind === 'string') ? p.weaponKind : null,
+        }))
+        : null;
       this.close();
-      this.onStart && this.onStart({ mode: 'load', seed });
+      this.onStart && this.onStart({ mode: 'load', seed, players });
     });
 
     window.addEventListener('resize', () => this._resizePreviews());
@@ -214,6 +251,38 @@ export class StartMenu {
     // Defer Three.js scene creation until after the canvas has been attached
     // so `clientWidth`/`clientHeight` are available; do it at the end of
     // _buildSlot() once all DOM is in place.
+
+    // ---- Character picker ----
+    // KayKit Adventurers / Skeletons are all `Rig_Medium` skinned meshes,
+    // so swapping characters means rebuilding the whole preview clone (we
+    // can't just re-skin in place). The handler below tears down the
+    // existing preview and recreates it with the new model so colour /
+    // weapon overrides re-apply against the freshly-spawned mesh.
+    const charLabel = document.createElement('div');
+    charLabel.className = 'start-section-label';
+    charLabel.textContent = 'Персонаж';
+    slot.appendChild(charLabel);
+    const charRow = document.createElement('div');
+    charRow.className = 'start-character-grid';
+    for (const def of CHARACTERS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'start-character-chip';
+      btn.setAttribute('data-character', def.id);
+      btn.title = def.label;
+      btn.textContent = def.label;
+      if (this.config[index].character === def.id) btn.classList.add('active');
+      btn.addEventListener('click', () => {
+        if (this.config[index].character === def.id) return;
+        this.config[index].character = def.id;
+        charRow.querySelectorAll('.start-character-chip').forEach((b) => {
+          b.classList.toggle('active', b.getAttribute('data-character') === def.id);
+        });
+        this._rebuildPreviewCharacter(index);
+      });
+      charRow.appendChild(btn);
+    }
+    slot.appendChild(charRow);
 
     // ---- Body colour swatches ----
     const bodyLabel = document.createElement('div');
@@ -331,12 +400,7 @@ export class StartMenu {
     camera.lookAt(0, 0.95, 0);
 
     const cfg = this.config[index];
-    const character = spawnCharacter('knight', {
-      tint: presetHex(PLAYER_COLOR_PRESETS, cfg.color),
-      capeTint: presetHex(CAPE_COLOR_PRESETS, cfg.cape),
-      scale: 0.9,
-      skinAware: true,
-    });
+    const character = this._spawnPreviewCharacter(cfg);
     // Centre on the canvas roughly at chest height; the model's origin sits
     // at the feet, so we don't translate vertically — the camera lookAt
     // already aims at the chest.
@@ -350,6 +414,43 @@ export class StartMenu {
     character.root.rotation.y = 0;
 
     this._resizePreview(index);
+  }
+
+  // Build a fresh preview character from the slot's current config.
+  // Shared between initial setup and the picker's character-swap path so
+  // both routes resolve the `skinAware` flag and tint args identically.
+  _spawnPreviewCharacter(cfg) {
+    const def = CHARACTER_BY_ID[cfg.character] || CHARACTERS[0];
+    return spawnCharacter(def.kind, {
+      tint: presetHex(PLAYER_COLOR_PRESETS, cfg.color),
+      capeTint: presetHex(CAPE_COLOR_PRESETS, cfg.cape),
+      scale: 0.9,
+      skinAware: !!def.skinAware,
+    });
+  }
+
+  // Tear down the existing preview character and respawn from the
+  // slot's current config. KayKit `Rig_Medium` skinned meshes can't be
+  // re-skinned in place — every clone is a fresh skinned mesh hierarchy
+  // — so on character switch we have to drop the old one and rebuild.
+  _rebuildPreviewCharacter(index) {
+    const p = this._previews[index];
+    if (!p) return;
+    const cfg = this.config[index];
+    if (p.character?.root) {
+      p.scene.remove(p.character.root);
+      // Detach from any animation mixer references — the GC will collect
+      // the skeleton clones once the scene drops them. Materials are
+      // per-instance (toon-cloned in spawnCharacter) so leaking them
+      // would compound across rapid character toggling; null the cache
+      // so the next applyCharacterTint walks the new mesh fresh.
+      p.character.mixer?.stopAllAction?.();
+    }
+    const character = this._spawnPreviewCharacter(cfg);
+    p.scene.add(character.root);
+    setEquippedWeapon(character, cfg.weapon);
+    character.root.rotation.y = 0;
+    p.character = character;
   }
 
   _applyTintToPreview(index) {

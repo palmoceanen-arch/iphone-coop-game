@@ -6,6 +6,8 @@ import {
   setEquippedWeapon,
   preloadWeapons,
   WEAPONS,
+  CHARACTER_BY_ID,
+  CHARACTERS,
 } from './models.js';
 import { runItemHook, ITEM_BY_ID, MAX_STACKS, healMultiplier } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
@@ -95,10 +97,14 @@ export class Player {
     // Optional cosmetic / loadout overrides from the start menu. `colorHex`
     // tints the character body + helmet; `capeColorHex` independently tints
     // the cape; `weaponKind` picks the starter weapon instead of the
-    // per-slot default.
+    // per-slot default; `character` picks one of the KayKit Adventurers /
+    // KayKit Skeletons player models from `CHARACTERS`.
     this._colorHex = (typeof opts.color === 'number') ? opts.color : null;
     this._capeColorHex = (typeof opts.capeColor === 'number') ? opts.capeColor : null;
     this._startWeapon = (typeof opts.weapon === 'string') ? opts.weapon : null;
+    this._characterId = (typeof opts.character === 'string' && CHARACTER_BY_ID[opts.character])
+      ? opts.character
+      : CHARACTERS[0].id;
 
     this.pos = { x: index === 0 ? -3 : 3, z: 4 };
     this.vel = { x: 0, z: 0 };
@@ -181,9 +187,18 @@ export class Player {
     const capeTint = (this._capeColorHex !== null) ? this._capeColorHex : null;
     const grp = new THREE.Group();
 
-    // Animated CC0 character model from KayKit (Knight) — clone of the shared
-    // skeleton + materials so each player can tint differently without leaking.
-    const character = spawnCharacter('knight', { tint, capeTint, scale: MODEL_SCALE, skinAware: true });
+    // Animated CC0 character model from KayKit — clone of the shared
+    // skeleton + materials so each player can tint differently without
+    // leaking. `_characterId` was resolved from `opts.character` in the
+    // constructor and falls back to the first entry in `CHARACTERS`
+    // (Knight) when no override was supplied.
+    const charDef = CHARACTER_BY_ID[this._characterId] || CHARACTERS[0];
+    const character = spawnCharacter(charDef.kind, {
+      tint,
+      capeTint,
+      scale: MODEL_SCALE,
+      skinAware: !!charDef.skinAware,
+    });
     this._character = character;
     grp.add(character.root);
 

@@ -27,6 +27,43 @@ const MANIFEST = {
   skel_minion: { url: 'models/Skeleton_Minion.glb' },
 };
 
+// Player-pickable characters surfaced in the start-menu picker. Each
+// entry references a kind in `MANIFEST` and carries the metadata the
+// UI / Player class need to render and tint that character correctly.
+//
+//   `id`           — stable key used in saves / Player opts.
+//   `kind`         — MANIFEST key passed into `spawnCharacter()`.
+//   `label`        — Russian display name shown in the picker.
+//   `skinAware`    — true ⇒ route the body tint through
+//                    `_attachSkinAwareTintShader` so the warm-toned
+//                    face / hand atlas pixels keep their natural
+//                    colour. Knight has tan skin pixels we want to
+//                    protect; the skeleton GLBs ship with cool/grey
+//                    bones the heuristic doesn't catch, so the flag
+//                    is harmless on them but documenting it per-row
+//                    keeps the intent explicit.
+//   `defaultWeapon`— starter weapon to suggest when the user picks
+//                    this character without touching the weapon row.
+//                    For skeletons the built-in `1H_Sword` /
+//                    `2H_Sword` / `Round_Shield` meshes that
+//                    `sword_1h` / `sword_2h` toggle don't exist, so
+//                    we point them at external attach-mesh weapons
+//                    (axe / staff / wand / dagger) that work on any
+//                    `Rig_Medium` skeleton.
+//
+// Asset license: Creative Commons Zero (CC0) — no attribution required.
+// Source: https://kaylousberg.itch.io/kaykit-adventurers
+//         https://kaylousberg.itch.io/kaykit-skeletons
+export const CHARACTERS = [
+  { id: 'knight',       kind: 'knight',       label: 'Рыцарь',        skinAware: true,  defaultWeapon: 'sword_1h' },
+  { id: 'skel_warrior', kind: 'skel_warrior', label: 'Скелет-воин',   skinAware: false, defaultWeapon: 'axe_1h' },
+  { id: 'skel_rogue',   kind: 'skel_rogue',   label: 'Скелет-разбой', skinAware: false, defaultWeapon: 'dagger' },
+  { id: 'skel_mage',    kind: 'skel_mage',    label: 'Скелет-маг',    skinAware: false, defaultWeapon: 'staff' },
+  { id: 'skel_minion',  kind: 'skel_minion',  label: 'Скелет-миньон', skinAware: false, defaultWeapon: 'axe_1h' },
+];
+
+export const CHARACTER_BY_ID = Object.fromEntries(CHARACTERS.map(c => [c.id, c]));
+
 // Static nature props (Kenney Nature Kit, CC0 — kenney.nl/assets/nature-kit).
 // Loaded once and cloned cheaply for each placed instance.
 const NATURE_MANIFEST = {
