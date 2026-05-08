@@ -1,23 +1,23 @@
-Bundled audio assets
-====================
+Bundled audio assets — all under Creative Commons Zero (CC0 1.0 Universal)
+=========================================================================
 
-Most of the `.ogg` files in this folder are CC0 (public domain) and
-require no attribution. The campfire ambient loop is CC-BY 3.0 — see
-below for the per-file licence breakdown.
+Every `.ogg` file in this folder is released into the public domain
+under CC0 — free to use in personal and commercial projects with no
+attribution required, though credit is always appreciated.
 
 Sources:
 
-  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio                       [CC0]
-  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds                   [CC0]
-  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/        [CC0]
-  qubodup — Fire Loop       https://opengameart.org/content/fire-loop                [CC-BY 3.0]
-  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx      [CC0]
-  rubberduck — 40 water sfx https://opengameart.org/content/40-cc0-water-splash-slime-sfx [CC0]
-  rubberduck — 30 SFX loops https://opengameart.org/content/30-cc0-sfx-loops         [CC0]
+  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio
+  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds
+  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/
+  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx
+  rubberduck — 40 water sfx https://opengameart.org/content/40-cc0-water-splash-slime-sfx
+  rubberduck — 30 SFX loops https://opengameart.org/content/30-cc0-sfx-loops
+  ambient_fire.ogg — supplied by the project owner under the same
+                     CC0 terms as the rest of the bundle.
 
-Licences:
-  CC0 1.0 Universal:      http://creativecommons.org/publicdomain/zero/1.0/
-  CC-BY 3.0 (Unported):   http://creativecommons.org/licenses/by/3.0/
+Licence: Creative Commons Zero, CC0
+         http://creativecommons.org/publicdomain/zero/1.0/
 
 File mapping
 ------------
@@ -39,11 +39,11 @@ enemy_voice_a.ogg     <- cute_02      (rubberduck, 80 CC0 creature SFX)
 enemy_voice_b.ogg     <- cute_07      (rubberduck, 80 CC0 creature SFX)
 enemy_voice_c.ogg     <- grunt_02     (rubberduck, 80 CC0 creature SFX)
 enemy_voice_d.ogg     <- hurt_03      (rubberduck, 80 CC0 creature SFX)
-ambient_wind.ogg      <- ambient_03   (rubberduck, 30 CC0 SFX loops)        [CC0]
-ambient_water.ogg     <- loop_water_02 (rubberduck, 40 CC0 water/splash SFX) [CC0]
-ambient_fire.ogg      <- qubodupFireLoop.ogg                                  [CC-BY 3.0]
-                         Author: qubodup — https://opengameart.org/content/fire-loop
-                         Re-encoded to mono 44.1 kHz OGG Vorbis q=4.
+ambient_wind.ogg      <- ambient_03    (rubberduck, 30 CC0 SFX loops)
+ambient_water.ogg     <- loop_water_02 (rubberduck, 40 CC0 water/splash SFX)
+ambient_fire.ogg      <- supplied by the project owner; re-encoded from
+                         the original 20 s stereo MP3 to mono 44.1 kHz
+                         OGG Vorbis q=4 to match the rest of the bundle.
 
 The four enemy_voice_*.ogg files were normalised to roughly -18 LUFS
 peak so they sit ~6 dB under the hit_flesh impact (which leads on the
@@ -65,6 +65,3 @@ Ambient nature layers split into sample-based and procedural:
                           without locking the soundscape to a specific
                           real-world location.
 
-Attribution string for the CC-BY-licenced campfire loop, embedded in
-the game credits: "Fire Loop by qubodup, CC-BY 3.0 — https://openga
-meart.org/content/fire-loop".

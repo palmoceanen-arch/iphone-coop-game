@@ -112,10 +112,10 @@ const SOUNDS_BASE = 'sounds/';
 //            is clean broadband noise with no tonal/melodic content)
 //   water  — rubberduck loop_water_02 from "40 CC0 water/splash/slime SFX"
 //            (~7s, CC0)
-//   fire   — qubodup "Fire Loop" (~5s, CC-BY 3.0; attribution recorded
-//            in public/sounds/LICENSE.txt) — fuller body and a slow
-//            crackle pattern that reads as a real campfire instead of
-//            the previous tiny popping sample
+//   fire   — supplied by the project owner (~20s, CC0; re-encoded from
+//            stereo MP3 to mono OGG q=4) — long enough that the loop
+//            seam isn't perceptible at the gain levels updateAmbient
+//            drives the campfire bus to
 // Each loads on `ensure()` and is then played as a single looping
 // AudioBufferSourceNode for the lifetime of the page. Loop seams are
 // long enough (or busy enough) that they aren't perceptible at the
@@ -589,8 +589,9 @@ export class Sound {
       wind:   sampleLayer(AMBIENT_SAMPLES.wind),
       // Water: rubberduck loop_water_02 (CC0).
       water:  sampleLayer(AMBIENT_SAMPLES.water),
-      // Fire: qubodup "Fire Loop" (CC-BY 3.0). Sample already contains
-      // crackles — no separate procedural crackle scheduler needed.
+      // Fire: project-supplied 20s campfire recording (CC0). Sample
+      // already contains crackles — no procedural crackle scheduler
+      // needed.
       fire:   sampleLayer(AMBIENT_SAMPLES.fire),
       // Forest hum stays procedural: bandpass on shaped brown noise gives
       // a generic leaf-rustle/insect-chorus tail that mixes under any
