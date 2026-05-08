@@ -342,6 +342,15 @@ export class Player {
   setWeapon(weaponKind) {
     const profile = WEAPONS[weaponKind];
     if (!profile) return;
+    // If a Mage enchant VFX is currently painted onto the old
+    // attachment / extras, tear it down before they're detached. The
+    // material clones we swapped in are about to lose their last live
+    // reference; restoring puts the originals back and disposes the
+    // clones so the next attachment (loaded fresh by setEquippedWeapon)
+    // starts from a clean baseline. The enchant *state* is preserved on
+    // `_weaponEnchant`, so the update tick will re-apply the VFX onto
+    // the new attachment as soon as it's in place.
+    if (this._enchantVfx) this._restoreEnchantVfx();
     this._weaponKind = weaponKind;
     this.weaponProfile = profile;
     this._attackActionKey = profile.attackAnim;
@@ -541,6 +550,19 @@ export class Player {
       if (this._weaponEnchant.ttl <= 0 || this._weaponEnchant.hits <= 0) {
         this._weaponEnchant = null;
       }
+    }
+    // Mage enchant VFX sync — keeps the painted weapon (tinted +
+    // 4× scale) in lockstep with the `_weaponEnchant` state. The
+    // state can clear from any of three places (TTL expiry above,
+    // `die()`, or game.js when `hits` drops to 0 on a connecting
+    // hit), so handling the transition here in the tick keeps every
+    // call site free of bookkeeping. Apply transitions whenever the
+    // attachment is present — if the weapon was just swapped, the
+    // new attachment may not have loaded yet; we re-check next frame.
+    if (this._weaponEnchant && !this._enchantVfx) {
+      this._applyEnchantVfx();
+    } else if (!this._weaponEnchant && this._enchantVfx) {
+      this._restoreEnchantVfx();
     }
 
     // Tick the deferred staff/wand spell. The bolt was scheduled in
@@ -1199,6 +1221,81 @@ export class Player {
     this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, color, 1.4, 0.40);
     this.effects?.flashSphere?.(this.pos.x, 1.1, this.pos.z, color, 1.2, 0.25);
     this.sound?.tone?.({ freq: 720, type: 'sine', dur: 0.35, gain: 0.28, slide: 220 });
+    // Tint + scale the attached melee weapon to telegraph the bound
+    // enchant on the weapon itself — the next swing visibly carries
+    // the element. The update tick keeps this synced to the state
+    // and tears it down when the enchant clears.
+    this._applyEnchantVfx();
+  }
+
+  // Paint the Mage's bound enchant onto the equipped weapon mesh:
+  // colour every Mesh's material(s) toward the enchant colour and
+  // scale the attachment by 4× so the next swing visibly carries
+  // the element. The original materials and scales are stashed on
+  // `_enchantVfx` so `_restoreEnchantVfx()` can put them back when
+  // the enchant is consumed, expires or the player swaps weapons.
+  //
+  // We clone each mesh's material before tinting so the donor source
+  // material (shared across all clones of the same weapon GLB — e.g.
+  // every player using a Knight 1H sword) stays pristine. Without the
+  // clone, painting one player's enchant would re-colour every other
+  // player's identical weapon too.
+  _applyEnchantVfx() {
+    if (this._enchantVfx) return;
+    const enchant = this._weaponEnchant;
+    if (!enchant) return;
+    const ch = this._character;
+    if (!ch) return;
+    const targets = [];
+    if (ch._equippedAttachment) targets.push(ch._equippedAttachment);
+    if (Array.isArray(ch._equippedExtras)) targets.push(...ch._equippedExtras);
+    if (targets.length === 0) return;
+    const matSwaps = [];
+    const scaleSwaps = [];
+    const tintColor = new THREE.Color(enchant.color);
+    for (const root of targets) {
+      // Stash and apply scale at the attachment root so children
+      // (blade, hilt, guard …) all grow uniformly. 4× per the spec.
+      const origScale = root.scale.clone();
+      root.scale.set(origScale.x * 4, origScale.y * 4, origScale.z * 4);
+      scaleSwaps.push({ root, origScale });
+      root.traverse((obj) => {
+        if (!obj.isMesh || !obj.material) return;
+        const orig = obj.material;
+        const list = Array.isArray(orig) ? orig : [orig];
+        const cloned = list.map((m) => {
+          const c = m.clone();
+          if (c.color && typeof c.color.copy === 'function') {
+            c.color.copy(tintColor);
+          }
+          if (c.emissive && typeof c.emissive.copy === 'function') {
+            c.emissive.copy(tintColor);
+            if ('emissiveIntensity' in c) c.emissiveIntensity = 1.6;
+          }
+          return c;
+        });
+        obj.material = Array.isArray(orig) ? cloned : cloned[0];
+        matSwaps.push({ mesh: obj, orig });
+      });
+    }
+    this._enchantVfx = { matSwaps, scaleSwaps };
+  }
+
+  _restoreEnchantVfx() {
+    const vfx = this._enchantVfx;
+    if (!vfx) return;
+    for (const { root, origScale } of vfx.scaleSwaps) {
+      root.scale.copy(origScale);
+    }
+    for (const { mesh, orig } of vfx.matSwaps) {
+      // Dispose the clones we swapped in so they don't leak GPU
+      // resources — these are not the originals, those are stashed
+      // in `orig`.
+      const cur = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of cur) m?.dispose?.();
+      mesh.material = orig;
+    }
+    this._enchantVfx = null;
   }
 
   // Begin the staff/wand tap-spell. Plays the cast animation + SFX
