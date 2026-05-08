@@ -88,6 +88,14 @@ const MODEL_SCALE = 0.6;
 // reads as "I'm holding for the spin".
 const CHARGE_THRESHOLD = 0.30;
 
+// Wind-up time for the staff/wand tap-spell. The cast animation and
+// SFX play immediately on press, but the actual projectile is held
+// for this long so the bolt visibly leaves the weapon mid-cast
+// instead of materialising at the same instant the button is hit.
+// Tuned to fall under attack-cooldown for both staff and wand
+// (~0.55s / 0.42s) so it never delays a follow-up tap.
+const SPELL_CAST_DELAY = 0.20;
+
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
     this.index = index;
@@ -351,6 +359,9 @@ export class Player {
     this._swingHitCallback = attackOnEnemyCallback;
     this._combatCtx = combatCtx;
     if (!this.alive) {
+      // Cancel any spell that was mid-wind-up — dying mid-cast must
+      // not fire the bolt 0.2s later when the player can't react.
+      this._pendingRangedShot = null;
       // Keep mesh visible to show death pose; just freeze physics & animation.
       this._character?.mixer?.update(dt);
       return;
@@ -402,6 +413,16 @@ export class Player {
     this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     this.abilityCd = Math.max(0, this.abilityCd - dt);
     if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
+
+    // Tick the deferred staff/wand spell. The bolt was scheduled in
+    // `_triggerRangedAttack`; we hold it for ~0.2s so the cast
+    // animation reads before the projectile appears, then fire it.
+    if (this._pendingRangedShot) {
+      this._pendingRangedShot.delay -= dt;
+      if (this._pendingRangedShot.delay <= 0) {
+        this._firePendingRangedShot();
+      }
+    }
 
     // Dash trigger
     if (intent.dash && this.dashCooldown <= 0) {
@@ -708,13 +729,22 @@ export class Player {
     }
   }
 
-  // Fire the staff/wand tap-spell — a small homing projectile that picks
-  // up the closest real enemy within 12m (auto-aim mirrors the icebolt
-  // ability) and routes its on-hit damage through the regular swing
-  // pipeline so item synergies (crit, echo, leech, berserk, …) apply
-  // exactly as they would on a melee swing. The visible projectile
-  // adopts the player's cape colour so the two players' bolts read as
-  // distinct on-screen even at range.
+  // Begin the staff/wand tap-spell. Plays the cast animation + SFX
+  // immediately and *defers* the actual projectile spawn by
+  // SPELL_CAST_DELAY seconds (see below), so the bolt visibly leaves
+  // the weapon mid-cast instead of popping out the moment the button
+  // is released. Auto-aim and direction are locked at trigger time
+  // (mirrors the icebolt ability — the player commits to a target on
+  // tap, the spell tracks toward where that target was), but the
+  // muzzle position is recomputed at fire time so the bolt always
+  // emerges from the player's current weapon-hand offset even if the
+  // player has been moving during the wind-up.
+  //
+  // Damage is routed through the regular swing pipeline so item
+  // synergies (crit, echo, leech, berserk, …) apply exactly as they
+  // would on a melee swing. The visible projectile adopts the
+  // player's cape colour so the two players' bolts read as distinct
+  // on-screen even at range.
   _triggerRangedAttack(combatCtx) {
     const wp = this.weaponProfile;
     const ra = wp?.rangedAttack;
@@ -769,9 +799,38 @@ export class Player {
     }
 
     // Cast SFX — distinct, lighter pitch than the melee whoosh so the
-    // ear can tell the two attack modes apart. Volume scales with the
-    // weapon's swing length so a wand spell pops more than a staff cast.
+    // ear can tell the two attack modes apart. Plays now so the wind-
+    // up is audibly tied to the button press rather than the bolt
+    // appearing 0.2s later.
     this.sound.tone?.({ freq: 760, type: 'triangle', dur: 0.22, gain: 0.22, slide: -180 });
+
+    // Schedule the actual bolt for ~0.20s after the press so the cast
+    // animation visibly leads the spell. The spawn is processed in
+    // `update()` as soon as the delay ticks down to zero — see
+    // `_firePendingRangedShot`. We snapshot ra/dir/color here so the
+    // shot is unaffected by a weapon swap or item pickup mid-wind-up.
+    this._pendingRangedShot = {
+      delay: SPELL_CAST_DELAY,
+      ra,
+      dx, dz,
+      color,
+    };
+  }
+
+  // Fire the deferred staff/wand bolt scheduled in
+  // `_triggerRangedAttack`. Computes the muzzle position from the
+  // player's *current* pos (so a player moving during the wind-up
+  // sees the bolt leave their hand, not where they used to be) but
+  // uses the *snapshot* direction so the shot lands where the player
+  // committed when they tapped.
+  _firePendingRangedShot() {
+    const shot = this._pendingRangedShot;
+    if (!shot) return;
+    this._pendingRangedShot = null;
+    const ctx = this._combatCtx;
+    if (!ctx?.spawnAbilityProjectile) return;
+
+    const { ra, dx, dz, color } = shot;
 
     // Muzzle position — anchored to the weapon hand instead of the
     // character's centre. The character holds staff/wand in their
@@ -798,7 +857,7 @@ export class Player {
     // profile's damage scaling applies — see game.js for the lookup.
     const player = this;
     const swingHit = this._swingHitCallback;
-    combatCtx.spawnAbilityProjectile({
+    ctx.spawnAbilityProjectile({
       x: muzzleX,
       z: muzzleZ,
       y: muzzleY,
