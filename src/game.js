@@ -1625,8 +1625,12 @@ export class Game {
     // Weapon profile scales base damage — a 2H battle axe hits much harder
     // than a wand, but the wand swings ~40% faster so DPS stays comparable.
     // The active-swing snapshot wins over the weapon profile so the spin
-    // super's higher damageMult applies for that swing only.
-    const weaponMult = player._activeSwing?.damageMult
+    // super's higher damageMult applies for that swing only. Staff/wand
+    // tap-fire spell bolts set `_activeRanged` for the duration of the
+    // hit callback so the rangedAttack profile's damage scaling lands
+    // in this lookup instead of the melee profile's.
+    const weaponMult = player._activeRanged?.damageMult
+      ?? player._activeSwing?.damageMult
       ?? player.weaponProfile?.damageMult
       ?? 1.0;
     // Class affinity: each Adventurer's CHARACTERS row lists the weapon
@@ -1923,9 +1927,21 @@ export class Game {
       }
     };
 
+    // Combat ctx — passed to player.update so the staff/wand tap-fire
+    // spell can spawn a homing projectile and read the strict
+    // living-enemies list for auto-aim. The melee swing path doesn't
+    // touch this (it routes through the swingHit callback above).
+    const combatCtx = {
+      livingEnemies: this.enemies,
+      spawnAbilityProjectile: (opts) => {
+        const ap = new AbilityProjectile(this.scene, opts);
+        this.abilityProjectiles.push(ap);
+      },
+    };
+
     // Update players
-    this.players[0].update(dt, i1, this.players[1], damageables, swingHit);
-    this.players[1].update(dt, i2, this.players[0], damageables, swingHit);
+    this.players[0].update(dt, i1, this.players[1], damageables, swingHit, combatCtx);
+    this.players[1].update(dt, i2, this.players[0], damageables, swingHit, combatCtx);
 
     // Altar interaction — if a player just pressed interact next to an
     // altar, open the altar UI and consume the press so a nearby chest

@@ -342,8 +342,14 @@ export class Player {
     if (this._reviveBar) this._reviveBar.visible = false;
   }
 
-  update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback) {
+  update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback, combatCtx = null) {
     this._lastIntent = intent;
+    // Stash the combat callback + ctx so off-cycle hit paths (e.g. the
+    // staff/wand ranged projectile's onHitEnemy) can route damage
+    // through the same per-hit pipeline a normal swing uses, instead
+    // of re-implementing the item-hook + jitter + affinity formula.
+    this._swingHitCallback = attackOnEnemyCallback;
+    this._combatCtx = combatCtx;
     if (!this.alive) {
       // Keep mesh visible to show death pose; just freeze physics & animation.
       this._character?.mixer?.update(dt);
@@ -412,18 +418,56 @@ export class Player {
       runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
-    // Attack trigger — split into "tap" and "charge" paths. Weapons with
-    // a `superAttack` profile (Greatsword, Battle Axe) defer their tap
-    // attack to release-time so the same button can either tap-swing or
-    // charge into the spin super; weapons without one fire instantly on
-    // the press edge for snappy combat.
+    // Attack trigger — three button-handling modes, picked by the weapon
+    // profile:
+    //
+    //   1. Weapons with a `rangedAttack` profile (staff, wand): tap fires
+    //      the homing spell bolt; hold past `CHARGE_THRESHOLD` falls
+    //      through to the melee swing the weapon profile defines. Tap
+    //      and hold are decided on release vs hold-time, mirroring the
+    //      sword_2h super flow but with the meanings swapped (here the
+    //      *tap* is the spell, the *hold* is the heavy hit).
+    //   2. Weapons with a `superAttack` profile (greatsword, battle axe):
+    //      tap fires the normal slice on release, hold past threshold
+    //      fires the spin super. Same charge bookkeeping as case 1.
+    //   3. Everything else (sword, axe, …): instant tap-to-swing on the
+    //      press edge so basic combat stays snappy.
     const wp = this.weaponProfile;
+    const wpHasRanged = !!wp.rangedAttack;
     const wpHasSuper = !!wp.superAttack;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
 
-    if (wpHasSuper) {
+    if (wpHasRanged) {
+      if (isHeld) {
+        if (!wasHeld) {
+          // Press edge: start charging. Don't fire the spell yet — we
+          // don't know if this will turn out to be a tap (spell) or a
+          // hold (melee swing).
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          // Auto-fire the melee swing the moment the hold crosses the
+          // threshold so the player doesn't have to release to trigger
+          // it — same UX feel as the sword_2h spin super.
+          if (!this._chargeFired && this._chargeTime >= CHARGE_THRESHOLD && this.attackTimer <= 0) {
+            this._triggerAttack(false);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        // Release edge. If the melee swing already auto-fired, do
+        // nothing — we already swung. Otherwise this was a short tap,
+        // fire the spell bolt (deferred from the press edge).
+        if (!this._chargeFired && this.attackTimer <= 0) {
+          this._triggerRangedAttack(combatCtx);
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
+      }
+    } else if (wpHasSuper) {
       if (isHeld) {
         if (!wasHeld) {
           // Press edge: start charging. Don't fire normal attack yet —
@@ -662,6 +706,113 @@ export class Player {
       action.setEffectiveWeight(10.0);
       action.fadeIn(0.05).play();
     }
+  }
+
+  // Fire the staff/wand tap-spell — a small homing projectile that picks
+  // up the closest real enemy within 12m (auto-aim mirrors the icebolt
+  // ability) and routes its on-hit damage through the regular swing
+  // pipeline so item synergies (crit, echo, leech, berserk, …) apply
+  // exactly as they would on a melee swing. The visible projectile
+  // adopts the player's cape colour so the two players' bolts read as
+  // distinct on-screen even at range.
+  _triggerRangedAttack(combatCtx) {
+    const wp = this.weaponProfile;
+    const ra = wp?.rangedAttack;
+    if (!ra) return;
+    if (!combatCtx?.spawnAbilityProjectile) return;
+
+    // Same attack-speed scaling the melee swing uses, so the
+    // attack-speed upgrade and the berserk-on-low-HP item still affect
+    // the spell's effective DPS.
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    this.attackTimer = (ra.cooldown ?? wp.cooldown) * attackCdMult;
+
+    // Auto-aim. Default to the player's facing; if there's a real
+    // living enemy within 12m, snap the bolt at the closest one and
+    // turn the player to face them so the cast animation reads right.
+    let dx = this.facing.x, dz = this.facing.z;
+    const livingEnemies = combatCtx.livingEnemies;
+    if (Array.isArray(livingEnemies) && livingEnemies.length > 0) {
+      const MAX_AIM_D2 = 144; // 12m
+      let bestD2 = MAX_AIM_D2, best = null;
+      for (const e of livingEnemies) {
+        if (!e?.alive) continue;
+        const ex = e.pos.x - this.pos.x, ez = e.pos.z - this.pos.z;
+        const d2 = ex * ex + ez * ez;
+        if (d2 < bestD2) { bestD2 = d2; best = e; }
+      }
+      if (best) {
+        const tdx = best.pos.x - this.pos.x, tdz = best.pos.z - this.pos.z;
+        const len = Math.hypot(tdx, tdz) || 1;
+        dx = tdx / len; dz = tdz / len;
+        this.facing.x = dx; this.facing.z = dz;
+      }
+    }
+
+    // Cape colour is set per-player when the character is built; fall
+    // back to the player's body tint and finally to a neutral spell
+    // blue so we never spawn a black projectile.
+    const color = this._capeColorHex ?? this._colorHex ?? 0x9adfff;
+
+    // Cast animation — short forward jab/cast clip, scaled to the
+    // ranged profile's `swing` so the spell gesture is visibly
+    // shorter than the heavy melee sweep.
+    const animKey = ra.attackAnim ?? 'attack_spell';
+    const swing = ra.swing ?? 0.5;
+    const action = this._character?.actions?.[animKey];
+    if (action) {
+      action.reset();
+      const srcDur = Math.max(action.getClip().duration, 0.05);
+      action.timeScale = srcDur / Math.max(swing, 0.1);
+      action.setEffectiveWeight(10.0);
+      action.fadeIn(0.05).play();
+    }
+
+    // Cast SFX — distinct, lighter pitch than the melee whoosh so the
+    // ear can tell the two attack modes apart. Volume scales with the
+    // weapon's swing length so a wand spell pops more than a staff cast.
+    this.sound.tone?.({ freq: 760, type: 'triangle', dur: 0.22, gain: 0.22, slide: -180 });
+
+    // Tiny muzzle flash so even a missed cast reads on-screen.
+    const muzzleX = this.pos.x + dx * 0.6;
+    const muzzleZ = this.pos.z + dz * 0.6;
+    this.effects?.flashSphere?.(muzzleX, 1.0, muzzleZ, color, 0.35, 0.12);
+    this.effects?.burst?.(muzzleX, 1.0, muzzleZ, color, 4, 2, 0.16);
+
+    // Damage is computed at hit-time inside the swingHit callback, so
+    // we set the projectile's own damage to 0 and rely on onHitEnemy
+    // to drive the per-hit pipeline (item hooks, crit, jitter, …).
+    // `_activeRanged.damageMult` is read by Game._onPlayerHitsEnemy in
+    // place of the melee `_activeSwing.damageMult` so the rangedAttack
+    // profile's damage scaling applies — see game.js for the lookup.
+    const player = this;
+    const swingHit = this._swingHitCallback;
+    combatCtx.spawnAbilityProjectile({
+      x: muzzleX,
+      z: muzzleZ,
+      dirX: dx, dirZ: dz,
+      speed: ra.speed,
+      life: ra.life,
+      radius: ra.radius,
+      color,
+      trailColor: color,
+      damage: 0,
+      knockback: ra.knockback ?? 3,
+      aoeRadius: 0,
+      aoeDamage: 0,
+      aoeKnockback: 0,
+      source: player,
+      onHitEnemy(target) {
+        if (!swingHit || !target?.alive) return;
+        const prev = player._activeRanged;
+        player._activeRanged = { damageMult: ra.damageMult };
+        try {
+          swingHit(player, target);
+        } finally {
+          player._activeRanged = prev;
+        }
+      },
+    });
   }
 
   _processSwing(enemies, callback) {
