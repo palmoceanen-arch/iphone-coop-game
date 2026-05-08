@@ -1706,11 +1706,19 @@ export class Game {
   }
 
   // Apply a Mage weapon-enchant element on a connecting hit. Element
-  // is bound at cast time (Player._triggerEnchant) and resolves to one
-  // of fire/ice/lightning/heal/arcane based on the player's currently-
-  // slotted ability — the +30% damage bonus is already baked in via
-  // ctx.dmgMult in the hit caller, so each branch here just layers a
-  // distinct on-hit effect on top.
+  // is bound at cast time (Player._triggerEnchant) from the player's
+  // currently-slotted ability, and resolves to one of:
+  //   fire      — burn DoT
+  //   ice       — freeze (the ONLY freeze/stun source from enchant —
+  //               keeps the blue stun visual exclusive to icebolt)
+  //   lightning — chain wave to nearby living enemies (no stun, no
+  //               slow) — purely a damage spread
+  //   wind      — extra knockback impulse (no stun, no slow)
+  //   timeslow  — apply _slow (no freeze, no stun)
+  //   heal      — lifesteal back to the player
+  // The +30% enchant damage bonus is already baked into the primary
+  // hit via ctx.dmgMult in the caller, so each branch here just
+  // layers its distinct on-hit effect on top.
   _applyWeaponEnchantEffect(player, enemy, enchant, dmgDealt) {
     const element = enchant.element;
     if (element === 'fire') {
@@ -1720,21 +1728,37 @@ export class Game {
     } else if (element === 'ice') {
       enemy._frozen = Math.max(enemy._frozen || 0, 1.0);
     } else if (element === 'lightning') {
-      // Brief stun + a chain to one nearest other living enemy for
-      // half damage. Only chains between real creatures (the same
-      // filter the chainLightning ability uses).
-      enemy._frozen = Math.max(enemy._frozen || 0, 0.4);
-      let best = null, bestD = 4;
+      // Electric wave: damage every other living enemy within `radius`
+      // around the primary hit, no stun, no slow. The wave is purely a
+      // damage spread — visually a yellow ring at the impact + a
+      // flashSphere on each arc target.
+      const radius = 3.5;
+      let zapped = 0;
       for (const e of (this._damageables || this.enemies)) {
         if (!e || !e.alive || e === enemy) continue;
-        if (typeof e.gold === 'undefined') continue; // skip non-creature damageables (rocks, walls)
+        if (typeof e.gold === 'undefined') continue; // skip non-creature damageables
         const d = Math.hypot(e.pos.x - enemy.pos.x, e.pos.z - enemy.pos.z);
-        if (d < bestD) { bestD = d; best = e; }
+        if (d > radius) continue;
+        e.takeDamage(dmgDealt * 0.4, enemy.pos.x, enemy.pos.z, 3);
+        if (!e.alive) e._deathCredit = player;
+        this.effects.flashSphere(e.pos.x, 1.0, e.pos.z, 0xfff7a0, 0.5, 0.15);
+        zapped++;
       }
-      if (best) {
-        best.takeDamage(dmgDealt * 0.5, enemy.pos.x, enemy.pos.z, 4);
-        this.effects.flashSphere(best.pos.x, 1.0, best.pos.z, 0xfff7a0, 0.7, 0.18);
+      if (zapped > 0) {
+        this.effects.ring(enemy.pos.x, 0.05, enemy.pos.z, 0xfff7a0, radius, 0.25);
       }
+    } else if (element === 'wind') {
+      // Wind enchant — punch the enemy back along the player→enemy
+      // axis with an extra knockback impulse, on top of the swing's
+      // baseline kb that already landed via takeDamage(... , 10).
+      const dx = enemy.pos.x - player.pos.x;
+      const dz = enemy.pos.z - player.pos.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const extraKb = 18;
+      enemy.knockback.x += (dx / len) * extraKb;
+      enemy.knockback.z += (dz / len) * extraKb;
+    } else if (element === 'timeslow') {
+      enemy._slow = Math.max(enemy._slow || 0, 2.0);
     } else if (element === 'heal') {
       // Lifesteal: 4% of player maxHP per enchanted hit so heal
       // mages get a felt benefit even in long fights.

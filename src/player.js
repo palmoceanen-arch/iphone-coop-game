@@ -1226,10 +1226,21 @@ export class Player {
     if (!ability) return;
     if (this.abilityCd > 0) return;
     const element = ability.element || 'arcane';
+    // Per-element enchant tint. Each entry is paired with an on-hit
+    // effect in game.js _applyWeaponEnchantEffect:
+    //   fire      \u2014 burn DoT
+    //   ice       \u2014 freeze (the *only* freeze/stun source from enchant)
+    //   lightning \u2014 chain wave to nearby (no stun, no slow)
+    //   wind      \u2014 extra knockback (no stun, no slow)
+    //   timeslow  \u2014 slow on hit (no freeze, no stun)
+    //   heal      \u2014 lifesteal
+    //   arcane    \u2014 fallback colour, no special on-hit
     const colors = {
       fire:      0xff8a30,
       ice:       0x9dfcff,
       lightning: 0xfff7a0,
+      wind:      0xffffff,
+      timeslow:  0xc9a3ff,
       heal:      0x7aff8a,
       arcane:    0xc9a3ff,
     };
