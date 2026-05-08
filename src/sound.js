@@ -107,12 +107,15 @@ const SOUNDS_BASE = 'sounds/';
 
 // File names (under SOUNDS_BASE) for the three sample-based ambient layers.
 // All three are CC0, sourced as documented in public/sounds/LICENSE.txt:
-//   wind   — rubberduck ambient_03 from "30 CC0 SFX loops" (~7s, broadband
-//            air-noise loop — picked because the spectrogram is clean
-//            broadband noise with no tonal/melodic content)
+//   wind   — rubberduck ambient_03 from "30 CC0 SFX loops" (~7s, CC0,
+//            broadband air-noise loop — picked because the spectrogram
+//            is clean broadband noise with no tonal/melodic content)
 //   water  — rubberduck loop_water_02 from "40 CC0 water/splash/slime SFX"
-//            (~7s)
-//   fire   — Wolfman007 "Fire Crackling" (~3.5s)
+//            (~7s, CC0)
+//   fire   — qubodup "Fire Loop" (~5s, CC-BY 3.0; attribution recorded
+//            in public/sounds/LICENSE.txt) — fuller body and a slow
+//            crackle pattern that reads as a real campfire instead of
+//            the previous tiny popping sample
 // Each loads on `ensure()` and is then played as a single looping
 // AudioBufferSourceNode for the lifetime of the page. Loop seams are
 // long enough (or busy enough) that they aren't perceptible at the
@@ -586,8 +589,8 @@ export class Sound {
       wind:   sampleLayer(AMBIENT_SAMPLES.wind),
       // Water: rubberduck loop_water_02 (CC0).
       water:  sampleLayer(AMBIENT_SAMPLES.water),
-      // Fire: Wolfman007 fire-1 (CC0). Sample already contains crackles —
-      // no separate procedural crackle scheduler needed.
+      // Fire: qubodup "Fire Loop" (CC-BY 3.0). Sample already contains
+      // crackles — no separate procedural crackle scheduler needed.
       fire:   sampleLayer(AMBIENT_SAMPLES.fire),
       // Forest hum stays procedural: bandpass on shaped brown noise gives
       // a generic leaf-rustle/insect-chorus tail that mixes under any
@@ -705,28 +708,38 @@ export class Sound {
     // would otherwise read as a constant hiss in the player's ear.
     a.windTarget = 0.10 + dayWeight * 0.05;
 
-    // Water: scan a denser ring around the player for water cells. The
-    // previous 12-probe ring at 4 m / 10 m left a 6-8 m gap that small
-    // ponds could fall entirely inside, so a player standing right next
-    // to the shore could hear nothing. New ring covers 4 m / 6 m / 8 m /
-    // 11 m / 14 m so the closest probe is never further than ~3 m from
-    // any direction the player is facing.
+    // Water: scan a ring around the player for water cells. The hearing
+    // radius is 22 m so a stream or pond is audible from across a chunk
+    // before the players actually wade into it (the pond shapes sit a
+    // good 12-18 m from the spawn pad in some seeds and were inaudible
+    // until the player was almost on top of them).
+    //
+    // Probes step every ~3 m out to 21 m: 4 / 7 / 10 / 13 / 16 / 19 / 21.
+    // The cardinal+diagonal pairs at each ring make sure no pond can fall
+    // entirely between two probes — the closest point of any pond will
+    // always be within ~3 m of at least one tap.
     let waterDist = Infinity;
     if (world && typeof world.isWaterAt === 'function') {
       const RING = [
-        // 4 m — touch radius
+        // 4 m — touch / overlap radius
         [4, 0], [-4, 0], [0, 4], [0, -4],
         [3, 3], [-3, 3], [3, -3], [-3, -3],
-        // 6 m — fills the gap between the inner and outer rings
-        [6, 0], [-6, 0], [0, 6], [0, -6],
-        // 8 m — mid range
-        [8, 0], [-8, 0], [0, 8], [0, -8],
-        [6, 6], [-6, 6], [6, -6], [-6, -6],
-        // 11 m — fade-out approach
-        [11, 0], [-11, 0], [0, 11], [0, -11],
-        // 14 m — outer cap, only contributes if nothing closer hit
-        [14, 0], [-14, 0], [0, 14], [0, -14],
-        [10, 10], [-10, 10], [10, -10], [-10, -10],
+        // 7 m
+        [7, 0], [-7, 0], [0, 7], [0, -7],
+        [5, 5], [-5, 5], [5, -5], [-5, -5],
+        // 10 m
+        [10, 0], [-10, 0], [0, 10], [0, -10],
+        [7, 7], [-7, 7], [7, -7], [-7, -7],
+        // 13 m
+        [13, 0], [-13, 0], [0, 13], [0, -13],
+        // 16 m
+        [16, 0], [-16, 0], [0, 16], [0, -16],
+        [11, 11], [-11, 11], [11, -11], [-11, -11],
+        // 19 m
+        [19, 0], [-19, 0], [0, 19], [0, -19],
+        // 21 m — outer cap
+        [21, 0], [-21, 0], [0, 21], [0, -21],
+        [15, 15], [-15, 15], [15, -15], [-15, -15],
       ];
       for (const [dx, dz] of RING) {
         const rx = playerX + dx;
@@ -737,8 +750,13 @@ export class Sound {
         }
       }
     }
-    if (waterDist < 14) {
-      a.waterTarget = clamp01(1 - waterDist / 14) * 0.55;
+    // Inverse-square-ish falloff (1 - d/R)^1.5 makes the bus pull back
+    // softly as the players walk away rather than dropping linearly to
+    // silence right at the radius cap.
+    const WATER_R = 22;
+    if (waterDist < WATER_R) {
+      const t01 = clamp01(1 - waterDist / WATER_R);
+      a.waterTarget = t01 * t01 * Math.sqrt(t01) * 0.6;
     } else {
       a.waterTarget = 0;
     }

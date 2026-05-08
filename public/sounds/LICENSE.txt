@@ -1,22 +1,23 @@
-Bundled audio assets — all under Creative Commons Zero (CC0 1.0 Universal)
-=========================================================================
+Bundled audio assets
+====================
 
-Every `.ogg` file in this folder is released into the public domain
-under CC0 — free to use in personal and commercial projects with no
-attribution required, though credit is always appreciated.
+Most of the `.ogg` files in this folder are CC0 (public domain) and
+require no attribution. The campfire ambient loop is CC-BY 3.0 — see
+below for the per-file licence breakdown.
 
 Sources:
 
-  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio
-  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds
-  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/
-  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx
-  rubberduck — 40 water sfx https://opengameart.org/content/40-cc0-water-splash-slime-sfx
-  rubberduck — 30 SFX loops https://opengameart.org/content/30-cc0-sfx-loops
-  Wolfman007 — Fire         https://opengameart.org/content/fire-crackling
+  Kenney RPG Audio          https://kenney.nl/assets/rpg-audio                       [CC0]
+  Kenney Impact Sounds      https://kenney.nl/assets/impact-sounds                   [CC0]
+  qubodup — Free Whoosh     https://freesound.org/people/qubodup/packs/12143/        [CC0]
+  qubodup — Fire Loop       https://opengameart.org/content/fire-loop                [CC-BY 3.0]
+  rubberduck — 80 creature  https://opengameart.org/content/80-cc0-creature-sfx      [CC0]
+  rubberduck — 40 water sfx https://opengameart.org/content/40-cc0-water-splash-slime-sfx [CC0]
+  rubberduck — 30 SFX loops https://opengameart.org/content/30-cc0-sfx-loops         [CC0]
 
-License: Creative Commons Zero, CC0
-         http://creativecommons.org/publicdomain/zero/1.0/
+Licences:
+  CC0 1.0 Universal:      http://creativecommons.org/publicdomain/zero/1.0/
+  CC-BY 3.0 (Unported):   http://creativecommons.org/licenses/by/3.0/
 
 File mapping
 ------------
@@ -38,6 +39,11 @@ enemy_voice_a.ogg     <- cute_02      (rubberduck, 80 CC0 creature SFX)
 enemy_voice_b.ogg     <- cute_07      (rubberduck, 80 CC0 creature SFX)
 enemy_voice_c.ogg     <- grunt_02     (rubberduck, 80 CC0 creature SFX)
 enemy_voice_d.ogg     <- hurt_03      (rubberduck, 80 CC0 creature SFX)
+ambient_wind.ogg      <- ambient_03   (rubberduck, 30 CC0 SFX loops)        [CC0]
+ambient_water.ogg     <- loop_water_02 (rubberduck, 40 CC0 water/splash SFX) [CC0]
+ambient_fire.ogg      <- qubodupFireLoop.ogg                                  [CC-BY 3.0]
+                         Author: qubodup — https://opengameart.org/content/fire-loop
+                         Re-encoded to mono 44.1 kHz OGG Vorbis q=4.
 
 The four enemy_voice_*.ogg files were normalised to roughly -18 LUFS
 peak so they sit ~6 dB under the hit_flesh impact (which leads on the
@@ -48,9 +54,17 @@ The qubodup whoosh files were re-encoded from their original CC0
 preview MP3s on freesound.org to OGG Vorbis (mono, q=4, 44.1 kHz) so
 they match the rest of the bundle's encoding.
 
-Ambient layers (wind, water lap, forest hum, campfire crackle,
-crickets, distant birds) are generated procedurally in `src/sound.js`
-from shaped noise + low-frequency oscillators, so no looped audio file
-is shipped for them. This keeps the bundle small and lets the ambient
-texture vary continuously instead of repeating with a perceptible loop
-seam.
+Ambient nature layers split into sample-based and procedural:
+  wind / water / fire   — the three `ambient_*.ogg` files above, played
+                          as looping AudioBufferSourceNodes (see
+                          src/sound.js:_buildAmbient).
+  forest / birds /      — generated procedurally in src/sound.js from
+  crickets                shaped noise + scheduled chirps. No looping
+                          recording reads as a generic windless
+                          leaf-rustle hum or a sparse meadow chorus
+                          without locking the soundscape to a specific
+                          real-world location.
+
+Attribution string for the CC-BY-licenced campfire loop, embedded in
+the game credits: "Fire Loop by qubodup, CC-BY 3.0 — https://openga
+meart.org/content/fire-loop".
