@@ -380,9 +380,11 @@ export class Player {
     // halve incoming damage so the charge attack doubles as a
     // deliberate damage soak. Applies before the shield orb so the
     // active shield still eats the same fraction of the reduced hit.
+    // The on-hit yellow shimmer that used to play here was removed
+    // along with the rest of the "blocking" audiovisual cues — the
+    // soak is now silent gameplay-only state, not a visual mode.
     if (this._blockReductionT > 0) {
       amt *= BLOCK_DAMAGE_REDUCTION;
-      this.effects.flashSphere(this.pos.x, 1.0, this.pos.z, 0xffe066, 1.0, 0.18);
     }
 
     // Active shield orb absorbs damage before HP is touched.
@@ -819,7 +821,25 @@ export class Player {
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
-        if (as.slash) {
+        if (as.solidFlash) {
+          // Instant solid flash at the impact point in front of the
+          // player — used by the Knight shield bash to give the
+          // strike a sudden punch instead of the swept blade-trace
+          // arc that swords/axes paint with `slashArc`. Position
+          // uses world-space facing so the flash lines up with
+          // wherever the player was aiming when impact landed.
+          const dist = as.range * 0.55;
+          const px = this.smoothPos.x + this.facing.x * dist;
+          const pz = this.smoothPos.z + this.facing.z * dist;
+          this.effects.flashSphere(
+            px,
+            as.solidFlash.height ?? 1.0,
+            pz,
+            as.solidFlash.color ?? 0xffffff,
+            as.solidFlash.radius ?? 1.5,
+            as.solidFlash.life ?? 0.20,
+          );
+        } else if (as.slash) {
           // Same slashArc strip for both tap and charge attacks. The
           // strip is parented to the character mesh so it tracks the
           // player if they keep moving / rotating during the
@@ -1025,6 +1045,13 @@ export class Player {
       range:      spec.range      ?? 2.0,
       arc:        spec.arc        ?? Math.PI * 0.6,
       slash:      spec.slash      ?? null,
+      // Alternative impact VFX — a single solid flashSphere at the
+      // impact point instead of the swept slashArc strip. Used by
+      // the Knight shield bash so the strike reads as a sudden
+      // bash rather than a blade-trace sweep. `slash` and
+      // `solidFlash` are mutually exclusive: a swing should set
+      // exactly one of them, depending on the desired feel.
+      solidFlash: spec.solidFlash ?? null,
       damageMult: spec.damageMult ?? 1.0,
       isSuper:    !!spec.isSuper,
       animKey:    spec.animKey,
@@ -1053,23 +1080,24 @@ export class Player {
       impactAt: 0.55,
       range: 2.4,
       arc: Math.PI * 0.55,
-      slash: { color: 0xffe066, height: 1.05 },
+      // No `slash` strip — the shield bash should NOT paint a swept
+      // sword-style arc along the swing path. Instead `solidFlash`
+      // emits a single instant white flash at the impact point so
+      // the bash reads as a sudden hit, not a blade trace.
+      solidFlash: { color: 0xffffff, radius: 1.5, life: 0.20, height: 1.0 },
       damageMult: 1.4,
       cooldown: 1.0,
       animKey: 'attack_block',
-      ringColor: 0xffe066,
       isSuper: true,
       charKind: 'shieldBash',
       stunDuration: BLOCK_STUN_DURATION,
     });
     // Damage soak active for the entire swing animation — the knight
-    // visibly tanks 50% of any incoming hit during the bash. A small
-    // tail past the animation prevents off-by-one frames where the
-    // anim has clamped but the soak "feels" still on.
+    // tanks 50% of any incoming hit during the bash. The previous
+    // yellow flash + ground ring + block tone (the "blocking"
+    // audiovisual cues) were removed; the soak is now a silent
+    // gameplay-only effect.
     this._blockReductionT = swing + 0.05;
-    this.effects?.flashSphere?.(this.pos.x, 1.0, this.pos.z, 0xffe066, 0.7, 0.20);
-    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, 0xffe066, 1.6, 0.30);
-    this.sound?.tone?.({ freq: 320, type: 'square', dur: 0.20, gain: 0.30 });
   }
 
   _triggerDualSlice() {
