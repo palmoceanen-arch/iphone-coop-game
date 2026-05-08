@@ -80,13 +80,50 @@ export const CAPE_COLOR_PRESETS = [
 const MODEL_YAW_OFFSET = 0;
 const MODEL_SCALE = 0.6;
 
-// Hold-to-charge threshold for 2H super attacks. Tapping under this many
-// seconds fires the normal slice; holding past it (or releasing after a
-// hold longer than this) triggers the charge attack defined in
-// `weaponProfile.superAttack`. 0.30s is short enough that a deliberate
-// tap never accidentally charges, but long enough that a held button
-// reads as "I'm holding for the spin".
-const CHARGE_THRESHOLD = 0.30;
+// Base hold-to-charge threshold for tap-vs-hold weapons (sword_2h,
+// axe_2h, staff, wand). Tapping under this many seconds fires the
+// "tap" branch (normal slice / spell bolt); holding past it triggers
+// the "hold" branch (spin super / melee swing). 0.18s is the
+// responsiveness sweet-spot used by tap-vs-charge games like Hades
+// and Hollow Knight — short enough that a held button feels
+// instantaneous, long enough that a deliberate tap never trips the
+// charge accidentally. The actual threshold the player perceives is
+// scaled by their attack-speed multiplier in `update()` so picking
+// up attack-speed items also makes the charge recognise faster
+// (attack-speed buffs feel like they uniformly accelerate combat
+// instead of only shrinking cooldown).
+const CHARGE_THRESHOLD_BASE = 0.18;
+// Hard floor for the scaled threshold — without this, max-attack-
+// speed would push it under 5ms and any non-instant tap would be
+// misread as a charge.
+const CHARGE_THRESHOLD_MIN = 0.10;
+// Hard floor for the attack-speed-scaled swing duration. The bake of
+// the slash clips assumes a real wind-up; squeezing them under 60%
+// of their base length compresses anticipation out of the motion and
+// the swing reads as a stutter. Cooldown is unaffected (it can keep
+// shrinking) so attack-speed items still increase swings-per-second
+// even when the swing animation has hit this floor.
+const SWING_SCALE_MIN = 0.60;
+
+// Input buffer window for tap attacks. A tap that lands while the
+// player's attack is still on cooldown is queued for this many
+// seconds; if the cooldown expires before the timer runs out, the
+// queued tap auto-fires on the next frame. This is what makes
+// spamming feel responsive in normal action games (Hades, Dark
+// Souls, character-action) — the player doesn't have to wait for
+// "click is ready" feedback, they can press a few frames early and
+// the input is honoured. 0.15s matches what most tap-friendly
+// games converge on; longer feels rubbery, shorter feels like the
+// buffer doesn't help at all.
+const ATTACK_INPUT_BUFFER = 0.15;
+
+// Wind-up time for the staff/wand tap-spell. The cast animation and
+// SFX play immediately on press, but the actual projectile is held
+// for this long so the bolt visibly leaves the weapon mid-cast
+// instead of materialising at the same instant the button is hit.
+// Tuned to fall under attack-cooldown for both staff and wand
+// (~0.55s / 0.42s) so it never delays a follow-up tap.
+const SPELL_CAST_DELAY = 0.15;
 
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
@@ -154,6 +191,19 @@ export class Player {
     this._chargeTime = 0;
     this._chargeFired = false;
     this._wasAttackHeld = false;
+    // Tap-input buffer. When a tap lands during attackTimer cooldown
+    // we don't drop it on the floor — it's stashed here for up to
+    // ATTACK_INPUT_BUFFER seconds and auto-fired the moment the
+    // cooldown expires. `kind` decides which trigger to call:
+    //   - 'tap'        -> _triggerAttack(false) (basic + sword_2h/axe_2h
+    //                     normal slice on release)
+    //   - 'rangedTap'  -> _triggerRangedAttack(combatCtx) (staff/wand
+    //                     spell on release)
+    // Cleared on death. Charge auto-fire (heavy on threshold cross)
+    // doesn't go through the buffer — it polls `attackTimer` every
+    // hold-frame so it already self-corrects when cd opens.
+    this._attackBuffered = 0;
+    this._attackBufferKind = null;
     this.invuln = 0; // i-frames
     this.dashTimer = 0;
     this.dashCooldown = 0;
@@ -342,9 +392,21 @@ export class Player {
     if (this._reviveBar) this._reviveBar.visible = false;
   }
 
-  update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback) {
+  update(dt, intent, otherPlayer, enemies, attackOnEnemyCallback, combatCtx = null) {
     this._lastIntent = intent;
+    // Stash the combat callback + ctx so off-cycle hit paths (e.g. the
+    // staff/wand ranged projectile's onHitEnemy) can route damage
+    // through the same per-hit pipeline a normal swing uses, instead
+    // of re-implementing the item-hook + jitter + affinity formula.
+    this._swingHitCallback = attackOnEnemyCallback;
+    this._combatCtx = combatCtx;
     if (!this.alive) {
+      // Cancel any spell that was mid-wind-up — dying mid-cast must
+      // not fire the bolt 0.2s later when the player can't react.
+      this._pendingRangedShot = null;
+      // Drop any buffered tap so it doesn't auto-fire when revived.
+      this._attackBuffered = 0;
+      this._attackBufferKind = null;
       // Keep mesh visible to show death pose; just freeze physics & animation.
       this._character?.mixer?.update(dt);
       return;
@@ -397,6 +459,16 @@ export class Player {
     this.abilityCd = Math.max(0, this.abilityCd - dt);
     if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
 
+    // Tick the deferred staff/wand spell. The bolt was scheduled in
+    // `_triggerRangedAttack`; we hold it for ~0.2s so the cast
+    // animation reads before the projectile appears, then fire it.
+    if (this._pendingRangedShot) {
+      this._pendingRangedShot.delay -= dt;
+      if (this._pendingRangedShot.delay <= 0) {
+        this._firePendingRangedShot();
+      }
+    }
+
     // Dash trigger
     if (intent.dash && this.dashCooldown <= 0) {
       // dash in current move direction or facing
@@ -412,18 +484,82 @@ export class Player {
       runItemHook(this, 'onDash', { enemyList: enemies, partner: otherPlayer });
     }
 
-    // Attack trigger — split into "tap" and "charge" paths. Weapons with
-    // a `superAttack` profile (Greatsword, Battle Axe) defer their tap
-    // attack to release-time so the same button can either tap-swing or
-    // charge into the spin super; weapons without one fire instantly on
-    // the press edge for snappy combat.
+    // Attack trigger — three button-handling modes, picked by the weapon
+    // profile:
+    //
+    //   1. Weapons with a `rangedAttack` profile (staff, wand): tap fires
+    //      the homing spell bolt; hold past `CHARGE_THRESHOLD` falls
+    //      through to the melee swing the weapon profile defines. Tap
+    //      and hold are decided on release vs hold-time, mirroring the
+    //      sword_2h super flow but with the meanings swapped (here the
+    //      *tap* is the spell, the *hold* is the heavy hit).
+    //   2. Weapons with a `superAttack` profile (greatsword, battle axe):
+    //      tap fires the normal slice on release, hold past threshold
+    //      fires the spin super. Same charge bookkeeping as case 1.
+    //   3. Everything else (sword, axe, …): instant tap-to-swing on the
+    //      press edge so basic combat stays snappy.
     const wp = this.weaponProfile;
+    const wpHasRanged = !!wp.rangedAttack;
     const wpHasSuper = !!wp.superAttack;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
 
-    if (wpHasSuper) {
+    // Charge threshold scales with the same multiplier the swing
+    // cooldown uses, so picking up attack-speed items (or being in
+    // berserk) makes the hold-vs-tap window recognise faster — the
+    // player perceives one coherent "everything is faster" instead of
+    // a fixed 0.30s wait that ignores buffs. Floored so any non-
+    // instant tap can still resolve as a tap. Recomputed every frame
+    // because both inputs (`attackSpeedMult`, `_berserk`) can change
+    // mid-charge.
+    const chargeMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const chargeThreshold = Math.max(CHARGE_THRESHOLD_MIN, CHARGE_THRESHOLD_BASE * chargeMult);
+
+    // Decay the tap-input buffer set on the previous frame. Done here
+    // (after attackTimer ticks but before this frame's input branches)
+    // so a tap pressed `dt` ago has a chance to convert to a fire on
+    // this frame's drain step below.
+    if (this._attackBuffered > 0) {
+      this._attackBuffered = Math.max(0, this._attackBuffered - dt);
+      if (this._attackBuffered <= 0) this._attackBufferKind = null;
+    }
+
+    if (wpHasRanged) {
+      if (isHeld) {
+        if (!wasHeld) {
+          // Press edge: start charging. Don't fire the spell yet — we
+          // don't know if this will turn out to be a tap (spell) or a
+          // hold (melee swing).
+          this._chargeTime = 0;
+          this._chargeFired = false;
+        } else {
+          this._chargeTime += dt;
+          // Auto-fire the melee swing the moment the hold crosses the
+          // threshold so the player doesn't have to release to trigger
+          // it — same UX feel as the sword_2h spin super.
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
+            this._triggerAttack(false);
+            this._chargeFired = true;
+          }
+        }
+      } else if (wasHeld) {
+        // Release edge. If the melee swing already auto-fired, do
+        // nothing — we already swung. Otherwise this was a short tap;
+        // fire the spell bolt now if cd is open, else stash it in the
+        // input buffer so it auto-fires when cd opens.
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerRangedAttack(combatCtx);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'rangedTap';
+          }
+        }
+        this._chargeTime = 0;
+        this._chargeFired = false;
+      }
+    } else if (wpHasSuper) {
       if (isHeld) {
         if (!wasHeld) {
           // Press edge: start charging. Don't fire normal attack yet —
@@ -434,24 +570,55 @@ export class Player {
           this._chargeTime += dt;
           // Auto-fire the spin super the moment the hold crosses the
           // threshold (don't make the player release to trigger it).
-          if (!this._chargeFired && this._chargeTime >= CHARGE_THRESHOLD && this.attackTimer <= 0) {
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
             this._triggerAttack(true);
             this._chargeFired = true;
           }
         }
       } else if (wasHeld) {
         // Release edge. If the super already auto-fired, do nothing —
-        // we already swung. Otherwise this was a short tap, fire the
-        // normal slice (deferred from the press edge).
-        if (!this._chargeFired && this.attackTimer <= 0) {
-          this._triggerAttack(false);
+        // we already swung. Otherwise this was a short tap; fire the
+        // normal slice now if cd is open, else stash it in the input
+        // buffer so it auto-fires when cd opens.
+        if (!this._chargeFired) {
+          if (this.attackTimer <= 0) {
+            this._triggerAttack(false);
+          } else {
+            this._attackBuffered = ATTACK_INPUT_BUFFER;
+            this._attackBufferKind = 'tap';
+          }
         }
         this._chargeTime = 0;
         this._chargeFired = false;
       }
-    } else if (intent.attack && this.attackTimer <= 0) {
-      // Weapons without a charge attack — instant tap.
-      this._triggerAttack(false);
+    } else if (intent.attack) {
+      // Weapons without a charge attack — instant tap on press if cd
+      // is open, otherwise buffer the press for ATTACK_INPUT_BUFFER
+      // seconds. This is what makes spamming feel responsive: the
+      // player doesn't have to time the click to the exact frame the
+      // cooldown ends, presses landing a few frames early still
+      // count.
+      if (this.attackTimer <= 0) {
+        this._triggerAttack(false);
+      } else {
+        this._attackBuffered = ATTACK_INPUT_BUFFER;
+        this._attackBufferKind = 'tap';
+      }
+    }
+
+    // Drain the buffered tap if the cooldown is now open. Runs after
+    // the input branches so a fresh same-frame press has fired first
+    // (and would have cleared the buffer along the way). The "fresh
+    // press wins" ordering means the buffer never auto-fires on top
+    // of a brand-new press.
+    if (this._attackBuffered > 0 && this.attackTimer <= 0) {
+      if (this._attackBufferKind === 'rangedTap') {
+        this._triggerRangedAttack(combatCtx);
+      } else {
+        this._triggerAttack(false);
+      }
+      this._attackBuffered = 0;
+      this._attackBufferKind = null;
     }
 
     // Apply movement intent (kinematic)
@@ -624,7 +791,7 @@ export class Player {
     const wp = this.weaponProfile;
     const sp = isSuper ? wp.superAttack : null;
     if (isSuper && !sp) return;
-    const swing      = sp?.swing      ?? wp.swing;
+    const baseSwing  = sp?.swing      ?? wp.swing;
     const impactAt   = sp?.impactAt   ?? wp.impactAt;
     const range      = sp?.range      ?? wp.range;
     const arc        = sp?.arc        ?? wp.arc;
@@ -634,7 +801,19 @@ export class Player {
     const animKey    = sp?.attackAnim ?? this._attackActionKey;
     const ringColor  = sp?.ringColor  ?? null;
 
+    // The full multiplier — same one cooldown uses — speeds the
+    // visible swing up too (animation timeScale is derived from
+    // `swing`, see below), so attack-speed buffs feel like they
+    // accelerate combat uniformly instead of just shrinking the
+    // window between swings while the swing animation drags at base
+    // speed. Floored at SWING_SCALE_MIN so the bake doesn't get
+    // squeezed past the point where it reads as a stutter; cooldown
+    // keeps shrinking unchecked so swings-per-second still climbs
+    // past that floor.
     const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const swingMult = Math.max(SWING_SCALE_MIN, attackCdMult);
+    const swing = baseSwing * swingMult;
+
     this.attackTimer = cooldown * attackCdMult;
     this.attackAnim = 0;
     this.swingActive = true;
@@ -662,6 +841,164 @@ export class Player {
       action.setEffectiveWeight(10.0);
       action.fadeIn(0.05).play();
     }
+  }
+
+  // Begin the staff/wand tap-spell. Plays the cast animation + SFX
+  // immediately and *defers* the actual projectile spawn by
+  // SPELL_CAST_DELAY seconds (see below), so the bolt visibly leaves
+  // the weapon mid-cast instead of popping out the moment the button
+  // is released. Auto-aim and direction are locked at trigger time
+  // (mirrors the icebolt ability — the player commits to a target on
+  // tap, the spell tracks toward where that target was), but the
+  // muzzle position is recomputed at fire time so the bolt always
+  // emerges from the player's current weapon-hand offset even if the
+  // player has been moving during the wind-up.
+  //
+  // Damage is routed through the regular swing pipeline so item
+  // synergies (crit, echo, leech, berserk, …) apply exactly as they
+  // would on a melee swing. The visible projectile adopts the
+  // player's cape colour so the two players' bolts read as distinct
+  // on-screen even at range.
+  _triggerRangedAttack(combatCtx) {
+    const wp = this.weaponProfile;
+    const ra = wp?.rangedAttack;
+    if (!ra) return;
+    if (!combatCtx?.spawnAbilityProjectile) return;
+
+    // Same attack-speed scaling the melee swing uses, so the
+    // attack-speed upgrade and the berserk-on-low-HP item still affect
+    // the spell's effective DPS.
+    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    this.attackTimer = (ra.cooldown ?? wp.cooldown) * attackCdMult;
+
+    // Auto-aim. Default to the player's facing; if there's a real
+    // living enemy within 12m, snap the bolt at the closest one and
+    // turn the player to face them so the cast animation reads right.
+    let dx = this.facing.x, dz = this.facing.z;
+    const livingEnemies = combatCtx.livingEnemies;
+    if (Array.isArray(livingEnemies) && livingEnemies.length > 0) {
+      const MAX_AIM_D2 = 144; // 12m
+      let bestD2 = MAX_AIM_D2, best = null;
+      for (const e of livingEnemies) {
+        if (!e?.alive) continue;
+        const ex = e.pos.x - this.pos.x, ez = e.pos.z - this.pos.z;
+        const d2 = ex * ex + ez * ez;
+        if (d2 < bestD2) { bestD2 = d2; best = e; }
+      }
+      if (best) {
+        const tdx = best.pos.x - this.pos.x, tdz = best.pos.z - this.pos.z;
+        const len = Math.hypot(tdx, tdz) || 1;
+        dx = tdx / len; dz = tdz / len;
+        this.facing.x = dx; this.facing.z = dz;
+      }
+    }
+
+    // Cape colour is set per-player when the character is built; fall
+    // back to the player's body tint and finally to a neutral spell
+    // blue so we never spawn a black projectile.
+    const color = this._capeColorHex ?? this._colorHex ?? 0x9adfff;
+
+    // Cast animation — short forward jab/cast clip, scaled to the
+    // ranged profile's `swing` so the spell gesture is visibly
+    // shorter than the heavy melee sweep.
+    const animKey = ra.attackAnim ?? 'attack_spell';
+    const swing = ra.swing ?? 0.5;
+    const action = this._character?.actions?.[animKey];
+    if (action) {
+      action.reset();
+      const srcDur = Math.max(action.getClip().duration, 0.05);
+      action.timeScale = srcDur / Math.max(swing, 0.1);
+      action.setEffectiveWeight(10.0);
+      action.fadeIn(0.05).play();
+    }
+
+    // Cast SFX — distinct, lighter pitch than the melee whoosh so the
+    // ear can tell the two attack modes apart. Plays now so the wind-
+    // up is audibly tied to the button press rather than the bolt
+    // appearing 0.2s later.
+    this.sound.tone?.({ freq: 760, type: 'triangle', dur: 0.22, gain: 0.22, slide: -180 });
+
+    // Schedule the actual bolt for ~0.20s after the press so the cast
+    // animation visibly leads the spell. The spawn is processed in
+    // `update()` as soon as the delay ticks down to zero — see
+    // `_firePendingRangedShot`. We snapshot ra/dir/color here so the
+    // shot is unaffected by a weapon swap or item pickup mid-wind-up.
+    this._pendingRangedShot = {
+      delay: SPELL_CAST_DELAY,
+      ra,
+      dx, dz,
+      color,
+    };
+  }
+
+  // Fire the deferred staff/wand bolt scheduled in
+  // `_triggerRangedAttack`. Computes the muzzle position from the
+  // player's *current* pos (so a player moving during the wind-up
+  // sees the bolt leave their hand, not where they used to be) but
+  // uses the *snapshot* direction so the shot lands where the player
+  // committed when they tapped.
+  _firePendingRangedShot() {
+    const shot = this._pendingRangedShot;
+    if (!shot) return;
+    this._pendingRangedShot = null;
+    const ctx = this._combatCtx;
+    if (!ctx?.spawnAbilityProjectile) return;
+
+    const { ra, dx, dz, color } = shot;
+
+    // Muzzle position — anchored to the weapon hand instead of the
+    // character's centre. The character holds staff/wand in their
+    // right hand, so we offset:
+    //   - forward by 0.9 so the bolt visibly leaves in front of the
+    //     character rather than spawning inside their chest
+    //   - right by 0.28 (perpendicular to facing in our view; right-
+    //     hand side from the player's POV with the camera looking
+    //     down at the world is `(-facing.z, facing.x)`)
+    //   - down to y=0.55 (about hip / lowered-weapon height) so the
+    //     bolt clearly emerges from the weapon and not from the
+    //     character's chest
+    const rx = -dz, rz = dx;
+    const muzzleX = this.pos.x + dx * 0.9 + rx * 0.28;
+    const muzzleZ = this.pos.z + dz * 0.9 + rz * 0.28;
+    const muzzleY = 0.55;
+    this.effects?.flashSphere?.(muzzleX, muzzleY, muzzleZ, color, 0.35, 0.12);
+    this.effects?.burst?.(muzzleX, muzzleY, muzzleZ, color, 4, 2, 0.16);
+
+    // Damage is computed at hit-time inside the swingHit callback, so
+    // we set the projectile's own damage to 0 and rely on onHitEnemy
+    // to drive the per-hit pipeline (item hooks, crit, jitter, …).
+    // `_activeRanged.damageMult` is read by Game._onPlayerHitsEnemy in
+    // place of the melee `_activeSwing.damageMult` so the rangedAttack
+    // profile's damage scaling applies — see game.js for the lookup.
+    const player = this;
+    const swingHit = this._swingHitCallback;
+    ctx.spawnAbilityProjectile({
+      x: muzzleX,
+      z: muzzleZ,
+      y: muzzleY,
+      dirX: dx, dirZ: dz,
+      speed: ra.speed,
+      life: ra.life,
+      radius: ra.radius,
+      color,
+      trailColor: color,
+      damage: 0,
+      knockback: ra.knockback ?? 3,
+      aoeRadius: 0,
+      aoeDamage: 0,
+      aoeKnockback: 0,
+      source: player,
+      onHitEnemy(target) {
+        if (!swingHit || !target?.alive) return;
+        const prev = player._activeRanged;
+        player._activeRanged = { damageMult: ra.damageMult };
+        try {
+          swingHit(player, target);
+        } finally {
+          player._activeRanged = prev;
+        }
+      },
+    });
   }
 
   _processSwing(enemies, callback) {

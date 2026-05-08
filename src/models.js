@@ -1121,6 +1121,11 @@ export const WEAPONS = {
       ringColor: 0xffae6a,
     },
   },
+  // Staff — Mage's signature 2H weapon. Tap fires a small auto-aimed
+  // spell bolt in the player's cape colour (the `rangedAttack` profile
+  // below). Long-press past `CHARGE_THRESHOLD` (see player.js) falls
+  // through to the melee horizontal sweep defined here, so close-range
+  // brawls still work without swapping weapons.
   staff: {
     label: 'Staff',
     showNodes: [],
@@ -1133,8 +1138,28 @@ export const WEAPONS = {
     cooldown: 0.60,
     damageMult: 1.1,
     slash: { color: 0x9adfff, height: 1.15 },
+    // Tap-fire spell bolt — homes in on the closest real enemy within
+    // 12m (auto-aim mirrors the icebolt ability) and travels until it
+    // either lands, expires or hits a wall. Smaller hitbox / smaller
+    // visual than icebolt by design (staff is a basic attack, not an
+    // ability). Damage flows through the same per-hit pipeline the
+    // melee swing uses, so onAttack/onHit items (crit, echo, leech,
+    // berserk, …) still apply at the moment of impact.
+    rangedAttack: {
+      attackAnim: 'attack_spell',
+      swing: 0.55,
+      cooldown: 0.55,
+      speed: 18,
+      life: 0.65,            // ~11.7m max range
+      radius: 0.18,          // smaller than icebolt's 0.25
+      damageMult: 1.0,
+      knockback: 4,
+    },
   },
-  // Wand — spell jab. No swing arc VFX (it's a forward cast, not a slash).
+  // Wand — Mage / Rogue's spell-jab one-hander. Tap fires a fast, tiny
+  // spell bolt in the player's cape colour. Long-press triggers the
+  // forward jab profile below — same melee feel the wand had before
+  // the ranged attack was added.
   wand: {
     label: 'Wand',
     showNodes: [],
@@ -1146,6 +1171,16 @@ export const WEAPONS = {
     arc: Math.PI * 0.5,
     cooldown: 0.45,
     damageMult: 0.9,
+    rangedAttack: {
+      attackAnim: 'attack_spell',
+      swing: 0.45,
+      cooldown: 0.42,
+      speed: 22,
+      life: 0.55,            // ~12.1m max range
+      radius: 0.14,          // smallest projectile in the game
+      damageMult: 0.75,
+      knockback: 3,
+    },
   },
 };
 
