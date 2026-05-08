@@ -198,6 +198,9 @@ export class Player {
       capeTint,
       scale: MODEL_SCALE,
       skinAware: !!charDef.skinAware,
+      // Threaded through so `setEquippedWeapon` can resolve which
+      // baked-in weapon meshes to toggle for non-Knight Adventurers.
+      characterDef: charDef,
     });
     this._character = character;
     grp.add(character.root);

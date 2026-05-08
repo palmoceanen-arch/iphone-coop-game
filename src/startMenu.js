@@ -36,7 +36,8 @@ const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
 // Default character per slot. Both default to Knight so the "click
 // Применить without touching anything" path matches the historical
 // behaviour where both players were the hardcoded Knight model. The
-// picker still lets either slot switch to one of the Skeleton variants.
+// picker still lets either slot switch to any of the other KayKit
+// Adventurers (Barbarian / Mage / Rogue / Rogue_Hooded).
 const DEFAULT_CHARACTER_BY_INDEX = ['knight', 'knight'];
 
 const SLOT_TITLES = ['Игрок 1', 'Игрок 2'];
@@ -73,8 +74,9 @@ export class StartMenu {
 
     // Per-slot working state, mutated as the user clicks swatches /
     // weapons / characters. `character` is a CHARACTERS[].id (e.g.
-    // 'knight', 'skel_mage'); `color` and `cape` are PLAYER_COLOR_PRESETS
-    // / CAPE_COLOR_PRESETS .id values; `weapon` is a key from WEAPONS.
+    // 'knight', 'mage', 'rogue_hooded'); `color` and `cape` are
+    // PLAYER_COLOR_PRESETS / CAPE_COLOR_PRESETS .id values; `weapon`
+    // is a key from WEAPONS.
     this.config = [
       {
         character: DEFAULT_CHARACTER_BY_INDEX[0],
@@ -426,6 +428,10 @@ export class StartMenu {
       capeTint: presetHex(CAPE_COLOR_PRESETS, cfg.cape),
       scale: 0.9,
       skinAware: !!def.skinAware,
+      // Pass the catalog row through so `setEquippedWeapon` can
+      // toggle the right built-in weapon meshes for non-Knight
+      // characters (Barbarian's axe, Mage's staff, Rogue's knife).
+      characterDef: def,
     });
   }
 

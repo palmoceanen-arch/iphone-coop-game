@@ -20,16 +20,28 @@ import { TOON_GRADIENT, toToonMaterial } from './shading.js';
 void TOON_GRADIENT;
 
 const MANIFEST = {
+  // Player-pickable characters from the KayKit Adventurers pack — all
+  // share the same `Rig_Medium` skeleton and ship with the same 76
+  // animation clips, so the player picker can swap any of them in
+  // without re-targeting animation or rebuilding actions.
   knight: { url: 'models/Knight.glb' },
+  barbarian: { url: 'models/Barbarian.glb' },
+  mage: { url: 'models/Mage.glb' },
+  rogue: { url: 'models/Rogue.glb' },
+  rogue_hooded: { url: 'models/Rogue_Hooded.glb' },
+  // Enemy-only models from the KayKit Skeletons pack. Not surfaced in
+  // the player character picker; spawned by `enemy.js` via
+  // `spawnCharacter('skel_*', …)`.
   skel_warrior: { url: 'models/Skeleton_Warrior.glb' },
   skel_rogue: { url: 'models/Skeleton_Rogue.glb' },
   skel_mage: { url: 'models/Skeleton_Mage.glb' },
   skel_minion: { url: 'models/Skeleton_Minion.glb' },
 };
 
-// Player-pickable characters surfaced in the start-menu picker. Each
-// entry references a kind in `MANIFEST` and carries the metadata the
-// UI / Player class need to render and tint that character correctly.
+// Player-pickable characters surfaced in the start-menu picker. All five
+// rows are KayKit Adventurers (Rig_Medium) so animation clips are
+// identical across them — only the body / cosmetic meshes and the
+// built-in weapon set differ.
 //
 //   `id`           — stable key used in saves / Player opts.
 //   `kind`         — MANIFEST key passed into `spawnCharacter()`.
@@ -37,29 +49,92 @@ const MANIFEST = {
 //   `skinAware`    — true ⇒ route the body tint through
 //                    `_attachSkinAwareTintShader` so the warm-toned
 //                    face / hand atlas pixels keep their natural
-//                    colour. Knight has tan skin pixels we want to
-//                    protect; the skeleton GLBs ship with cool/grey
-//                    bones the heuristic doesn't catch, so the flag
-//                    is harmless on them but documenting it per-row
-//                    keeps the intent explicit.
-//   `defaultWeapon`— starter weapon to suggest when the user picks
-//                    this character without touching the weapon row.
-//                    For skeletons the built-in `1H_Sword` /
-//                    `2H_Sword` / `Round_Shield` meshes that
-//                    `sword_1h` / `sword_2h` toggle don't exist, so
-//                    we point them at external attach-mesh weapons
-//                    (axe / staff / wand / dagger) that work on any
-//                    `Rig_Medium` skeleton.
+//                    colour. All Adventurers share the same atlas
+//                    with skin pixels in face / hand regions, so the
+//                    flag is on for every entry.
+//   `defaultWeapon`— starter weapon to pre-select when the user picks
+//                    this character.
+//   `toggleable`   — built-in weapon / shield / prop child meshes that
+//                    must be hidden by default at equip time. Knight
+//                    ships swords + four shield variants; Barbarian
+//                    ships axes + a Mug + their own shield; Mage ships
+//                    wand / staff / spellbook; Rogue / Rogue_Hooded
+//                    ship knives + crossbows + a throwable. Hiding
+//                    them all first lets `setEquippedWeapon` show only
+//                    the subset matching the active weapon.
+//   `weaponNodes`  — { weaponKind: string[] } — per-character override
+//                    of the showNodes list for a weapon. When present
+//                    the WEAPONS profile's `attach` (external GLB) is
+//                    skipped and the listed built-in meshes are shown
+//                    instead — e.g. Barbarian's `axe_1h` shows the
+//                    baked `1H_Axe` mesh rather than attaching the
+//                    external `axe_1h.glb` to handslot.r.
+//                    Weapons not in this map fall back to the WEAPONS
+//                    profile (Knight defaults), so picking a sword on
+//                    Mage just attaches nothing visible — they're not
+//                    armed for that weapon class.
 //
 // Asset license: Creative Commons Zero (CC0) — no attribution required.
 // Source: https://kaylousberg.itch.io/kaykit-adventurers
-//         https://kaylousberg.itch.io/kaykit-skeletons
 export const CHARACTERS = [
-  { id: 'knight',       kind: 'knight',       label: 'Рыцарь',        skinAware: true,  defaultWeapon: 'sword_1h' },
-  { id: 'skel_warrior', kind: 'skel_warrior', label: 'Скелет-воин',   skinAware: false, defaultWeapon: 'axe_1h' },
-  { id: 'skel_rogue',   kind: 'skel_rogue',   label: 'Скелет-разбой', skinAware: false, defaultWeapon: 'dagger' },
-  { id: 'skel_mage',    kind: 'skel_mage',    label: 'Скелет-маг',    skinAware: false, defaultWeapon: 'staff' },
-  { id: 'skel_minion',  kind: 'skel_minion',  label: 'Скелет-миньон', skinAware: false, defaultWeapon: 'axe_1h' },
+  {
+    id: 'knight', kind: 'knight', label: 'Рыцарь',
+    skinAware: true, defaultWeapon: 'sword_1h',
+    toggleable: [
+      '1H_Sword', '2H_Sword', '1H_Sword_Offhand',
+      'Round_Shield', 'Rectangle_Shield', 'Spike_Shield', 'Badge_Shield',
+    ],
+    // Knight's WEAPONS.showNodes already references the built-in
+    // sword/shield names directly, so no per-character override is
+    // needed — the global WEAPONS profile path covers every weapon.
+    weaponNodes: {},
+  },
+  {
+    id: 'barbarian', kind: 'barbarian', label: 'Варвар',
+    skinAware: true, defaultWeapon: 'axe_1h',
+    toggleable: [
+      '1H_Axe', '2H_Axe', '1H_Axe_Offhand',
+      'Mug', 'Barbarian_Round_Shield',
+    ],
+    weaponNodes: {
+      axe_1h: ['1H_Axe', 'Barbarian_Round_Shield'],
+      axe_2h: ['2H_Axe'],
+    },
+  },
+  {
+    id: 'mage', kind: 'mage', label: 'Маг',
+    skinAware: true, defaultWeapon: 'staff',
+    toggleable: [
+      '1H_Wand', '2H_Staff', 'Spellbook', 'Spellbook_open',
+    ],
+    weaponNodes: {
+      staff: ['2H_Staff'],
+      wand: ['1H_Wand'],
+    },
+  },
+  {
+    id: 'rogue', kind: 'rogue', label: 'Разбойник',
+    skinAware: true, defaultWeapon: 'axe_1h',
+    toggleable: [
+      'Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable',
+    ],
+    // Rogue has a knife built into handslot.r — re-use it as the
+    // visible mesh for the 1H sword slot so picking sword_1h shows
+    // *something* (the WEAPONS profile attaches no external sword).
+    weaponNodes: {
+      sword_1h: ['Knife'],
+    },
+  },
+  {
+    id: 'rogue_hooded', kind: 'rogue_hooded', label: 'Разбойник в капюшоне',
+    skinAware: true, defaultWeapon: 'axe_1h',
+    toggleable: [
+      'Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable',
+    ],
+    weaponNodes: {
+      sword_1h: ['Knife'],
+    },
+  },
 ];
 
 export const CHARACTER_BY_ID = Object.fromEntries(CHARACTERS.map(c => [c.id, c]));
@@ -490,7 +565,12 @@ function classifyMeshRole(meshNode) {
   while (cur) {
     const name = cur.name || '';
     if (name.includes('Cape')) return 'cape';
-    if (name.includes('Helmet')) return 'helmet';
+    // KayKit Adventurers split head-cover meshes between several
+    // names: Knight uses `Knight_Helmet`, Barbarian / Mage use
+    // `Hat`, Rogue_Hooded uses `Rogue_Head_Hooded`. Treat them all
+    // the same (atlas-mix shader so the picked tint dominates while
+    // a hint of atlas detail still reads).
+    if (name.includes('Helmet') || name.endsWith('_Hat') || name.includes('_Hooded')) return 'helmet';
     if (name.includes('Sword') || name.includes('Shield')) return 'weapon';
     // Catch *any* mesh parented under a hand-slot bone — the built-in
     // sword/shield meshes are caught by the names above, but external
@@ -672,7 +752,14 @@ function _attachHelmetAtlasMixShader(material) {
   material.needsUpdate = true;
 }
 
-export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, hueShift = 0, skinAware = false } = {}) {
+export function spawnCharacter(kind, {
+  tint = null,
+  capeTint = null,
+  scale = 1,
+  hueShift = 0,
+  skinAware = false,
+  characterDef = null,
+} = {}) {
   const entry = cache[kind];
   if (!entry) {
     throw new Error(`[models] unknown kind "${kind}" — did preloadModels() resolve?`);
@@ -798,7 +885,13 @@ export function spawnCharacter(kind, { tint = null, capeTint = null, scale = 1, 
     actions.death.clampWhenFinished = true;
   }
 
-  return { root, mixer, actions };
+  // `def` is consumed by `setEquippedWeapon` to know which built-in
+  // child meshes to toggle and which weapons should swap to a baked
+  // mesh instead of attaching an external GLB. Enemies (skel_*) leave
+  // it null — they fall back to the legacy Knight toggleable list,
+  // which is harmless on skeleton GLBs that don't contain those node
+  // names anyway.
+  return { root, mixer, actions, def: characterDef };
 }
 
 // Re-tint a previously spawned character in-place (used by the start-menu
@@ -1079,11 +1172,25 @@ export function setEquippedWeapon(character, weaponKind) {
   const root = character?.root;
   if (!root) return null;
 
+  // Per-character override: characters from the start-menu picker carry
+  // a `CHARACTERS` entry whose `toggleable` list names every built-in
+  // weapon / shield mesh on that body, and whose `weaponNodes` map
+  // overrides the default WEAPONS profile when the character has its
+  // own baked-in mesh for that weapon class (Barbarian's `1H_Axe`,
+  // Mage's `2H_Staff`, etc.). If `def` is missing (legacy callers —
+  // enemies, etc.) fall back to the Knight defaults.
+  const def = character.def || null;
+  const toggleable = (def && def.toggleable) || KNIGHT_TOGGLEABLE_NODES;
+  const builtinNodes = (def && def.weaponNodes && def.weaponNodes[weaponKind]) || null;
+  const useBuiltin = !!builtinNodes;
+
   // 1) Toggle the built-in mesh nodes — hide everything first, then show
-  //    only the ones requested by the weapon profile.
-  const showSet = new Set(profile.showNodes || []);
+  //    only the ones requested by the weapon profile (or the per-char
+  //    override, when the character ships its own baked weapon mesh).
+  const showList = useBuiltin ? builtinNodes : (profile.showNodes || []);
+  const showSet = new Set(showList);
   root.traverse((obj) => {
-    if (KNIGHT_TOGGLEABLE_NODES.includes(obj.name)) {
+    if (toggleable.includes(obj.name)) {
       obj.visible = showSet.has(obj.name);
     }
   });
@@ -1095,6 +1202,9 @@ export function setEquippedWeapon(character, weaponKind) {
   }
 
   // 3) Attach the new external mesh to handslot.r if requested.
+  //    Skipped when the character has a per-character override that
+  //    activates a built-in mesh instead — we don't want to stack the
+  //    external axe on top of the built-in axe.
   //
   // Three.js's GLTFLoader pipes node names through
   // `PropertyBinding.sanitizeNodeName`, which *strips* reserved characters
@@ -1102,7 +1212,7 @@ export function setEquippedWeapon(character, weaponKind) {
   // KayKit GLB calls `handslot.r` ends up named `handslotr` on the cloned
   // skeleton. Keep both spellings as fallbacks so the helper works whether
   // a future three.js version re-introduces the dot or not.
-  if (profile.attach) {
+  if (profile.attach && !useBuiltin) {
     const src = weaponCache[profile.attach];
     if (!src) {
       console.warn('[models] weapon mesh not loaded yet:', profile.attach,
