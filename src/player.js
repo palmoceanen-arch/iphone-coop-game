@@ -821,25 +821,11 @@ export class Player {
       if (!this.swingFxFired && this.attackAnim >= fxAt) {
         this.swingFxFired = true;
         this.sound.swing();
-        if (as.solidFlash) {
-          // Instant solid flash at the impact point in front of the
-          // player — used by the Knight shield bash to give the
-          // strike a sudden punch instead of the swept blade-trace
-          // arc that swords/axes paint with `slashArc`. Position
-          // uses world-space facing so the flash lines up with
-          // wherever the player was aiming when impact landed.
-          const dist = as.range * 0.55;
-          const px = this.smoothPos.x + this.facing.x * dist;
-          const pz = this.smoothPos.z + this.facing.z * dist;
-          this.effects.flashSphere(
-            px,
-            as.solidFlash.height ?? 1.0,
-            pz,
-            as.solidFlash.color ?? 0xffffff,
-            as.solidFlash.radius ?? 1.5,
-            as.solidFlash.life ?? 0.20,
-          );
-        } else if (as.slash) {
+        // The shield bash intentionally has no impact VFX (no swept
+        // arc, no solid flash) — the user wants the strike to be
+        // animation-only. Other charge / tap swings still paint a
+        // slashArc strip below.
+        if (as.slash) {
           // Same slashArc strip for both tap and charge attacks. The
           // strip is parented to the character mesh so it tracks the
           // player if they keep moving / rotating during the
@@ -1045,13 +1031,6 @@ export class Player {
       range:      spec.range      ?? 2.0,
       arc:        spec.arc        ?? Math.PI * 0.6,
       slash:      spec.slash      ?? null,
-      // Alternative impact VFX — a single solid flashSphere at the
-      // impact point instead of the swept slashArc strip. Used by
-      // the Knight shield bash so the strike reads as a sudden
-      // bash rather than a blade-trace sweep. `slash` and
-      // `solidFlash` are mutually exclusive: a swing should set
-      // exactly one of them, depending on the desired feel.
-      solidFlash: spec.solidFlash ?? null,
       damageMult: spec.damageMult ?? 1.0,
       isSuper:    !!spec.isSuper,
       animKey:    spec.animKey,
@@ -1080,11 +1059,10 @@ export class Player {
       impactAt: 0.55,
       range: 2.4,
       arc: Math.PI * 0.55,
-      // No `slash` strip — the shield bash should NOT paint a swept
-      // sword-style arc along the swing path. Instead `solidFlash`
-      // emits a single instant white flash at the impact point so
-      // the bash reads as a sudden hit, not a blade trace.
-      solidFlash: { color: 0xffffff, radius: 1.5, life: 0.20, height: 1.0 },
+      // No impact VFX at all — no swept slashArc, no solid flash.
+      // The user wants the bash to be animation-only so the strike
+      // visually reads as the shield itself making contact, without
+      // any trail or burst of light.
       damageMult: 1.4,
       cooldown: 1.0,
       animKey: 'attack_block',
@@ -1094,9 +1072,9 @@ export class Player {
     });
     // Damage soak active for the entire swing animation — the knight
     // tanks 50% of any incoming hit during the bash. The previous
-    // yellow flash + ground ring + block tone (the "blocking"
-    // audiovisual cues) were removed; the soak is now a silent
-    // gameplay-only effect.
+    // yellow flash + ground ring + block tone + on-hit shimmer (the
+    // "blocking" audiovisual cues) were removed; the soak is now a
+    // silent gameplay-only effect.
     this._blockReductionT = swing + 0.05;
   }
 
@@ -1106,21 +1084,27 @@ export class Player {
     // 2H spinning clip (continuous rotation, no anticipation/recovery)
     // so the rig actually rotates instead of just twin-slicing in front
     // — each hand still visibly swings whichever 1H weapon is equipped.
+    //
+    // Color picks per equipped weapon: gold for axes (matches the
+    // "heavy weapon" feel) and white for swords (cleaner blade arc).
+    // No extra ring / burst on top of the slashArc — the user wants
+    // only the circular sweep VFX, the same shape as the Knight 2H
+    // spin, just colored to match what's in hand.
+    const isSword = this._weaponKind === 'sword_1h';
+    const swirlColor = isSword ? 0xffffff : 0xffae6a;
     this._startSwingFromSpec({
       swing: 0.70,
       impactAt: 0.50,
       range: 3.0,
       arc: Math.PI * 2,        // full circle
-      slash: { color: 0xffae6a, height: 1.05 },
+      slash: { color: swirlColor, height: 1.05 },
       damageMult: 2.2,
       cooldown: 1.20,
       animKey: 'attack_2h_spinning',
-      ringColor: 0xffae6a,
+      ringColor: swirlColor,
       isSuper: true,
       charKind: 'dualSlice',
     });
-    this.effects?.ring?.(this.pos.x, 0.05, this.pos.z, 0xffae6a, 1.6, 0.30);
-    this.effects?.burst?.(this.pos.x, 0.5, this.pos.z, 0xffae6a, 6, 4, 0.22);
   }
 
   _triggerDashStrike(cfg = null) {
