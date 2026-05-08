@@ -187,11 +187,14 @@ export const CHARACTERS = [
     // both of which sit at the fast end of the cooldown table.
     weaponAffinity: { sword_1h: CLASS_AFFINITY, wand: CLASS_AFFINITY },
     // Knife charge: lunge dash with a stab during the dash (not after) —
-    // forced crit, brief i-frames and a small gold steal per hit. Only
-    // applies to the Rogue's dagger; their wand keeps the generic mage-
-    // style spell+melee flow from WEAPONS.
+    // forced crit, brief i-frames and a small gold steal per hit.
+    // Axe_1h reuses the same dash-strike mechanic but tuned for a
+    // heavier weapon: longer cooldown so it can't be spammed and a
+    // bigger damage multiplier so the commitment pays off. Wand keeps
+    // the generic mage-style spell+melee flow from WEAPONS.
     charSuper: {
       sword_1h: { kind: 'dashStrike' },
+      axe_1h:   { kind: 'dashStrike', damageMult: 2.4, cooldown: 1.40 },
     },
   },
 ];

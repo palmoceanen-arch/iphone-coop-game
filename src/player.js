@@ -600,7 +600,8 @@ export class Player {
     //  - 'enchant'    (Mage 1H/2H sword + axe): hold past threshold
     //    binds the player's ability element to the weapon so the next
     //    connecting swing applies that element's on-hit effect.
-    const charSuperKind = this._character?.def?.charSuper?.[this._weaponKind]?.kind || null;
+    const charSuperCfg = this._character?.def?.charSuper?.[this._weaponKind] || null;
+    const charSuperKind = charSuperCfg?.kind || null;
     const isHeld = !!intent.attackHeld;
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
@@ -678,7 +679,7 @@ export class Player {
         } else {
           this._chargeTime += dt;
           if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
-            this._triggerCharSuper(charSuperKind);
+            this._triggerCharSuper(charSuperKind, charSuperCfg);
             this._chargeFired = true;
           }
         }
@@ -997,11 +998,11 @@ export class Player {
   // reads to apply post-damage effects (stun / gold steal / forced
   // crit) from a single hook so this code stays focused on the
   // animation + state setup.
-  _triggerCharSuper(kind) {
-    if (kind === 'shieldBash') return this._triggerShieldBash();
-    if (kind === 'dualSlice')  return this._triggerDualSlice();
-    if (kind === 'dashStrike') return this._triggerDashStrike();
-    if (kind === 'enchant')    return this._triggerEnchant();
+  _triggerCharSuper(kind, cfg = null) {
+    if (kind === 'shieldBash') return this._triggerShieldBash(cfg);
+    if (kind === 'dualSlice')  return this._triggerDualSlice(cfg);
+    if (kind === 'dashStrike') return this._triggerDashStrike(cfg);
+    if (kind === 'enchant')    return this._triggerEnchant(cfg);
   }
 
   // Common swing setup — mirrors `_triggerAttack` but driven by an
@@ -1094,7 +1095,7 @@ export class Player {
     this.effects?.burst?.(this.pos.x, 0.5, this.pos.z, 0xffae6a, 6, 4, 0.22);
   }
 
-  _triggerDashStrike() {
+  _triggerDashStrike(cfg = null) {
     // Lock dash direction to the current facing — the strike commits
     // to the angle at trigger time, so the player can't redirect
     // mid-stab. Brief i-frames cover the lunge so the rogue can
@@ -1103,6 +1104,12 @@ export class Player {
     this._dashStrikeDir.z = this.facing.z;
     this._dashStrikeT = DASH_STRIKE_DURATION;
     this.invuln = Math.max(this.invuln, DASH_STRIKE_DURATION + 0.05);
+    // Per-weapon tuning from CHARACTERS.charSuper[<kind>] in models.js.
+    // The Rogue's dagger uses the default fast/light values; equipping a
+    // 1H axe overrides damageMult + cooldown for a heavier, slower
+    // commitment that still uses the same lunge geometry.
+    const damageMult = cfg?.damageMult ?? 1.6;
+    const cooldown   = cfg?.cooldown   ?? 0.85;
     this._startSwingFromSpec({
       // Swing duration matches the dash + a short followthrough so the
       // stab visually lands during the lunge ("strike in the moment of
@@ -1112,8 +1119,8 @@ export class Player {
       range: 1.9,
       arc: Math.PI * 1.4,
       slash: { color: 0x9adfff, height: 0.8 },
-      damageMult: 1.6,
-      cooldown: 0.85,
+      damageMult,
+      cooldown,
       animKey: 'dodge_forward',
       ringColor: 0x9adfff,
       isSuper: true,
