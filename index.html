@@ -407,6 +407,19 @@
       }
       .start-weapon-chip:hover { background: #20262e; }
       .start-weapon-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
+      /* Affinity star: marks a weapon that the currently selected
+         character gets a class bonus on. Rendered with a pseudo-element
+         so the chip's centred label stays unchanged when the marker
+         appears / disappears as the character toggles. */
+      .start-weapon-chip.affinity { border-color: rgba(255, 209, 102, 0.55); }
+      .start-weapon-chip.affinity::after {
+        content: '★';
+        position: absolute; top: 1px; right: 4px;
+        color: #ffd166; font-size: 10px; line-height: 1;
+        text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+      }
+      .start-weapon-chip { position: relative; }
+      .start-weapon-chip.affinity.active { border-color: #ffd166; }
       /* Character picker. Uses the same chip language as the weapon
          picker but laid out in a 2-column grid because the labels are
          longer ("Скелет-разбой" etc.) and would clip in 3 narrow

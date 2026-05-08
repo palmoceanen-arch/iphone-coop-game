@@ -23,6 +23,7 @@ import {
   applyCharacterTint,
   setEquippedWeapon,
   spawnCharacter,
+  weaponAffinityFor,
 } from './models.js';
 import { SaveSystem } from './saveSystem.js';
 
@@ -96,6 +97,10 @@ export class StartMenu {
     // 3D preview state per slot, set up lazily inside _renderSlots(): each
     // entry is `{ renderer, scene, camera, mixer, character }`.
     this._previews = [];
+    // Weapon picker DOM rows per slot — stashed so we can re-stamp the
+    // affinity star + tooltip on character switch without rebuilding
+    // the picker (which would lose the user's current weapon pick).
+    this._weaponRows = [];
     this._rafId = null;
     this._lastT = 0;
 
@@ -320,7 +325,6 @@ export class StartMenu {
       btn.type = 'button';
       btn.className = 'start-weapon-chip';
       btn.setAttribute('data-weapon', id);
-      btn.title = `${profile.label} · DMG ×${profile.damageMult.toFixed(1)} · CD ${profile.cooldown.toFixed(2)}c`;
       btn.textContent = profile.label;
       if (this.config[index].weapon === id) btn.classList.add('active');
       btn.addEventListener('click', () => {
@@ -333,6 +337,12 @@ export class StartMenu {
       weaponRow.appendChild(btn);
     }
     slot.appendChild(weaponRow);
+    // Stash the row + chip refs for affinity-marker refreshes when the
+    // user swaps character — the bonus is per-character, so the star
+    // and tooltip have to update without rebuilding the picker (which
+    // would lose the user's current weapon pick).
+    this._weaponRows[index] = weaponRow;
+    this._refreshWeaponAffinity(index);
 
     // Schedule preview setup after the slot is in the DOM. We use a
     // microtask so `appendChild` has already completed by the time we read
@@ -457,6 +467,29 @@ export class StartMenu {
     setEquippedWeapon(character, cfg.weapon);
     character.root.rotation.y = 0;
     p.character = character;
+    // Re-stamp affinity markers on the weapon picker: the bonus is
+    // tied to the chosen character, so a swap (Knight → Mage) needs
+    // the star + bonus tooltip to migrate from the swords to staff/wand.
+    this._refreshWeaponAffinity(index);
+  }
+
+  // Update each weapon chip's tooltip + visual marker to reflect the
+  // active character's weaponAffinity table. Called once at slot build
+  // and every time the character toggles. Idempotent.
+  _refreshWeaponAffinity(index) {
+    const row = this._weaponRows[index];
+    if (!row) return;
+    const cfg = this.config[index];
+    const def = CHARACTER_BY_ID[cfg.character] || CHARACTERS[0];
+    for (const chip of row.querySelectorAll('.start-weapon-chip')) {
+      const id = chip.getAttribute('data-weapon');
+      const profile = WEAPONS[id];
+      if (!profile) continue;
+      const affinity = weaponAffinityFor(def, id);
+      const bonus = affinity > 1 ? ` · ★ +${Math.round((affinity - 1) * 100)}%` : '';
+      chip.title = `${profile.label} · DMG ×${profile.damageMult.toFixed(1)} · CD ${profile.cooldown.toFixed(2)}c${bonus}`;
+      chip.classList.toggle('affinity', affinity > 1);
+    }
   }
 
   _applyTintToPreview(index) {

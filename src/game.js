@@ -1629,7 +1629,13 @@ export class Game {
     const weaponMult = player._activeSwing?.damageMult
       ?? player.weaponProfile?.damageMult
       ?? 1.0;
-    let dmg = player.stats.damage * (1 + defaultRandom() * 0.05) * ctx.dmgMult * weaponMult;
+    // Class affinity: each Adventurer's CHARACTERS row lists the weapon
+    // kinds they're tuned around (Knight on swords, Barbarian on axes,
+    // Mage on staff/wand, Rogue on 1H sword + wand) and gets a flat
+    // damage multiplier when wielding one of them. Off-class loadouts
+    // still work fine — they just don't get the bump.
+    const affinityMult = player._character?.def?.weaponAffinity?.[player._weaponKind] ?? 1.0;
+    let dmg = player.stats.damage * (1 + defaultRandom() * 0.05) * ctx.dmgMult * weaponMult * affinityMult;
     if (player._berserk) dmg *= player._berserk.dmg;
     ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {

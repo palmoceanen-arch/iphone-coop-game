@@ -28,7 +28,6 @@ const MANIFEST = {
   barbarian: { url: 'models/Barbarian.glb' },
   mage: { url: 'models/Mage.glb' },
   rogue: { url: 'models/Rogue.glb' },
-  rogue_hooded: { url: 'models/Rogue_Hooded.glb' },
   // Enemy-only models from the KayKit Skeletons pack. Not surfaced in
   // the player character picker; spawned by `enemy.js` via
   // `spawnCharacter('skel_*', …)`.
@@ -76,6 +75,14 @@ const MANIFEST = {
 //
 // Asset license: Creative Commons Zero (CC0) — no attribution required.
 // Source: https://kaylousberg.itch.io/kaykit-adventurers
+// Multiplier applied by `_onPlayerHitsEnemy` to a swing's outgoing damage
+// when the equipped weapon matches one of the listed kinds. 1.25 (+25%)
+// is the standard "this is your class' weapon" bonus — enough to feel
+// the upside on the right pick, not so large that off-class loadouts
+// feel punished. Each character covers two related weapon kinds so the
+// player isn't forced into a single specific weapon to feel optimal.
+const CLASS_AFFINITY = 1.25;
+
 export const CHARACTERS = [
   {
     id: 'knight', kind: 'knight', label: 'Рыцарь',
@@ -84,10 +91,16 @@ export const CHARACTERS = [
       '1H_Sword', '2H_Sword', '1H_Sword_Offhand',
       'Round_Shield', 'Rectangle_Shield', 'Spike_Shield', 'Badge_Shield',
     ],
-    // Knight's WEAPONS.showNodes already references the built-in
-    // sword/shield names directly, so no per-character override is
-    // needed — the global WEAPONS profile path covers every weapon.
-    weaponNodes: {},
+    // Knight uses its baked-in 1H_Sword/2H_Sword meshes for the sword
+    // slots; the override forces `setEquippedWeapon` down the built-in
+    // path so the donor (Knight’s own sword, extracted at preload
+    // time and used as the external mesh for the other Adventurers)
+    // isn't double-attached on top of itself.
+    weaponNodes: {
+      sword_1h: ['1H_Sword', 'Round_Shield'],
+      sword_2h: ['2H_Sword'],
+    },
+    weaponAffinity: { sword_1h: CLASS_AFFINITY, sword_2h: CLASS_AFFINITY },
   },
   {
     id: 'barbarian', kind: 'barbarian', label: 'Варвар',
@@ -100,6 +113,7 @@ export const CHARACTERS = [
       axe_1h: ['1H_Axe', 'Barbarian_Round_Shield'],
       axe_2h: ['2H_Axe'],
     },
+    weaponAffinity: { axe_1h: CLASS_AFFINITY, axe_2h: CLASS_AFFINITY },
   },
   {
     id: 'mage', kind: 'mage', label: 'Маг',
@@ -111,33 +125,37 @@ export const CHARACTERS = [
       staff: ['2H_Staff'],
       wand: ['1H_Wand'],
     },
+    weaponAffinity: { staff: CLASS_AFFINITY, wand: CLASS_AFFINITY },
   },
   {
     id: 'rogue', kind: 'rogue', label: 'Разбойник',
-    skinAware: true, defaultWeapon: 'axe_1h',
+    skinAware: true, defaultWeapon: 'wand',
     toggleable: [
       'Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable',
     ],
     // Rogue has a knife built into handslot.r — re-use it as the
     // visible mesh for the 1H sword slot so picking sword_1h shows
-    // *something* (the WEAPONS profile attaches no external sword).
+    // their own dagger instead of the knight donor sword.
     weaponNodes: {
       sword_1h: ['Knife'],
     },
-  },
-  {
-    id: 'rogue_hooded', kind: 'rogue_hooded', label: 'Разбойник в капюшоне',
-    skinAware: true, defaultWeapon: 'axe_1h',
-    toggleable: [
-      'Knife', 'Knife_Offhand', '1H_Crossbow', '2H_Crossbow', 'Throwable',
-    ],
-    weaponNodes: {
-      sword_1h: ['Knife'],
-    },
+    // Rogue's identity is light/quick weapons — give them the
+    // damage bonus on the 1H sword (their dagger) and the wand,
+    // both of which sit at the fast end of the cooldown table.
+    weaponAffinity: { sword_1h: CLASS_AFFINITY, wand: CLASS_AFFINITY },
   },
 ];
 
 export const CHARACTER_BY_ID = Object.fromEntries(CHARACTERS.map(c => [c.id, c]));
+
+// Resolve a character's damage multiplier for a given weapon kind. Returns
+// 1.0 (no bonus) when the character row doesn't list the weapon. Used both
+// at runtime by game.js to scale damage and by the start-menu picker to
+// surface the bonus in chip tooltips, so the multiplication value lives
+// in exactly one place.
+export function weaponAffinityFor(charDef, weaponKind) {
+  return charDef?.weaponAffinity?.[weaponKind] ?? 1.0;
+}
 
 // Static nature props (Kenney Nature Kit, CC0 — kenney.nl/assets/nature-kit).
 // Loaded once and cloned cheaply for each placed instance.
@@ -364,6 +382,15 @@ export function preloadModels(onProgress) {
           animations: gltf.animations || [],
           skinMask,
         };
+        // The Knight ships with the only sword/shield meshes in the
+        // pack — stash a toon-shaded clone of each blade so the other
+        // Adventurers can wear them when the player picks sword_1h /
+        // sword_2h. (Round_Shield isn't donated for now: handslot.l
+        // attachment isn't wired and a one-handed loadout without a
+        // shield reads fine on Mage/Barbarian/Rogue.)
+        if (key === 'knight') {
+          _stashKnightSwordDonors(gltf.scene);
+        }
         done += 1;
         onProgress?.(done, total, key);
         resolve();
@@ -1001,10 +1028,17 @@ export const WEAPONS = {
   // slice — reads as a much bigger swipe than the old overhead chop and
   // covers a generous front arc so positioning still matters but glancing
   // blows are forgiving. Damage window lands at the midpoint of the swipe.
+  //
+  // `attach: 'sword_1h_donor'` makes non-Knight Adventurers (whose
+  // bodies don't ship with a `1H_Sword` mesh) attach a clone of the
+  // Knight's own sword to handslot.r when this slot is picked. Knight
+  // itself opts out of the donor via its per-character `weaponNodes`
+  // override (toggling the built-in mesh wins), so the donor never
+  // double-stacks for Knight.
   sword_1h: {
     label: 'Sword',
     showNodes: ['1H_Sword', 'Round_Shield'],
-    attach: null,
+    attach: 'sword_1h_donor',
     attackAnim: 'attack_1h_horiz',  // 1H horizontal slice (~1.0s baked)
     swing: 0.85,
     impactAt: 0.50,
@@ -1020,7 +1054,7 @@ export const WEAPONS = {
   sword_2h: {
     label: 'Greatsword',
     showNodes: ['2H_Sword'],
-    attach: null,
+    attach: 'sword_2h_donor',
     attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
     swing: 1.00,
     impactAt: 0.55,
@@ -1122,6 +1156,47 @@ const KNIGHT_TOGGLEABLE_NODES = [
   '1H_Sword', '2H_Sword', '1H_Sword_Offhand',
   'Round_Shield', 'Rectangle_Shield', 'Spike_Shield', 'Badge_Shield',
 ];
+
+// Pulled from Knight.glb at preload time and stashed under these keys in
+// `weaponCache` so the WEAPONS sword_1h / sword_2h profiles can attach
+// the Knight's sword mesh to non-Knight Adventurers as an external
+// donor. Kept as a constant so a typo here would break loudly instead of
+// silently dropping the donor at runtime.
+const SWORD_DONOR_KEYS = {
+  '1H_Sword': 'sword_1h_donor',
+  '2H_Sword': 'sword_2h_donor',
+};
+
+// Pull standalone weapon donors out of the Knight scene so non-Knight
+// Adventurers can attach the same blade meshes when picking sword_1h /
+// sword_2h. Both built-in nodes are authored in handslot.r local space,
+// so re-parenting the clone to a different character's handslot.r
+// preserves the in-hand position/rotation perfectly — the
+// `inst.position.set(0, 0.033, 0); inst.quaternion.set(0, -1, 0, 0)`
+// reset that setEquippedWeapon applies to external attaches happens to
+// match the values that were already baked into these donor nodes, so
+// the donor path produces the exact same pose Knight has natively.
+function _stashKnightSwordDonors(scene) {
+  for (const [nodeName, cacheKey] of Object.entries(SWORD_DONOR_KEYS)) {
+    const node = scene.getObjectByName(nodeName);
+    if (!node) {
+      console.warn('[models] Knight donor weapon mesh missing:', nodeName);
+      continue;
+    }
+    const donor = node.clone(true);
+    donor.visible = true;
+    donor.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = false;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        const replaced = mats.map((m) => m ? toToonMaterial(m) : m);
+        obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
+      }
+    });
+    weaponCache[cacheKey] = donor;
+  }
+}
 
 // Loads weapon GLBs that aren't baked into the character. Lazy: only fires
 // the first time someone actually equips an external weapon, so the initial
