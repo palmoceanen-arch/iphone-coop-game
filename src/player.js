@@ -778,11 +778,12 @@ export class Player {
     // right hand, so we offset:
     //   - forward by 0.9 so the bolt visibly leaves in front of the
     //     character rather than spawning inside their chest
-    //   - right by 0.28 (perpendicular to facing, right-hand side =
-    //     (facing.z, -facing.x), which is +90° clockwise about Y)
+    //   - right by 0.28 (perpendicular to facing in our view; right-
+    //     hand side from the player's POV with the camera looking
+    //     down at the world is `(-facing.z, facing.x)`)
     //   - down by 0.25 (y=0.75 instead of the default chest-level
     //     1.0) so the bolt comes out at weapon-hand height
-    const rx = dz, rz = -dx;
+    const rx = -dz, rz = dx;
     const muzzleX = this.pos.x + dx * 0.9 + rx * 0.28;
     const muzzleZ = this.pos.z + dz * 0.9 + rz * 0.28;
     const muzzleY = 0.75;
