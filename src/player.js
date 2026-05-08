@@ -972,13 +972,26 @@ export class Player {
     if (isSuper && !sp) return;
     const baseSwing  = sp?.swing      ?? wp.swing;
     const impactAt   = sp?.impactAt   ?? wp.impactAt;
-    const range      = sp?.range      ?? wp.range;
-    const arc        = sp?.arc        ?? wp.arc;
+    let range        = sp?.range      ?? wp.range;
+    let arc          = sp?.arc        ?? wp.arc;
     const slash      = sp?.slash      ?? wp.slash;
     const damageMult = sp?.damageMult ?? wp.damageMult;
     const cooldown   = sp?.cooldown   ?? wp.cooldown;
     const animKey    = sp?.attackAnim ?? this._attackActionKey;
     const ringColor  = sp?.ringColor  ?? null;
+
+    // Mage enchant reach boost — while a charge is bound, the next
+    // melee swing has its collision radius and VFX arc both doubled
+    // so the empowered strike sweeps through a noticeably bigger
+    // wedge. Pairs with the 3× weapon-mesh scale in
+    // `_applyEnchantVfx` (the visible blade looks like it has the
+    // reach to back the bigger hitbox). Enchant only ever binds on
+    // melee weapons (sword/axe slots in CHARACTERS.charSuper), so
+    // staff / wand don't get boosted.
+    if (this._weaponEnchant) {
+      range *= 2;
+      arc   *= 2;
+    }
 
     // The full multiplier — same one cooldown uses — speeds the
     // visible swing up too (animation timeScale is derived from
@@ -1255,9 +1268,13 @@ export class Player {
     const tintColor = new THREE.Color(enchant.color);
     for (const root of targets) {
       // Stash and apply scale at the attachment root so children
-      // (blade, hilt, guard …) all grow uniformly. 4× per the spec.
+      // (blade, hilt, guard …) all grow uniformly. 3× per the spec
+      // — keep this in sync with `ENCHANT_REACH_MULT` below: the
+      // bigger the visible weapon, the more the player expects its
+      // strike radius to extend, and the two numbers are tuned
+      // together (3× scale + 2× reach feels readable in playtest).
       const origScale = root.scale.clone();
-      root.scale.set(origScale.x * 4, origScale.y * 4, origScale.z * 4);
+      root.scale.set(origScale.x * 3, origScale.y * 3, origScale.z * 3);
       scaleSwaps.push({ root, origScale });
       root.traverse((obj) => {
         if (!obj.isMesh || !obj.material) return;
