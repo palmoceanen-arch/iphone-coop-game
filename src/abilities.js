@@ -94,6 +94,11 @@ export class AbilityProjectile {
     this.source = opts.source || null;
     this._trailT = 0;
     this._trailColor = opts.trailColor || this.color;
+    // Visual height. Defaults to 1.0 (chest level) so existing
+    // abilities — icebolt, fireball — keep their previous look. The
+    // staff/wand tap-spell passes ~0.75 so the bolt visibly leaves
+    // the weapon hand instead of the character's head.
+    this.y = (typeof opts.y === 'number') ? opts.y : 1.0;
 
     const grp = new THREE.Group();
     const core = new THREE.Mesh(
@@ -106,7 +111,7 @@ export class AbilityProjectile {
       new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: 0.25 })
     );
     grp.add(glow);
-    grp.position.set(this.pos.x, 1.0, this.pos.z);
+    grp.position.set(this.pos.x, this.y, this.pos.z);
     scene.add(grp);
     this.mesh = grp;
     this._core = core;
@@ -119,13 +124,13 @@ export class AbilityProjectile {
 
     this.pos.x += this.dir.x * this.speed * dt;
     this.pos.z += this.dir.z * this.speed * dt;
-    this.mesh.position.set(this.pos.x, 1.0, this.pos.z);
+    this.mesh.position.set(this.pos.x, this.y, this.pos.z);
 
     // Trail particles
     this._trailT += dt;
     if (this._trailT > 0.025) {
       this._trailT = 0;
-      effects.burst(this.pos.x, 1.0, this.pos.z, this._trailColor, 1, 1.5, 0.12);
+      effects.burst(this.pos.x, this.y, this.pos.z, this._trailColor, 1, 1.5, 0.12);
     }
 
     // Wall collision

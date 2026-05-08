@@ -773,11 +773,21 @@ export class Player {
     // weapon's swing length so a wand spell pops more than a staff cast.
     this.sound.tone?.({ freq: 760, type: 'triangle', dur: 0.22, gain: 0.22, slide: -180 });
 
-    // Tiny muzzle flash so even a missed cast reads on-screen.
-    const muzzleX = this.pos.x + dx * 0.6;
-    const muzzleZ = this.pos.z + dz * 0.6;
-    this.effects?.flashSphere?.(muzzleX, 1.0, muzzleZ, color, 0.35, 0.12);
-    this.effects?.burst?.(muzzleX, 1.0, muzzleZ, color, 4, 2, 0.16);
+    // Muzzle position — anchored to the weapon hand instead of the
+    // character's centre. The character holds staff/wand in their
+    // right hand, so we offset:
+    //   - forward by 0.9 so the bolt visibly leaves in front of the
+    //     character rather than spawning inside their chest
+    //   - right by 0.28 (perpendicular to facing, right-hand side =
+    //     (facing.z, -facing.x), which is +90° clockwise about Y)
+    //   - down by 0.25 (y=0.75 instead of the default chest-level
+    //     1.0) so the bolt comes out at weapon-hand height
+    const rx = dz, rz = -dx;
+    const muzzleX = this.pos.x + dx * 0.9 + rx * 0.28;
+    const muzzleZ = this.pos.z + dz * 0.9 + rz * 0.28;
+    const muzzleY = 0.75;
+    this.effects?.flashSphere?.(muzzleX, muzzleY, muzzleZ, color, 0.35, 0.12);
+    this.effects?.burst?.(muzzleX, muzzleY, muzzleZ, color, 4, 2, 0.16);
 
     // Damage is computed at hit-time inside the swingHit callback, so
     // we set the projectile's own damage to 0 and rely on onHitEnemy
@@ -790,6 +800,7 @@ export class Player {
     combatCtx.spawnAbilityProjectile({
       x: muzzleX,
       z: muzzleZ,
+      y: muzzleY,
       dirX: dx, dirZ: dz,
       speed: ra.speed,
       life: ra.life,
