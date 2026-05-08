@@ -133,13 +133,15 @@ export class AbilityProjectile {
       effects.burst(this.pos.x, this.y, this.pos.z, this._trailColor, 1, 1.5, 0.12);
     }
 
-    // Wall collision
-    if (world && !world.isClear(this.pos.x, this.pos.z, this.radius)) {
-      this._explode(enemies, effects, sound, null);
-      return;
-    }
-
-    // Enemy collision
+    // Damageable collision (enemies + breakables + resources + structures).
+    // Runs BEFORE the world wall-collision check below because rocks,
+    // trees, and placed walls are present in BOTH `enemies` (via the
+    // damageables list) and `world.colliders` — if `isClear` fired
+    // first it would explode the projectile against e.g. a rock
+    // *without* ever calling `onHitEnemy`, so the rock would never
+    // take damage. Checking damageables first means the rock is hit
+    // through the normal pipeline and the projectile is destroyed
+    // naturally via the non-piercing explode below.
     for (const e of enemies) {
       if (!e.alive) continue;
       const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
@@ -155,6 +157,17 @@ export class AbilityProjectile {
           return;
         }
       }
+    }
+
+    // Wall collision — anything in `world.colliders` that wasn't
+    // caught above. In practice this means non-damageable terrain
+    // colliders (cliff clusters, water borders) and any damageable
+    // we somehow tunneled past in a single frame. Either way the
+    // projectile fizzles here without applying damage, which is the
+    // intended behaviour for environmental walls.
+    if (world && !world.isClear(this.pos.x, this.pos.z, this.radius)) {
+      this._explode(enemies, effects, sound, null);
+      return;
     }
 
     // Expire at max range
