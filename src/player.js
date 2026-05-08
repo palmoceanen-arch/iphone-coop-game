@@ -94,7 +94,7 @@ const CHARGE_THRESHOLD = 0.30;
 // instead of materialising at the same instant the button is hit.
 // Tuned to fall under attack-cooldown for both staff and wand
 // (~0.55s / 0.42s) so it never delays a follow-up tap.
-const SPELL_CAST_DELAY = 0.20;
+const SPELL_CAST_DELAY = 0.15;
 
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
@@ -840,12 +840,13 @@ export class Player {
     //   - right by 0.28 (perpendicular to facing in our view; right-
     //     hand side from the player's POV with the camera looking
     //     down at the world is `(-facing.z, facing.x)`)
-    //   - down by 0.25 (y=0.75 instead of the default chest-level
-    //     1.0) so the bolt comes out at weapon-hand height
+    //   - down to y=0.55 (about hip / lowered-weapon height) so the
+    //     bolt clearly emerges from the weapon and not from the
+    //     character's chest
     const rx = -dz, rz = dx;
     const muzzleX = this.pos.x + dx * 0.9 + rx * 0.28;
     const muzzleZ = this.pos.z + dz * 0.9 + rz * 0.28;
-    const muzzleY = 0.75;
+    const muzzleY = 0.55;
     this.effects?.flashSphere?.(muzzleX, muzzleY, muzzleZ, color, 0.35, 0.12);
     this.effects?.burst?.(muzzleX, muzzleY, muzzleZ, color, 4, 2, 0.16);
 
