@@ -80,13 +80,30 @@ export const CAPE_COLOR_PRESETS = [
 const MODEL_YAW_OFFSET = 0;
 const MODEL_SCALE = 0.6;
 
-// Hold-to-charge threshold for 2H super attacks. Tapping under this many
-// seconds fires the normal slice; holding past it (or releasing after a
-// hold longer than this) triggers the charge attack defined in
-// `weaponProfile.superAttack`. 0.30s is short enough that a deliberate
-// tap never accidentally charges, but long enough that a held button
-// reads as "I'm holding for the spin".
-const CHARGE_THRESHOLD = 0.30;
+// Base hold-to-charge threshold for tap-vs-hold weapons (sword_2h,
+// axe_2h, staff, wand). Tapping under this many seconds fires the
+// "tap" branch (normal slice / spell bolt); holding past it triggers
+// the "hold" branch (spin super / melee swing). 0.18s is the
+// responsiveness sweet-spot used by tap-vs-charge games like Hades
+// and Hollow Knight — short enough that a held button feels
+// instantaneous, long enough that a deliberate tap never trips the
+// charge accidentally. The actual threshold the player perceives is
+// scaled by their attack-speed multiplier in `update()` so picking
+// up attack-speed items also makes the charge recognise faster
+// (attack-speed buffs feel like they uniformly accelerate combat
+// instead of only shrinking cooldown).
+const CHARGE_THRESHOLD_BASE = 0.18;
+// Hard floor for the scaled threshold — without this, max-attack-
+// speed would push it under 5ms and any non-instant tap would be
+// misread as a charge.
+const CHARGE_THRESHOLD_MIN = 0.10;
+// Hard floor for the attack-speed-scaled swing duration. The bake of
+// the slash clips assumes a real wind-up; squeezing them under 60%
+// of their base length compresses anticipation out of the motion and
+// the swing reads as a stutter. Cooldown is unaffected (it can keep
+// shrinking) so attack-speed items still increase swings-per-second
+// even when the swing animation has hit this floor.
+const SWING_SCALE_MIN = 0.60;
 
 // Wind-up time for the staff/wand tap-spell. The cast animation and
 // SFX play immediately on press, but the actual projectile is held
@@ -460,6 +477,17 @@ export class Player {
     const wasHeld = this._wasAttackHeld;
     this._wasAttackHeld = isHeld;
 
+    // Charge threshold scales with the same multiplier the swing
+    // cooldown uses, so picking up attack-speed items (or being in
+    // berserk) makes the hold-vs-tap window recognise faster — the
+    // player perceives one coherent "everything is faster" instead of
+    // a fixed 0.30s wait that ignores buffs. Floored so any non-
+    // instant tap can still resolve as a tap. Recomputed every frame
+    // because both inputs (`attackSpeedMult`, `_berserk`) can change
+    // mid-charge.
+    const chargeMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const chargeThreshold = Math.max(CHARGE_THRESHOLD_MIN, CHARGE_THRESHOLD_BASE * chargeMult);
+
     if (wpHasRanged) {
       if (isHeld) {
         if (!wasHeld) {
@@ -473,7 +501,7 @@ export class Player {
           // Auto-fire the melee swing the moment the hold crosses the
           // threshold so the player doesn't have to release to trigger
           // it — same UX feel as the sword_2h spin super.
-          if (!this._chargeFired && this._chargeTime >= CHARGE_THRESHOLD && this.attackTimer <= 0) {
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
             this._triggerAttack(false);
             this._chargeFired = true;
           }
@@ -499,7 +527,7 @@ export class Player {
           this._chargeTime += dt;
           // Auto-fire the spin super the moment the hold crosses the
           // threshold (don't make the player release to trigger it).
-          if (!this._chargeFired && this._chargeTime >= CHARGE_THRESHOLD && this.attackTimer <= 0) {
+          if (!this._chargeFired && this._chargeTime >= chargeThreshold && this.attackTimer <= 0) {
             this._triggerAttack(true);
             this._chargeFired = true;
           }
@@ -689,7 +717,7 @@ export class Player {
     const wp = this.weaponProfile;
     const sp = isSuper ? wp.superAttack : null;
     if (isSuper && !sp) return;
-    const swing      = sp?.swing      ?? wp.swing;
+    const baseSwing  = sp?.swing      ?? wp.swing;
     const impactAt   = sp?.impactAt   ?? wp.impactAt;
     const range      = sp?.range      ?? wp.range;
     const arc        = sp?.arc        ?? wp.arc;
@@ -699,7 +727,19 @@ export class Player {
     const animKey    = sp?.attackAnim ?? this._attackActionKey;
     const ringColor  = sp?.ringColor  ?? null;
 
+    // The full multiplier — same one cooldown uses — speeds the
+    // visible swing up too (animation timeScale is derived from
+    // `swing`, see below), so attack-speed buffs feel like they
+    // accelerate combat uniformly instead of just shrinking the
+    // window between swings while the swing animation drags at base
+    // speed. Floored at SWING_SCALE_MIN so the bake doesn't get
+    // squeezed past the point where it reads as a stutter; cooldown
+    // keeps shrinking unchecked so swings-per-second still climbs
+    // past that floor.
     const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const swingMult = Math.max(SWING_SCALE_MIN, attackCdMult);
+    const swing = baseSwing * swingMult;
+
     this.attackTimer = cooldown * attackCdMult;
     this.attackAnim = 0;
     this.swingActive = true;
