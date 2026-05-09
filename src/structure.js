@@ -19,6 +19,28 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { TOON_GRADIENT } from './shading.js';
 import { spawnProp, getPropKinds } from './models.js';
 
+// Available random roof colours. The palette is exposed by name so the
+// roof descriptor can persist a compact string (e.g. `"darkGreen"`) and
+// the same colour survives a save/reload — every other reference reads
+// straight off this table. `base` is the dominant tile colour; `light`
+// is the highlight stripe along the top edge of each tile (gives the
+// scaled / curved-tile illusion); `dark` is the grout between rows.
+export const ROOF_COLOR_PALETTE = {
+  darkGreen: { base: 0x2a6a3a, light: 0x4a8b54, dark: 0x1b4624 },
+  burgundy:  { base: 0x7a1f2c, light: 0xa53a48, dark: 0x4a1018 },
+  yellow:    { base: 0xd4a82a, light: 0xefc44a, dark: 0x8a6e15 },
+  blue:      { base: 0x2543a0, light: 0x4566c8, dark: 0x14266a },
+  lightBlue: { base: 0x5fb6dd, light: 0x82d0f0, dark: 0x357fa6 },
+};
+export const ROOF_COLOR_NAMES = Object.keys(ROOF_COLOR_PALETTE);
+
+// Pick a random named colour for a freshly-formed roof. Caller persists
+// the returned name on the descriptor so chunk reload picks the same one.
+export function pickRandomRoofColor() {
+  const names = ROOF_COLOR_NAMES;
+  return names[Math.floor(Math.random() * names.length)];
+}
+
 // Procedural materials cached and shared across all structures of a kind so
 // long sessions don't accumulate THREE.Material allocations.
 let MATERIALS = null;
@@ -888,13 +910,113 @@ export function buildRoofCornerMesh() {
   return g;
 }
 
+// World-space size of a single tile in the roof's tile imitation. 0.6m
+// horizontal × 0.4m vertical reads as "clay tile" without making the
+// rows look pixelated on a small (4m × 4m) building or oversized on a
+// large one. Used to compute UVs so the same tile texture tiles cleanly
+// across roofs of any footprint.
+const ROOF_TILE_W = 0.6;
+const ROOF_TILE_H = 0.4;
+
+// CanvasTexture cache, keyed by colour name. Generated lazily the first
+// time a roof of a given colour is built and reused for every subsequent
+// roof of the same colour so the GPU only ever uploads one texture per
+// palette entry.
+const ROOF_TILE_TEXTURES = new Map();
+function hexToRGB(hex) {
+  return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+}
+function hexCSS(hex) {
+  return '#' + hex.toString(16).padStart(6, '0');
+}
+function shadeCSS(hex, factor) {
+  const [r, g, b] = hexToRGB(hex);
+  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return `rgb(${clamp(r * factor)},${clamp(g * factor)},${clamp(b * factor)})`;
+}
+
+// Build a 256×256 tile-pattern canvas texture for the named palette
+// entry. Pattern: 8 horizontal rows × 4 columns of slightly tonally
+// varied tiles, brick-offset every other row, with a thin grout between
+// tiles and a bright top edge per tile so the slope reads as overlapping
+// scales rather than a flat coloured triangle.
+function getRoofTileTexture(colorName) {
+  const cached = ROOF_TILE_TEXTURES.get(colorName);
+  if (cached) return cached;
+  const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
+  const canvas = (typeof document !== 'undefined' && document.createElement)
+    ? document.createElement('canvas')
+    : null;
+  if (!canvas) return null;
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  // Grout fill — every gap between tiles ends up showing this colour.
+  ctx.fillStyle = hexCSS(c.dark);
+  ctx.fillRect(0, 0, 256, 256);
+  const rows = 8;
+  const cols = 4;
+  const tileH = canvas.height / rows;
+  const tileW = canvas.width / cols;
+  const grout = 1.5;
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2 === 0) ? 0 : tileW * 0.5;
+    // Draw one extra column on each side so the brick offset wraps
+    // cleanly without leaving a slim grout strip at U=0 / U=1.
+    for (let i = -1; i <= cols; i++) {
+      const x = i * tileW + offset + grout;
+      const y = r * tileH + grout;
+      const w = tileW - grout * 2;
+      const h = tileH - grout * 2;
+      // Deterministic per-tile tonal jitter so the roof reads as hand
+      // -laid tiles, not a perfect repeating pattern.
+      const jitter = (((r * 17 + i * 13) % 7) - 3) * 0.025;
+      ctx.fillStyle = shadeCSS(c.base, 1.0 + jitter);
+      ctx.fillRect(x, y, w, h);
+      // Highlight stripe along the top edge of each tile — sells the
+      // "row of curved scales" look without modelling actual curvature.
+      ctx.fillStyle = shadeCSS(c.light, 1.0 + jitter * 0.5);
+      ctx.fillRect(x, y, w, Math.max(1, h * 0.18));
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  ROOF_TILE_TEXTURES.set(colorName, tex);
+  return tex;
+}
+
+// MeshToonMaterial cache, keyed by colour name. Each roof shares one
+// material across its 4 face triangles so a chunk full of buildings
+// stays cheap to draw.
+const ROOF_TILE_MATERIALS = new Map();
+function getRoofTileMaterial(colorName) {
+  const cached = ROOF_TILE_MATERIALS.get(colorName);
+  if (cached) return cached;
+  const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
+  const tex = getRoofTileTexture(colorName);
+  const mat = new THREE.MeshToonMaterial({
+    color: c.base,
+    map: tex || null,
+    gradientMap: TOON_GRADIENT,
+  });
+  ROOF_TILE_MATERIALS.set(colorName, mat);
+  return mat;
+}
+
 // Procedural hip-roof bridging an axis-aligned rectangle. width is the
 // rectangle's X extent, depth its Z extent. Apex is centered above the
 // rectangle at a height proportional to the longer side so the pitch is
 // natural-looking regardless of footprint. Caller positions the group
 // at the rectangle's centre on the ground (xz centre, y = corner y +
 // corner height) — the roof mesh extends upward from there.
-export function buildRoofPitchedMesh(width, depth) {
+//
+// `colorName` (optional) picks a tile-imitation skin from
+// `ROOF_COLOR_PALETTE`. When omitted (legacy callers / preview ghosts)
+// the roof falls back to the original wooden plank look.
+export function buildRoofPitchedMesh(width, depth, colorName = null) {
   ensureMaterials();
   const g = new THREE.Group();
   const w = Math.max(0.5, width);
@@ -902,44 +1024,78 @@ export function buildRoofPitchedMesh(width, depth) {
   // Apex height: half the longer side of the rectangle. Gives ~45° pitch
   // for square buildings, slightly shallower for rectangular ones.
   const apexH = Math.max(w, d) * 0.5;
-  // Four base vertices (rectangle corners) + apex.
-  const verts = new Float32Array([
-    -w / 2, 0, -d / 2,    // 0 NW
-    +w / 2, 0, -d / 2,    // 1 NE
-    +w / 2, 0, +d / 2,    // 2 SE
-    -w / 2, 0, +d / 2,    // 3 SW
-    0, apexH, 0,          // 4 apex
-  ]);
-  // Four triangular faces, wound CCW when viewed from outside so face
-  // normals point outward and three.js culls back-faces correctly.
-  const idx = new Uint16Array([
-    0, 4, 1,    // N face
-    1, 4, 2,    // E face
-    2, 4, 3,    // S face
-    3, 4, 0,    // W face
-  ]);
+  // Slope length per face — i.e. the distance from the apex back down to
+  // the midpoint of that face's base edge, measured along the slanted
+  // surface. Used to size UVs so a tile is the same world-space size on
+  // every face regardless of footprint aspect ratio.
+  const slopeLenNS = Math.sqrt((d * 0.5) * (d * 0.5) + apexH * apexH);
+  const slopeLenEW = Math.sqrt((w * 0.5) * (w * 0.5) + apexH * apexH);
+  // Per-face vertices (no shared vertices across faces) so each face
+  // gets its own UVs without seams. Order: NW, NE, SE, SW, then apex
+  // duplicated four times — once per face, indexed from the base edge
+  // CCW when viewed from outside.
+  const NW = [-w / 2, 0, -d / 2];
+  const NE = [+w / 2, 0, -d / 2];
+  const SE = [+w / 2, 0, +d / 2];
+  const SW = [-w / 2, 0, +d / 2];
+  const APEX = [0, apexH, 0];
+  // [base-left, apex, base-right] per face, wound CCW when viewed from
+  // outside the building so face normals point outward.
+  const faces = [
+    { base: w, slope: slopeLenNS, verts: [NW, APEX, NE] },           // N
+    { base: d, slope: slopeLenEW, verts: [NE, APEX, SE] },           // E
+    { base: w, slope: slopeLenNS, verts: [SE, APEX, SW] },           // S
+    { base: d, slope: slopeLenEW, verts: [SW, APEX, NW] },           // W
+  ];
+  const positions = new Float32Array(faces.length * 3 * 3);
+  const uvs = new Float32Array(faces.length * 3 * 2);
+  for (let f = 0; f < faces.length; f++) {
+    const face = faces[f];
+    const uMax = face.base / ROOF_TILE_W;
+    const vMax = face.slope / ROOF_TILE_H;
+    // base-left, apex, base-right
+    const v0 = face.verts[0];
+    const v1 = face.verts[1];
+    const v2 = face.verts[2];
+    const pBase = f * 9;
+    positions[pBase + 0] = v0[0]; positions[pBase + 1] = v0[1]; positions[pBase + 2] = v0[2];
+    positions[pBase + 3] = v1[0]; positions[pBase + 4] = v1[1]; positions[pBase + 5] = v1[2];
+    positions[pBase + 6] = v2[0]; positions[pBase + 7] = v2[1]; positions[pBase + 8] = v2[2];
+    const uBase = f * 6;
+    // base-left -> (0, 0), base-right -> (uMax, 0), apex -> (uMax/2, vMax)
+    uvs[uBase + 0] = 0;        uvs[uBase + 1] = 0;
+    uvs[uBase + 2] = uMax / 2; uvs[uBase + 3] = vMax;
+    uvs[uBase + 4] = uMax;     uvs[uBase + 5] = 0;
+  }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, MATERIALS.plank);
+  const outerMat = colorName
+    ? getRoofTileMaterial(colorName)
+    : MATERIALS.plank;
+  const mesh = new THREE.Mesh(geo, outerMat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   g.add(mesh);
   // Thin under-side plank so a player looking up from inside doesn't
-  // see backface culling holes — same geometry but flipped winding so
-  // the inside is also lit. Same material so the underside reads as
-  // a wooden ceiling.
-  const innerVerts = verts.slice();
-  const innerIdx = new Uint16Array([
-    1, 4, 0,    // N face flipped
-    2, 4, 1,    // E flipped
-    3, 4, 2,    // S flipped
-    0, 4, 3,    // W flipped
-  ]);
+  // see backface culling holes — same triangles flipped, plain plank
+  // material so the underside reads as a wooden ceiling regardless of
+  // the outer tile colour.
+  const innerPositions = new Float32Array(faces.length * 3 * 3);
+  for (let f = 0; f < faces.length; f++) {
+    const face = faces[f];
+    const v0 = face.verts[0];
+    const v1 = face.verts[1];
+    const v2 = face.verts[2];
+    const pBase = f * 9;
+    // Reverse winding so the underside faces inward.
+    innerPositions[pBase + 0] = v2[0]; innerPositions[pBase + 1] = v2[1]; innerPositions[pBase + 2] = v2[2];
+    innerPositions[pBase + 3] = v1[0]; innerPositions[pBase + 4] = v1[1]; innerPositions[pBase + 5] = v1[2];
+    innerPositions[pBase + 6] = v0[0]; innerPositions[pBase + 7] = v0[1]; innerPositions[pBase + 8] = v0[2];
+  }
   const innerGeo = new THREE.BufferGeometry();
-  innerGeo.setAttribute('position', new THREE.BufferAttribute(innerVerts, 3));
-  innerGeo.setIndex(new THREE.BufferAttribute(innerIdx, 1));
+  innerGeo.setAttribute('position', new THREE.BufferAttribute(innerPositions, 3));
   innerGeo.computeVertexNormals();
   const inner = new THREE.Mesh(innerGeo, MATERIALS.plankDark);
   inner.castShadow = false;

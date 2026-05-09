@@ -28,7 +28,7 @@ import { Resource, harvestYield } from './resource.js';
 import {
   Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
   buildWoodWallMesh, buildGlassWallMesh, buildRoofPitchedMesh,
-  GATE_OPEN_RADIUS, structureMaterial,
+  GATE_OPEN_RADIUS, structureMaterial, pickRandomRoofColor,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
 import { Crop, CROP_ORDER, cropLabel } from './farming.js';
@@ -1064,10 +1064,14 @@ export class Game {
       } else if (s.kind === 'roof_pitched') {
         // Roof descriptor carries the rectangle bounds; rebuild the
         // mesh with the right dimensions and centre it above the
-        // bounding rectangle.
+        // bounding rectangle. The persisted `roofColor` (one of the
+        // entries in ROOF_COLOR_PALETTE) drives the tile-imitation
+        // skin so a chunk reload picks the same colour we randomised
+        // when the roof first formed.
         struct._roofBounds = {
           minX: s.minX, minZ: s.minZ, maxX: s.maxX, maxZ: s.maxZ,
         };
+        struct._roofColor = s.roofColor || null;
         this._rebuildRoofPitchedMesh(struct);
       }
     }
@@ -1223,7 +1227,7 @@ export class Game {
     const cz = (b.minZ + b.maxZ) / 2;
     const old = struct.mesh;
     if (old && old.parent) old.parent.remove(old);
-    const next = buildRoofPitchedMesh(w, d);
+    const next = buildRoofPitchedMesh(w, d, struct._roofColor || null);
     next.position.set(cx, struct.y || 0, cz);
     next.rotation.y = 0;
     struct.group.add(next);
@@ -1297,17 +1301,75 @@ export class Game {
         // De-dupe: skip if a roof already exists with these bounds.
         if (this._roofExistsFor(minX, minZ, maxX, maxZ, newY)) continue;
         // Spawn the roof. Anchor at the rectangle centre so the
-        // descriptor's chunkKey lands on a sensible chunk.
+        // descriptor's chunkKey lands on a sensible chunk. Pick a
+        // random tile colour so each new roof has its own look; the
+        // name is persisted on the descriptor so chunk reload
+        // re-uses the same one.
         const cx = (minX + maxX) / 2;
         const cz = (minZ + maxZ) / 2;
         const roofRecipe = RECIPES.roof_pitched;
+        const roofColor = pickRandomRoofColor();
         this.world.placeStructure(
           cx, cz, 'roof_pitched', 0,
           roofRecipe?.hp ?? 80,
           newY,
-          { minX, minZ, maxX, maxZ },
+          { minX, minZ, maxX, maxZ, roofColor },
         );
+        // Once the roof is up, the four corner posts have served
+        // their purpose — consume them so the building reads as a
+        // proper finished house instead of a roof with four wooden
+        // stubs poking out of the ridge. The roof_pitched descriptor
+        // already carries the rectangle bounds, so the corners are
+        // no longer needed for chunk-reload geometry either.
+        this._consumeRoofCorners(minX, minZ, maxX, maxZ, newY);
         return;
+      }
+    }
+  }
+
+  // Tear down the four roof_corner posts whose positions sit at the
+  // corners of the rectangle (minX,minZ)-(maxX,maxZ) at the given y.
+  // Mirrors the death path: forget the descriptor (so chunk reload
+  // doesn't respawn the post), drop its collider, and dispose its
+  // mesh. The Structure entry is marked dead so the next compactInPlace
+  // sweep removes it from `this.structures`.
+  _consumeRoofCorners(minX, minZ, maxX, maxZ, y) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const targets = [
+      { x: minX, z: minZ },
+      { x: minX, z: maxZ },
+      { x: maxX, z: minZ },
+      { x: maxX, z: maxZ },
+    ];
+    for (const t of targets) {
+      // Drop the descriptor first so a chunk unload between this and
+      // the structure-side cleanup doesn't leave it behind.
+      const ck = this.world.chunkKeyOf(t.x, t.z);
+      const arr = this.world.placedStructures.get(ck);
+      if (arr) {
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const d = arr[i];
+          if (d.kind !== 'roof_corner') continue;
+          if (Math.abs(d.x - t.x) >= eps) continue;
+          if (Math.abs(d.z - t.z) >= eps) continue;
+          if (Math.abs((d.y || 0) - y) >= yEps) continue;
+          this.world.forgetStructure(ck, d.x, d.z, d.y || 0);
+          break;
+        }
+      }
+      // Drop the live Structure (mesh + collider) so the post
+      // disappears from the scene immediately, not on next reload.
+      for (const s of this.structures) {
+        if (!s.alive || s.kind !== 'roof_corner') continue;
+        if (Math.abs(s.pos.x - t.x) >= eps) continue;
+        if (Math.abs(s.pos.z - t.z) >= eps) continue;
+        if (Math.abs((s.y || 0) - y) >= yEps) continue;
+        s.alive = false;
+        s.hp = 0;
+        s.removeCollider();
+        s.destroyMesh();
+        break;
       }
     }
   }
