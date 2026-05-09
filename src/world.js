@@ -2106,10 +2106,30 @@ export class World {
     const cz = snap(this._sunCentroidZ || 0);
     this.sun.target.position.set(cx, 0, cz);
     this.sun.target.updateMatrixWorld();
-    const sunHeight = Math.max(15, Math.abs(sunY) * 70 + 20);
-    const offsetX = snap(sunX * 60);
+    // Even at the day's peak the sun is held off-zenith — straight-down
+    // light flattens shadows under players, walls, and roofs and the
+    // scene reads as washed out. We do this with two constant biases:
+    //   - SUN_TILT_Z: a permanent +Z offset, so even when sunY hits 1
+    //     the light still rakes across the scene from the south at a
+    //     ~30° angle from vertical. Was 25, bumped to 55 so noon
+    //     shadows are clearly readable rather than hairline stripes.
+    //   - SUN_TILT_X: a small constant east-side bias added to the
+    //     time-of-day sunX*60 sweep, so the noon sunX≈0 moment never
+    //     lines the sun up dead-vertical with the player's silhouette.
+    //     Sunrise / sunset stay broadly symmetric (offsetX swings from
+    //     ~+72 to ~-48) — the asymmetry is small and only noticeable
+    //     because shadows now point slightly off-axis at noon, which
+    //     is the desired effect.
+    // sunHeight ceiling lowered 70→60 to compound with the larger Z
+    // bias: the resulting peak direction is closer to (12, 80, 55)
+    // → ~33° from vertical, so a 2m wall casts roughly a 1.3m shadow
+    // at noon instead of the previous ~0.55m sliver.
+    const SUN_TILT_X = 12;
+    const SUN_TILT_Z = 55;
+    const sunHeight = Math.max(15, Math.abs(sunY) * 60 + 20);
+    const offsetX = snap(sunX * 60 + SUN_TILT_X);
     const offsetY = snap(sunHeight);
-    const offsetZ = snap(25);
+    const offsetZ = snap(SUN_TILT_Z);
     this.sun.position.set(cx + offsetX, offsetY, cz + offsetZ);
 
     // Cosine-bell sunset/sunrise tint window centred on the actual horizon
