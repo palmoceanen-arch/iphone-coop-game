@@ -31,14 +31,19 @@ import {
   GATE_OPEN_RADIUS, structureMaterial, pickRandomRoofColor,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
-import { Crop, CROP_ORDER, cropLabel } from './farming.js';
-import { spawnFoodDrops, spawnHarvestDrops } from './pickups.js';
+import { Crop, CROPS, CROP_ORDER, cropLabel } from './farming.js';
+import { spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { BuildWheel } from './buildWheel.js';
 import { Minimap } from './minimap.js';
 import { iconHTML } from './icons.js';
 import { SaveSystem } from './saveSystem.js';
+import {
+  RECIPES as COOK_RECIPES, RECIPE_ORDER as COOK_RECIPE_ORDER,
+  canCook, cook, recipeCostLabel, buffLabel,
+  COOK_HOLD_S, EAT_HOLD_S, COOK_INTERACT_RADIUS,
+} from './cooking.js';
 
 const LEASH_WARN = 14;
 const LEASH_MAX  = 22;
@@ -839,7 +844,12 @@ export class Game {
       p._shield = null;
       p._berserk = null;
       p._healAura = null;
+      p._foodBuff = null;
       p._itemSpeedMult = 1;
+      p.foods = {};
+      p.cookedFoods = {};
+      p.selectedFood = null;
+      p.cookProgress = 0;
       p.revive();
     }
     // Restore starter abilities so players still have something to cast.
@@ -1661,17 +1671,21 @@ export class Game {
         this.effects.burst(target.pos.x, 0.6, target.pos.z, 0xffd166, 12, 4, 0.4);
         const food = Math.max(0, outcome.food | 0);
         const seeds = Math.max(0, outcome.seeds | 0);
+        // Add harvested crops to the player's food inventory instead of
+        // spawning pickup objects. The crop kind determines which raw
+        // ingredient the player receives.
         if (food > 0) {
-          const drops = spawnFoodDrops(this.scene, target.pos.x, target.pos.z, food);
-          for (const d of drops) this.pickups.push(d);
+          const cropKind = outcome.cropKind || 'wheat';
+          player.foods[cropKind] = (player.foods[cropKind] || 0) + food;
+          player._revalidateSelectedFood();
         }
         if (seeds > 0) {
           const drops = spawnHarvestDrops(this.scene, target.pos.x, target.pos.z, 'seed', seeds);
           for (const d of drops) this.pickups.push(d);
         }
         const summary = (seeds > 0)
-          ? `${cropLabel(outcome.cropKind)}: +${food} еды, +${seeds} семян`
-          : `${cropLabel(outcome.cropKind)}: +${food} еды`;
+          ? `${cropLabel(outcome.cropKind)}: +${food} ${cropLabel(outcome.cropKind)}, +${seeds} семян`
+          : `${cropLabel(outcome.cropKind)}: +${food} ${cropLabel(outcome.cropKind)}`;
         this.effects.toast?.(summary, '#7aff8a');
         break;
       }
@@ -2099,6 +2113,109 @@ export class Game {
     fg.position.x = -0.68 * (1 - progress);
   }
 
+  // Check if a player is near a tilled planter (for Q seed cycle context).
+  _isNearTilledPlanter(player) {
+    const PROMPT_R = 1.8;
+    for (const c of this.crops) {
+      if (c.state !== 'tilled') continue;
+      if (Math.hypot(c.pos.x - player.pos.x, c.pos.z - player.pos.z) <= PROMPT_R) return true;
+    }
+    return false;
+  }
+
+  // Check if a player is near a campfire or altar bonfire (for cooking).
+  _isNearCampfire(player) {
+    // Player-built campfires
+    for (const s of this.structures) {
+      if (!s.alive || s.kind !== 'campfire') continue;
+      if (Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
+    }
+    // Altar bonfires
+    for (const a of this.altars) {
+      if (Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
+    }
+    return false;
+  }
+
+  // Cook progress bar — same visual pattern as the revive bar.
+  _renderCookBar(player) {
+    if (!player._cookBar) {
+      const bg = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.4, 0.16),
+        new THREE.MeshBasicMaterial({ color: 0x101410, transparent: true, opacity: 0.7, depthTest: false })
+      );
+      const fg = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.36, 0.12),
+        new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.95, depthTest: false })
+      );
+      fg.position.z = 0.001;
+      const grp = new THREE.Group();
+      grp.add(bg);
+      grp.add(fg);
+      grp.renderOrder = 999;
+      grp.position.set(player.pos.x, 2.6, player.pos.z);
+      this.scene.add(grp);
+      player._cookBar = grp;
+      player._cookBarFg = fg;
+    }
+    const grp = player._cookBar;
+    const fg = player._cookBarFg;
+    const progress = player.cookProgress / COOK_HOLD_S;
+    grp.visible = progress > 0.001;
+    if (!grp.visible) return;
+    grp.position.set(player.pos.x, 2.6, player.pos.z);
+    grp.quaternion.copy(this.followCam.cam.quaternion);
+    fg.scale.x = Math.max(0.001, progress);
+    fg.position.x = -0.68 * (1 - progress);
+  }
+
+  // Human-readable label for a food item (raw crop or cooked dish).
+  _foodItemLabel(id) {
+    const recipe = COOK_RECIPES[id];
+    if (recipe) return recipe.name;
+    const crop = CROPS[id];
+    if (crop) return crop.name;
+    return id;
+  }
+
+  // Show cooking / food prompts near campfires and food cycle HUD.
+  _showCookPrompts() {
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const builder = this.builders[p.index];
+      if (builder && builder.active) continue;
+      const nearCampfire = this._isNearCampfire(p);
+      const qKey = (p.index === 0) ? 'Q' : 'U';
+      const eKey = (p.index === 0) ? 'E' : 'J';
+      if (nearCampfire) {
+        const recipe = COOK_RECIPES[p.selectedRecipe];
+        if (!recipe) continue;
+        const affordable = canCook(p.foods, p.selectedRecipe);
+        const color = affordable ? '#ffd166' : '#ff7a7a';
+        const promptKey = `cook|${p.selectedRecipe}|${affordable}`;
+        if (p._cookPromptKey === promptKey) continue;
+        p._cookPromptKey = promptKey;
+        const costStr = recipeCostLabel(p.selectedRecipe);
+        const verb = affordable
+          ? `${eKey}: Приготовить ${recipe.name} (${costStr}) · ${qKey}: сменить`
+          : `${recipe.name} — не хватает (${costStr}) · ${qKey}: сменить`;
+        this.effects.toast?.(verb, color);
+      } else {
+        p._cookPromptKey = null;
+        // Food inventory hint when player has food
+        const list = p.edibleList();
+        if (list.length > 0 && p.selectedFood) {
+          const entry = list.find(e => e.id === p.selectedFood);
+          const promptKey = `food|${p.selectedFood}|${entry?.count}`;
+          if (p._foodPromptKey === promptKey) continue;
+          p._foodPromptKey = promptKey;
+        } else {
+          p._foodPromptKey = null;
+        }
+      }
+    }
+  }
+
   _onPlayerHitsEnemy(player, enemy) {
     const partner = this.players[1 - player.index];
     // ctx is shared between onAttack and onHit so items can tag e.g. crit.
@@ -2149,6 +2266,7 @@ export class Game {
     const affinityMult = player._character?.def?.weaponAffinity?.[player._weaponKind] ?? 1.0;
     let dmg = player.stats.damage * (1 + defaultRandom() * 0.05) * ctx.dmgMult * weaponMult * affinityMult;
     if (player._berserk) dmg *= player._berserk.dmg;
+    if (player._foodBuff && player._foodBuff.kind === 'damage') dmg *= (1 + player._foodBuff.value);
     ctx.dmg = dmg;
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
       runItemHook(player, 'onHit', ctx);
@@ -2581,17 +2699,102 @@ export class Game {
     // Altar idle update (proximity prompt, crystal bob, halo).
     for (const a of this.altars) a.update(dt, this.players, this.sound, this.effects);
 
-    // Seed-kind cycle (M3 farming). Press Q (P1) / U (P2) to rotate the
-    // crop kind that gets planted on the next interact-on-tilled-planter.
-    // Done after altar handling so an altar interaction doesn't accidentally
-    // skip the cycle key for the same frame.
+    // Context-aware Q button (seedCycle key). Priority:
+    //   1. Near a tilled planter → cycle seed kind (existing behaviour)
+    //   2. Near a campfire / altar fire → cycle cooking recipe
+    //   3. Otherwise → cycle edible food item for eating
+    // Long-press Q (EAT_HOLD_S) when not near planter/campfire → eat food.
     for (const p of this.players) {
-      if (!p.alive || !p._lastIntent || !p._lastIntent.seedCycle) continue;
-      const idx = CROP_ORDER.indexOf(p.selectedCropKind);
-      const next = CROP_ORDER[(idx + 1) % CROP_ORDER.length];
-      p.selectedCropKind = next;
-      const k = (p.index === 0) ? 'P1' : 'P2';
-      this.effects.toast?.(`${k}: посадим — ${cropLabel(next)}`, '#9ad36b');
+      if (!p.alive || !p._lastIntent) continue;
+      const intent = p._lastIntent;
+      const nearPlanter = this._isNearTilledPlanter(p);
+      const nearCampfire = this._isNearCampfire(p);
+      if (intent.seedCycle) {
+        if (nearPlanter) {
+          // Cycle seed kind (original behaviour)
+          const idx = CROP_ORDER.indexOf(p.selectedCropKind);
+          const next = CROP_ORDER[(idx + 1) % CROP_ORDER.length];
+          p.selectedCropKind = next;
+          this.effects.toast?.(`Семя: ${cropLabel(next)}`, '#9ad36b');
+        } else if (nearCampfire) {
+          // Cycle cooking recipe
+          const idx = COOK_RECIPE_ORDER.indexOf(p.selectedRecipe);
+          const next = COOK_RECIPE_ORDER[(idx + 1) % COOK_RECIPE_ORDER.length];
+          p.selectedRecipe = next;
+          const recipe = COOK_RECIPES[next];
+          const affordable = canCook(p.foods, next);
+          const color = affordable ? '#ffd166' : '#ff7a7a';
+          this.effects.toast?.(`Рецепт: ${recipe.name} (${recipeCostLabel(next)})`, color);
+        } else {
+          // Cycle edible food
+          p.cycleSelectedFood();
+          if (p.selectedFood) {
+            const entry = p.edibleList().find(e => e.id === p.selectedFood);
+            const label = this._foodItemLabel(p.selectedFood);
+            this.effects.toast?.(`Еда: ${label} x${entry?.count || 0}`, '#ffd166');
+          }
+        }
+      }
+      // Q long-press → eat food (only when not near planter or campfire)
+      if (!nearPlanter && !nearCampfire) {
+        if (intent.seedCycleHeld) {
+          p._eatHoldT = (p._eatHoldT || 0) + dt;
+          if (p._eatHoldT >= EAT_HOLD_S && !p._eatFired) {
+            p._eatFired = true;
+            if (p.eatSelectedFood()) {
+              this.sound.pickupFood?.();
+              const buffStr = p._foodBuff ? ` (${buffLabel(p._foodBuff)}, ${Math.round(p._foodBuff.ttl)}с)` : '';
+              this.effects.toast?.(`Съедено${buffStr}`, '#7aff8a');
+              this.saveSystem?.markDirty();
+            } else {
+              this.effects.toast?.('Нечего есть', '#ff7a7a');
+            }
+          }
+        } else {
+          p._eatHoldT = 0;
+          p._eatFired = false;
+        }
+      } else {
+        p._eatHoldT = 0;
+        p._eatFired = false;
+      }
+    }
+
+    // Cooking interaction: hold E near a campfire (or altar fire) to cook.
+    for (const p of this.players) {
+      if (!p.alive || !p._lastIntent) continue;
+      const intent = p._lastIntent;
+      const nearCampfire = this._isNearCampfire(p);
+      if (nearCampfire && intent.interactHeld) {
+        if (canCook(p.foods, p.selectedRecipe)) {
+          p.cookProgress = Math.min(COOK_HOLD_S, p.cookProgress + dt);
+          if (p.cookProgress >= COOK_HOLD_S) {
+            // Cook the dish
+            const result = cook(p.foods, p.selectedRecipe);
+            if (result) {
+              p.cookedFoods[result] = (p.cookedFoods[result] || 0) + 1;
+              p._revalidateSelectedFood();
+              const recipe = COOK_RECIPES[result];
+              this.sound.harvest?.();
+              this.effects.ring(p.pos.x, 0.05, p.pos.z, 0xffd166, 1.4, 0.4);
+              this.effects.burst(p.pos.x, 0.6, p.pos.z, 0xffd166, 8, 4, 0.3);
+              this.effects.toast?.(`Приготовлено: ${recipe.name}`, '#ffd166');
+              this.saveSystem?.markDirty();
+            }
+            p.cookProgress = 0;
+          }
+          // Consume interact press to prevent farm/gate interaction while cooking
+          intent.interact = false;
+        } else {
+          p.cookProgress = 0;
+        }
+      } else {
+        // Decay cook progress when not holding
+        if (p.cookProgress > 0) {
+          p.cookProgress = Math.max(0, p.cookProgress - dt * 2);
+        }
+      }
+      this._renderCookBar(p);
     }
 
     // Planter farming interaction. Players in build mode have already had
@@ -2638,6 +2841,7 @@ export class Game {
     // farm hint (the more-frequent action) — the gate hint replaces it
     // only when the planter is out of range.
     this._showGatePrompts();
+    this._showCookPrompts();
 
     // Update enemies
     const ctx = {
@@ -2944,6 +3148,9 @@ export class Game {
       set('stone', res.stone || 0);
       set('seed', res.seeds || 0);
     }
+    // Food inventory display for each player.
+    this._renderFoodBar(p1, 'food1');
+    this._renderFoodBar(p2, 'food2');
     // Build-mode banner — one strip per active player. Hidden when not
     // building. Shows recipe label, cost (red when unaffordable), and a
     // small key-hint reminder so players don't need to memorise the
@@ -3021,6 +3228,39 @@ export class Game {
       node.title = `${def.name} ×${player.items[id]} — ${def.desc}`;
       node.innerHTML = `<span class="hud-ico">${iconHTML(def.icon || 'sparkle', { size: 16 })}</span><span class="stk">×${player.items[id]}</span>`;
       el.appendChild(node);
+    }
+  }
+
+  // Food inventory HUD — small bar showing raw crops + cooked dishes.
+  _renderFoodBar(player, elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const list = player.edibleList();
+    if (list.length === 0) {
+      if (el.childElementCount > 0) { el.innerHTML = ''; delete el.dataset.sig; }
+      return;
+    }
+    const sig = list.map(e => `${e.id}:${e.count}`).join(',')
+      + (player.selectedFood ? `|sel:${player.selectedFood}` : '')
+      + (player._foodBuff ? `|b:${player._foodBuff.kind}:${Math.ceil(player._foodBuff.ttl)}` : '');
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = '';
+    for (const entry of list) {
+      const node = document.createElement('span');
+      node.className = 'food-icon';
+      if (entry.id === player.selectedFood) node.classList.add('selected');
+      const label = this._foodItemLabel(entry.id);
+      const kindTag = entry.kind === 'cooked' ? '🍳' : '🌱';
+      node.title = `${label} ×${entry.count}`;
+      node.textContent = `${kindTag}${entry.count}`;
+      el.appendChild(node);
+    }
+    if (player._foodBuff) {
+      const bNode = document.createElement('span');
+      bNode.className = 'food-buff';
+      bNode.textContent = `${buffLabel(player._foodBuff)} ${Math.ceil(player._foodBuff.ttl)}с`;
+      el.appendChild(bNode);
     }
   }
 

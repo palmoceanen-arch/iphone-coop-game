@@ -86,6 +86,10 @@ function snapshotPlayer(p) {
     stats: { ...(p.stats || {}) },
     weaponKind: p._weaponKind || null,
     selectedCropKind: p.selectedCropKind || null,
+    foods: { ...(p.foods || {}) },
+    cookedFoods: { ...(p.cookedFoods || {}) },
+    selectedFood: p.selectedFood || null,
+    selectedRecipe: p.selectedRecipe || null,
     alive: !!p.alive,
     character: p._characterId || null,
     color: (typeof p._colorHex === 'number') ? p._colorHex : null,
@@ -126,6 +130,10 @@ function applyPlayerState(p, s) {
     p.setWeapon(s.weaponKind);
   }
   if (typeof s.selectedCropKind === 'string') p.selectedCropKind = s.selectedCropKind;
+  if (s.foods && typeof s.foods === 'object') p.foods = { ...s.foods };
+  if (s.cookedFoods && typeof s.cookedFoods === 'object') p.cookedFoods = { ...s.cookedFoods };
+  if (typeof s.selectedFood === 'string' || s.selectedFood === null) p.selectedFood = s.selectedFood;
+  if (typeof s.selectedRecipe === 'string') p.selectedRecipe = s.selectedRecipe;
   if (typeof s.alive === 'boolean') {
     if (s.alive && !p.alive) p.revive();
     else if (!s.alive && p.alive) p.die?.();

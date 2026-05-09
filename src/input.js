@@ -135,9 +135,11 @@ export class Input {
       dash: dashPressed || remoteDashEdge,
       dashHeld: this.anyDown(map.dash) || r.dashHeld,
       interact: this.consumePressed(map.interact) || remoteInteractEdge,
+      interactHeld: this.anyDown(map.interact),
       buildSelect,
       buildMenu,
       seedCycle,
+      seedCycleHeld: this.anyDown(map.seedCycle),
       buildLayerUp,
       buildLayerDown,
     };
