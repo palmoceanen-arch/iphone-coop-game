@@ -22,15 +22,22 @@ import { spawnProp, getPropKinds } from './models.js';
 // Available random roof colours. The palette is exposed by name so the
 // roof descriptor can persist a compact string (e.g. `"darkGreen"`) and
 // the same colour survives a save/reload — every other reference reads
-// straight off this table. `base` is the dominant tile colour; `light`
-// is the highlight stripe along the top edge of each tile (gives the
-// scaled / curved-tile illusion); `dark` is the grout between rows.
+// straight off this table. `base` is the dominant tile colour; the
+// grayscale tile texture (see getRoofTileTexture) is multiplied
+// against it to produce the grout / shadow / body shading per tile,
+// so we no longer need separate `light` / `dark` fields here.
+//
+// Each entry is the original saturated colour mixed 70/30 with a
+// neutral light grey (0xc8c8c8) — drops saturation into the same
+// 30-50% range as the wood / stone / plank materials so a roof
+// reads as a pastel "in tune" with the rest of the palette instead
+// of a bright primary hit.
 export const ROOF_COLOR_PALETTE = {
-  darkGreen: { base: 0x2a6a3a, light: 0x4a8b54, dark: 0x1b4624 },
-  burgundy:  { base: 0x7a1f2c, light: 0xa53a48, dark: 0x4a1018 },
-  yellow:    { base: 0xd4a82a, light: 0xefc44a, dark: 0x8a6e15 },
-  blue:      { base: 0x2543a0, light: 0x4566c8, dark: 0x14266a },
-  lightBlue: { base: 0x5fb6dd, light: 0x82d0f0, dark: 0x357fa6 },
+  darkGreen: { base: 0x5d826a },   // muted sage
+  burgundy:  { base: 0x90525d },   // dusty rose
+  yellow:    { base: 0xd1ac5e },   // sandy gold
+  blue:      { base: 0x5b6fae },   // soft slate blue
+  lightBlue: { base: 0x80bbd5 },   // powder sky
 };
 export const ROOF_COLOR_NAMES = Object.keys(ROOF_COLOR_PALETTE);
 
