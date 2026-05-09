@@ -1198,7 +1198,10 @@ export class Game {
     if (old && old.parent) old.parent.remove(old);
     const dir = struct.openDir | 0;
     const next = buildDoorFullMesh(dir);
-    next.position.set(struct.pos.x, 0, struct.pos.z);
+    // Honour the placement layer — a door dropped on a Shift-1 layer
+    // must rebuild at y=1 so toggling it open/close doesn't warp the
+    // mesh back down to the ground.
+    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
     next.rotation.y = struct.yaw || 0;
     struct.group.add(next);
     struct.mesh = next;

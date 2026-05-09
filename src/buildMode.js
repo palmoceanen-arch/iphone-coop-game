@@ -218,11 +218,16 @@ export class BuildController {
         if (dx * dx + dz * dz >= eps2) continue;
         const dy = (d.y || 0) - y;
         if (Math.abs(dy) >= yEps) continue;
+        // Two floors on the same tile + same y would z-fight and waste
+        // resources, so reject that even though either side alone is
+        // a "floor".
+        const otherIsFloor = (d.kind === 'floor_wood');
+        if (placingFloor && otherIsFloor) return false;
         // A wood floor is a thin walkable tile — players can drop walls
         // on top of it, and they can drop a floor under any existing
-        // non-floor structure. So allow same-tile coexistence when at
-        // least one side of the conflict is a floor.
-        if (d.kind === 'floor_wood' || placingFloor) continue;
+        // non-floor structure. So allow same-tile coexistence when
+        // exactly one side of the conflict is a floor.
+        if (otherIsFloor || placingFloor) continue;
         return false;
       }
     }
@@ -275,11 +280,12 @@ export class BuildController {
     const c = this._computeCursor(dt, intent.moveX || 0, intent.moveZ || 0);
     const kind = this.currentRecipe();
     const recipe = RECIPES[kind];
-    // Floors live on the ground: ignore the manual layer for them so a
-    // player who's been placing 2nd-storey walls doesn't accidentally
-    // float a plank floor in mid-air when they switch recipes.
-    const groundOnly = (kind === 'floor_wood' || kind === 'planter'
-                        || kind === 'campfire' || kind === 'torch');
+    // Single-storey ground props (planter / campfire / torch) ignore the
+    // manual layer — they're conceptually outdoor decorations and a
+    // floating campfire would be confusing. floor_wood, in contrast,
+    // is the *flooring* of upper storeys, so it MUST honour the layer
+    // (a 2nd-storey building needs a 2nd-storey plank floor).
+    const groundOnly = (kind === 'planter' || kind === 'campfire' || kind === 'torch');
     let layerY = groundOnly ? 0 : (this.cursorLayer * STEP_Y);
     // Auto-stack support for the legacy stone wall recipe — preserved so
     // a stone wall placed on an existing tower keeps its old "tap to

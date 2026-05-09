@@ -142,7 +142,9 @@ export const RECIPES = {
     cost: { wood: 3 },
     hp: 60,
     radius: 0.40,
-    height: 1.6,
+    // 1m matches the build-mode stack step so a Shift-stacked tower
+    // of wood walls reads as a continuous facade with no seam gaps.
+    height: 1.0,
   },
   // Translucent glass block. Same footprint as wall/wood_wall so it
   // tiles into a window strip or fills an upper-floor opening.
@@ -151,7 +153,7 @@ export const RECIPES = {
     cost: { stone: 2 },
     hp: 25,
     radius: 0.40,
-    height: 1.6,
+    height: 1.0,
   },
   // Full-cell, two-block-tall door. Behaves like a gate (E to open /
   // close), but spans the entire cell width and reaches the same
@@ -718,13 +720,13 @@ export function buildDoorFullMesh(openDir) {
   return g;
 }
 
-// Heights for the full-storey solid wall variants (wood / glass). The
-// post matches the fence post (0.20×0.20) so a wood-wall slot in the
-// middle of a fence run reads as a fence post wearing a tall plank
-// jacket; the panels reach the same 1.6m gameplay height as the
-// existing stone wall so the player can stand behind one and not be
-// shot over the top.
-const _SOLID_WALL_HEIGHT = 1.60;
+// Heights for the solid wall variants (wood / glass). 1.0m matches
+// one stack-step (WALL_STACK_STEP) so a wood/glass wall slots cleanly
+// into a building grid: place one on the ground, Shift-place a second
+// directly on top, and the upper block sits flush on the lower one
+// with no visible seam. Same height as the fence post and as one
+// auto-stacked stone-wall layer.
+const _SOLID_WALL_HEIGHT = 1.00;
 const _POST_THICK = 0.20;
 const _PANEL_THICK = 0.20;
 const _PANEL_LEN = 0.40;
