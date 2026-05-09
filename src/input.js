@@ -118,6 +118,14 @@ export class Input {
     }
     const seedCycle = this.consumePressed(map.seedCycle);
     const buildMenu = this.consumePressed(map.buildMenu) || remoteBuildMenuEdge;
+    // Build-mode vertical layer nudge: Shift = up, Ctrl = down. Modifier
+    // keys aren't naturally per-player, so both intents read the same
+    // global edges — first .intent() call this frame consumes them.
+    // PageUp / PageDown are aliased so the layer nudge still works
+    // when the player has remapped Shift to a controller / on touch
+    // devices that don't expose Ctrl.
+    const buildLayerUp = this.consumePressed(['ShiftLeft', 'PageUp']);
+    const buildLayerDown = this.consumePressed(['ControlLeft', 'PageDown']);
 
     return {
       moveX: mx,
@@ -130,6 +138,8 @@ export class Input {
       buildSelect,
       buildMenu,
       seedCycle,
+      buildLayerUp,
+      buildLayerDown,
     };
   }
 

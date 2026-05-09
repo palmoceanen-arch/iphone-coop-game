@@ -26,7 +26,7 @@ import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import {
-  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh,
+  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
   GATE_OPEN_RADIUS, structureMaterial,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
@@ -1028,10 +1028,19 @@ export class Game {
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildGateMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
-      } else if (s.kind === 'wall') {
+      } else if (s.kind === 'wall' || s.kind === 'wood_wall' || s.kind === 'glass_wall') {
         // Walls don't render any connection arms themselves, but their
         // presence flips a fence/gate neighbour's connection bit, so
         // refresh those too.
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'door_full') {
+        // Restore persisted open state (chunk reload after the player
+        // toggled the door, then walked away) and rebuild the panel
+        // mesh in that state. Also nudges fence/gate neighbours so a
+        // fence rail terminates against the door jamb cleanly.
+        if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
+        else struct.openDir = s.open ? -1 : 0;
+        this._rebuildDoorFullMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
       }
     }
@@ -1051,7 +1060,12 @@ export class Game {
     if (!arr) return false;
     const eps = 0.15;
     for (const d of arr) {
-      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate')
+      // Wood / glass walls and the full-height door are also rigid block
+      // structures that fence rails should plug into seamlessly, so they
+      // count as fence-connectable for the run-extension logic.
+      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate'
+           || d.kind === 'wood_wall' || d.kind === 'glass_wall'
+           || d.kind === 'door_full')
           && Math.abs(d.x - x) < eps
           && Math.abs(d.z - z) < eps) return true;
     }
@@ -1122,6 +1136,28 @@ export class Game {
       struct.collider.r = dir !== 0
         ? GATE_OPEN_RADIUS
         : (RECIPES.gate?.radius || 0.45);
+    }
+  }
+
+  // Sibling of `_rebuildGateMesh` for the full-cell `door_full` recipe.
+  // Same open/close → collider toggle behaviour, but the panel geometry
+  // is taller (2m) and full-cell, so it gets its own mesh builder.
+  _rebuildDoorFullMesh(struct) {
+    if (!struct || struct.kind !== 'door_full' || !struct.alive || !struct.group) return;
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const dir = struct.openDir | 0;
+    const next = buildDoorFullMesh(dir);
+    next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = struct.yaw || 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    if (struct.collider) {
+      struct.collider.disabled = dir !== 0;
+      struct.collider.r = dir !== 0
+        ? GATE_OPEN_RADIUS
+        : (RECIPES.door_full?.radius || 0.40);
     }
   }
 
@@ -1336,7 +1372,7 @@ export class Game {
     const GATE_INTERACT_RADIUS = 1.4;
     let target = null, bestD = GATE_INTERACT_RADIUS;
     for (const s of this.structures) {
-      if (!s.alive || s.kind !== 'gate') continue;
+      if (!s.alive || (s.kind !== 'gate' && s.kind !== 'door_full')) continue;
       const d = Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z);
       if (d <= bestD) { bestD = d; target = s; }
     }
@@ -1356,7 +1392,8 @@ export class Game {
       // localZ <= 0 → player on -Z side → swing door to +Z (openDir = +1)
       target.openDir = (localZ > 0) ? -1 : +1;
     }
-    this._rebuildGateMesh(target);
+    if (target.kind === 'door_full') this._rebuildDoorFullMesh(target);
+    else this._rebuildGateMesh(target);
     if (target.chunkKey) {
       this.world.updateStructureOpen(
         target.chunkKey, target.pos.x, target.pos.z, target.openDir,
@@ -1367,10 +1404,11 @@ export class Game {
     // state in Russian (matching the rest of the prompt copy).
     this.sound.till?.();
     this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xc8a060, 0.9, 0.25);
-    this.effects.toast?.(
-      (target.openDir | 0) !== 0 ? 'Калитка открыта' : 'Калитка закрыта',
-      '#c8a060',
-    );
+    // "Дверь" and "Калитка" are both feminine in Russian, so they share
+    // the same открыта/закрыта endings.
+    const doorNoun = (target.kind === 'door_full') ? 'Дверь' : 'Калитка';
+    const doorVerbAdj = (target.openDir | 0) !== 0 ? 'открыта' : 'закрыта';
+    this.effects.toast?.(`${doorNoun} ${doorVerbAdj}`, '#c8a060');
     // Force a fresh prompt re-emit on the next frame so the "open /
     // close" label flips immediately instead of waiting for the prompt
     // dedup to expire.
@@ -1394,7 +1432,7 @@ export class Game {
       }
       let target = null, bestD = PROMPT_RADIUS;
       for (const s of this.structures) {
-        if (!s.alive || s.kind !== 'gate') continue;
+        if (!s.alive || (s.kind !== 'gate' && s.kind !== 'door_full')) continue;
         const d = Math.hypot(s.pos.x - p.pos.x, s.pos.z - p.pos.z);
         if (d <= bestD) { bestD = d; target = s; }
       }
@@ -1403,12 +1441,13 @@ export class Game {
         continue;
       }
       const isOpen = (target.openDir | 0) !== 0;
-      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${isOpen ? 'o' : 'c'}`;
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.kind}|${isOpen ? 'o' : 'c'}`;
       if (p._gatePromptKey === stateKey) continue;
       p._gatePromptKey = stateKey;
       const key = (p.index === 0) ? 'E' : 'J';
       const verb = isOpen ? 'закрыть' : 'открыть';
-      this.effects.toast?.(`${key}: ${verb} калитку`, '#c8a060');
+      const noun = target.kind === 'door_full' ? 'дверь' : 'калитку';
+      this.effects.toast?.(`${key}: ${verb} ${noun}`, '#c8a060');
     }
   }
 
@@ -2357,7 +2396,9 @@ export class Game {
         // their arms refreshed to stop pointing at it. forgetStructure
         // above has already removed this entry's descriptor, so the
         // rebuild sees the correct post-death state.
-        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate') {
+        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate'
+            || s.kind === 'wood_wall' || s.kind === 'glass_wall'
+            || s.kind === 'door_full') {
           this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
         }
         // Drop any attached Crop too — the planter mesh is gone so no
@@ -2518,6 +2559,7 @@ export class Game {
       const recipe = RECIPES[b.currentRecipe()];
       const nameEl = document.getElementById(`bb${slot}-name`);
       const costEl = document.getElementById(`bb${slot}-cost`);
+      const layerEl = document.getElementById(`bb${slot}-layer`);
       if (nameEl) nameEl.textContent = recipe?.name || b.currentRecipe();
       if (costEl) {
         const parts = [];
@@ -2526,6 +2568,12 @@ export class Game {
           parts.push(`${v} ${label}`);
         }
         costEl.textContent = parts.join(' · ');
+      }
+      if (layerEl) {
+        // "Этаж" reads more naturally to a Russian speaker than "слой"
+        // for vertical level — same noun used for building floors in
+        // real architecture.
+        layerEl.textContent = `этаж ${b.cursorLayer | 0}`;
       }
     }
     // Live affordability re-paint for any open build-wheel — without

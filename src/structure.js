@@ -38,6 +38,19 @@ function ensureMaterials() {
     // darker than woodDark so a campfire reads as "already lit" even
     // when the procedural flame mesh is paused mid-flicker.
     woodCharred: new THREE.MeshToonMaterial({ color: 0x2a1d12, gradientMap: TOON_GRADIENT }),
+    // Plain plank colour for full-cell wooden walls / doors / floors —
+    // a touch warmer than the fence post wood so a row of wood walls
+    // reads as "carpentered planks", not "fence on steroids".
+    plank: new THREE.MeshToonMaterial({ color: 0xa6794a, gradientMap: TOON_GRADIENT }),
+    plankDark: new THREE.MeshToonMaterial({ color: 0x6a4622, gradientMap: TOON_GRADIENT }),
+    // Translucent pale-blue for glass walls. MeshPhongMaterial keeps the
+    // toon-friendly silhouette while supporting transparency without
+    // needing the full PBR stack. depthWrite stays true so neighbour
+    // walls still occlude correctly behind glass.
+    glass: new THREE.MeshPhongMaterial({
+      color: 0xb6e6ff, transparent: true, opacity: 0.45,
+      shininess: 80, specular: 0x88aacc,
+    }),
     // Flame-orange. MeshBasicMaterial is unlit (no shading) so the
     // flame always glows the same colour day/night — the closest the
     // toon stack gets to an emissive without dragging in a full
@@ -120,6 +133,49 @@ export const RECIPES = {
     radius: 0.18,
     height: 1.50,
   },
+  // Solid wooden block-wall. Same form factor as `wall` (1m cube,
+  // stackable via build-mode shift/ctrl) so a row of these tiles into
+  // a seamless wood facade. Cheaper and weaker than the stone wall —
+  // wood is the early-game material.
+  wood_wall: {
+    name: 'Деревянная стена',
+    cost: { wood: 3 },
+    hp: 60,
+    radius: 0.40,
+    height: 1.6,
+  },
+  // Translucent glass block. Same footprint as wall/wood_wall so it
+  // tiles into a window strip or fills an upper-floor opening.
+  glass_wall: {
+    name: 'Стекло',
+    cost: { stone: 2 },
+    hp: 25,
+    radius: 0.40,
+    height: 1.6,
+  },
+  // Full-cell, two-block-tall door. Behaves like a gate (E to open /
+  // close), but spans the entire cell width and reaches the same
+  // height as a stacked wood-wall, so it slots into a 2-block-tall
+  // wood-wall row without leaving a sky gap.
+  door_full: {
+    name: 'Дверь',
+    cost: { wood: 4 },
+    hp: 60,
+    // Same collider radius as `wall` so the closed door blocks
+    // movement; build-mode swaps to GATE_OPEN_RADIUS on open.
+    radius: 0.40,
+    height: 2.0,
+  },
+  // Thin walkable wooden floor tile. radius=0 so it doesn't block
+  // the player; sits a hair above the terrain plane so it doesn't
+  // z-fight with the ground texture.
+  floor_wood: {
+    name: 'Деревянный пол',
+    cost: { wood: 1 },
+    hp: 18,
+    radius: 0.0,
+    height: 0.10,
+  },
 };
 
 // Catalog ordering controls the recipe-cycling order in build mode and the
@@ -127,7 +183,10 @@ export const RECIPES = {
 // have number-key fast paths; the rest live behind the build-wheel UI).
 // Keep the cheapest / quickest builds first so a new player can spam
 // fences immediately.
-export const RECIPE_ORDER = ['fence', 'wall', 'gate', 'planter', 'campfire', 'torch'];
+export const RECIPE_ORDER = [
+  'fence', 'wall', 'gate', 'planter', 'campfire', 'torch',
+  'wood_wall', 'glass_wall', 'door_full', 'floor_wood',
+];
 
 // Burst colour shown when a structure is destroyed — matches its primary
 // material. Reused by Game._onStructureDestroyed for the death VFX.
@@ -138,6 +197,10 @@ const BURST_COLOR = {
   planter: 0x4b3522,
   campfire: 0xff8a3a,             // flame-orange so the death burst reads as "poof"
   torch: 0xff8a3a,
+  wood_wall: 0xa6794a,
+  glass_wall: 0xb6e6ff,
+  door_full: 0x6a4622,
+  floor_wood: 0x8c5a2c,
 };
 
 // What a structure is *made of* — used by combat-side code to pick the
@@ -157,6 +220,10 @@ const MATERIAL_BY_KIND = {
   // wood (a stick).
   campfire: 'wood',
   torch: 'wood',
+  wood_wall: 'wood',
+  glass_wall: 'stone',            // glass returns to the stone pool on break (closest material slot)
+  door_full: 'wood',
+  floor_wood: 'wood',
 };
 export function structureMaterial(kind) {
   return MATERIAL_BY_KIND[kind] || 'wood';
@@ -556,8 +623,136 @@ export function buildStructureMesh(kind, x, z) {
     g.add(soil);
     return g;
   }
+  if (kind === 'wood_wall') {
+    // Solid 1m wood block — same footprint as the stone wall so adjacent
+    // tiles seam into a continuous facade. Uses the plank material plus
+    // a thin darker rim at top + bottom for visual readability against
+    // the wood ground in forest biomes.
+    const block = new THREE.Mesh(
+      new RoundedBoxGeometry(1.00, 1.00, 1.00, 2, 0.06),
+      MATERIALS.plank,
+    );
+    block.position.set(0, 0.50, 0);
+    block.castShadow = true; block.receiveShadow = true;
+    g.add(block);
+    const rim = new THREE.Mesh(
+      new THREE.BoxGeometry(1.02, 0.08, 1.02),
+      MATERIALS.plankDark,
+    );
+    rim.position.set(0, 0.04, 0);
+    rim.castShadow = true; rim.receiveShadow = true;
+    g.add(rim);
+    const rimTop = rim.clone();
+    rimTop.position.set(0, 0.96, 0);
+    g.add(rimTop);
+    return g;
+  }
+  if (kind === 'glass_wall') {
+    // Translucent block. Slightly inset from the cell boundary so the
+    // edge has a visible "frame" effect against the neighbour wall.
+    const pane = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 0.95, 0.95),
+      MATERIALS.glass,
+    );
+    pane.position.set(0, 0.50, 0);
+    pane.castShadow = false;        // transparent meshes don't write to shadow map
+    pane.receiveShadow = true;
+    g.add(pane);
+    // Thin plank frame top + bottom so the pane reads as "window" not
+    // "floating ice cube". No side frame — neighbour walls supply the
+    // jambs when this tile is dropped into a wall row.
+    const frameGeo = new THREE.BoxGeometry(1.00, 0.06, 0.12);
+    for (const y of [0.04, 0.96]) {
+      const f = new THREE.Mesh(frameGeo, MATERIALS.plankDark);
+      f.position.set(0, y, 0);
+      f.castShadow = true; f.receiveShadow = true;
+      g.add(f);
+    }
+    return g;
+  }
+  if (kind === 'door_full') {
+    // Default door preview: closed. Live doors get rebuilt by
+    // `buildDoorFullMesh()` from game.js when their open state toggles.
+    return buildDoorFullMesh(0);
+  }
+  if (kind === 'floor_wood') {
+    // 1×1m walkable plank floor. radius=0 so it doesn't push the player;
+    // sits at y≈0.05 so it covers the terrain triangle but doesn't
+    // protrude visibly above neighbour grass.
+    const plank = new THREE.Mesh(
+      new THREE.BoxGeometry(0.98, 0.10, 0.98),
+      MATERIALS.plank,
+    );
+    plank.position.set(0, 0.05, 0);
+    plank.castShadow = false;       // too thin to cast a useful shadow; saves draws
+    plank.receiveShadow = true;
+    g.add(plank);
+    // Thin darker grooves running across the plank to break up the
+    // surface — three slats at x=±0.30, 0 read as "boards".
+    for (const x of [-0.30, 0.0, 0.30]) {
+      const slat = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.02, 0.96),
+        MATERIALS.plankDark,
+      );
+      slat.position.set(x, 0.105, 0);
+      slat.receiveShadow = true;
+      g.add(slat);
+    }
+    return g;
+  }
   // Unknown kind — return an empty group so caller's parenting logic still
   // works without conditional null-checks.
+  return g;
+}
+
+// Build a full-cell two-block-tall door, hinged on the cell's west side
+// (y rotation in caller picks the swing axis). Same open/close semantic
+// as buildGateMesh: 0 = closed (door panel spans the cell), ±1 = open
+// at 80°. Collider radius is shrunk to GATE_OPEN_RADIUS by the runtime
+// gate-toggle code so the player can walk through.
+export function buildDoorFullMesh(openDir) {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const door = new THREE.Group();
+  door.position.set(-0.50, 0, 0);
+  // Main panel: nearly-full cell width × 2m tall × thin depth.
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(1.00, 1.95, 0.08),
+    MATERIALS.plank,
+  );
+  panel.position.set(0.50, 1.00, 0);
+  panel.castShadow = true; panel.receiveShadow = true;
+  door.add(panel);
+  // Two horizontal cross-bands and a vertical stile so the door reads
+  // as a constructed plank door, not a flat slab.
+  const bandGeo = new THREE.BoxGeometry(0.98, 0.10, 0.10);
+  for (const y of [0.40, 1.60]) {
+    const band = new THREE.Mesh(bandGeo, MATERIALS.plankDark);
+    band.position.set(0.50, y, 0);
+    band.castShadow = true; band.receiveShadow = true;
+    door.add(band);
+  }
+  const stile = new THREE.Mesh(
+    new THREE.BoxGeometry(0.10, 1.95, 0.10),
+    MATERIALS.plankDark,
+  );
+  stile.position.set(0.50, 1.00, 0);
+  stile.castShadow = true; stile.receiveShadow = true;
+  door.add(stile);
+  // Round latch knob on the latch end (away from the hinge).
+  const knob = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 8, 6),
+    MATERIALS.stoneDark,
+  );
+  knob.position.set(0.85, 1.00, 0.06);
+  knob.castShadow = true;
+  door.add(knob);
+  if (openDir !== 0) {
+    // Swing 80° around the hinge axis (door-local y at x=0). Positive
+    // openDir swings towards +Z; negative towards -Z.
+    door.rotation.y = (openDir > 0 ? -1 : 1) * (Math.PI * 0.45);
+  }
+  g.add(door);
   return g;
 }
 
