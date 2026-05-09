@@ -2700,10 +2700,11 @@ export class Game {
     for (const a of this.altars) a.update(dt, this.players, this.sound, this.effects);
 
     // Context-aware Q button (seedCycle key). Priority:
-    //   1. Near a tilled planter → cycle seed kind (existing behaviour)
-    //   2. Near a campfire / altar fire → cycle cooking recipe
-    //   3. Otherwise → cycle edible food item for eating
-    // Long-press Q (EAT_HOLD_S) when not near planter/campfire → eat food.
+    //   1. Near a tilled planter → cycle seed kind (instant on press)
+    //   2. Near a campfire / altar fire → cycle cooking recipe (instant)
+    //   3. Otherwise → short tap cycles food, long-press (0.4s) eats
+    // For case 3, the cycle is deferred until Q is *released* before the
+    // eat threshold so a long-press doesn't cycle then eat.
     for (const p of this.players) {
       if (!p.alive || !p._lastIntent) continue;
       const intent = p._lastIntent;
@@ -2711,13 +2712,11 @@ export class Game {
       const nearCampfire = this._isNearCampfire(p);
       if (intent.seedCycle) {
         if (nearPlanter) {
-          // Cycle seed kind (original behaviour)
           const idx = CROP_ORDER.indexOf(p.selectedCropKind);
           const next = CROP_ORDER[(idx + 1) % CROP_ORDER.length];
           p.selectedCropKind = next;
           this.effects.toast?.(`Семя: ${cropLabel(next)}`, '#9ad36b');
         } else if (nearCampfire) {
-          // Cycle cooking recipe
           const idx = COOK_RECIPE_ORDER.indexOf(p.selectedRecipe);
           const next = COOK_RECIPE_ORDER[(idx + 1) % COOK_RECIPE_ORDER.length];
           p.selectedRecipe = next;
@@ -2725,19 +2724,16 @@ export class Game {
           const affordable = canCook(p.foods, next);
           const color = affordable ? '#ffd166' : '#ff7a7a';
           this.effects.toast?.(`Рецепт: ${recipe.name} (${recipeCostLabel(next)})`, color);
-        } else {
-          // Cycle edible food
-          p.cycleSelectedFood();
-          if (p.selectedFood) {
-            const entry = p.edibleList().find(e => e.id === p.selectedFood);
-            const label = this._foodItemLabel(p.selectedFood);
-            this.effects.toast?.(`Еда: ${label} x${entry?.count || 0}`, '#ffd166');
-          }
         }
+        // For the "else" (no planter, no campfire) case we do NOT cycle
+        // here — the cycle fires on key-up below if it was a short tap.
       }
-      // Q long-press → eat food (only when not near planter or campfire)
+      // Q hold / release logic for eating food (only when not near
+      // planter or campfire).
       if (!nearPlanter && !nearCampfire) {
         if (intent.seedCycleHeld) {
+          // Track that Q was pressed (for release detection).
+          if (!p._qWasHeld) p._qWasHeld = true;
           p._eatHoldT = (p._eatHoldT || 0) + dt;
           if (p._eatHoldT >= EAT_HOLD_S && !p._eatFired) {
             p._eatFired = true;
@@ -2751,12 +2747,24 @@ export class Game {
             }
           }
         } else {
+          // Q was just released — if it was a short tap (< EAT_HOLD_S)
+          // and we didn't eat, treat it as a food cycle.
+          if (p._qWasHeld && !p._eatFired) {
+            p.cycleSelectedFood();
+            if (p.selectedFood) {
+              const entry = p.edibleList().find(e => e.id === p.selectedFood);
+              const label = this._foodItemLabel(p.selectedFood);
+              this.effects.toast?.(`Еда: ${label} x${entry?.count || 0}`, '#ffd166');
+            }
+          }
           p._eatHoldT = 0;
           p._eatFired = false;
+          p._qWasHeld = false;
         }
       } else {
         p._eatHoldT = 0;
         p._eatFired = false;
+        p._qWasHeld = false;
       }
     }
 
