@@ -929,9 +929,15 @@ const ROOF_TILE_H = 4.0;
 // palette colour set on each material via `material.color = c.base`,
 // so MeshToonMaterial's gradientMap-driven cel banding still controls
 // the lighting (matching the rest of the game's MeshToonMaterials)
-// while the texture only injects darker grout lines and a soft shadow
-// stripe at the bottom of each tile so the slope reads as overlapping
-// scales rather than a flat coloured triangle.
+// while the texture only injects the SHAPE of clay-tile shingles —
+// scalloped bottoms and brick-offset rows — so the slope reads as
+// overlapping curved tiles rather than a flat brick wall.
+//
+// The shape of each tile (flat top + sides, curved bottom hanging
+// down into the row below, rounded shoulders) is what sells "tile"
+// vs "brick"; the shading is intentionally subtle (every shade in
+// the [0.82, 1.0] band so it stays the same tonal family as the
+// palette base) — the silhouette does the heavy lifting.
 let ROOF_TILE_TEX = null;
 function getRoofTileTexture() {
   if (ROOF_TILE_TEX) return ROOF_TILE_TEX;
@@ -939,48 +945,70 @@ function getRoofTileTexture() {
     ? document.createElement('canvas')
     : null;
   if (!canvas) return null;
-  canvas.width = 256;
-  canvas.height = 256;
+  // 512² gives the curved scallops enough px to anti-alias cleanly;
+  // any smaller and the curves go pixelly when the texture gets
+  // mip-blended at distance.
+  canvas.width = 512;
+  canvas.height = 512;
   const ctx = canvas.getContext('2d');
-  // Grout fill — set close to 1.0 so the seam reads as the SAME tone
-  // as the tile body, just barely darker. Multiplied by c.base it
-  // produces a hairline that's still a recognisable boundary between
-  // tiles but never reads as a dark mortar line.
-  const groutShade = 0.92;
-  const g = Math.round(groutShade * 255);
-  ctx.fillStyle = `rgb(${g},${g},${g})`;
-  ctx.fillRect(0, 0, 256, 256);
-  const rows = 8;
   const cols = 4;
-  const tileH = canvas.height / rows;
+  const rows = 4;
   const tileW = canvas.width / cols;
-  const grout = 2.0;
-  for (let r = 0; r < rows; r++) {
-    const offset = (r % 2 === 0) ? 0 : tileW * 0.5;
-    // Draw one extra column on each side so the brick offset wraps
-    // cleanly without leaving a slim grout strip at U=0 / U=1.
-    for (let i = -1; i <= cols; i++) {
-      const x = i * tileW + offset + grout;
-      const y = r * tileH + grout;
-      const w = tileW - grout * 2;
-      const h = tileH - grout * 2;
-      // Deterministic per-tile brightness jitter (±2.5% only — too much
-      // and the cel-shaded look starts to read as noisy rather than
-      // hand-laid).
-      const jitter = (((r * 17 + i * 13) % 5) - 2) * 0.012;
-      // Tile body: white-ish so material.color × tile ≈ material.color,
-      // i.e. the roof's dominant tone matches the palette base just
-      // like the other plain MeshToonMaterials in the game.
-      const body = Math.round(Math.max(0, Math.min(255, (1.0 + jitter) * 255)));
+  const tileH = canvas.height / rows;
+  // How much each row's curved bottom hangs into the row below.
+  // 0.20 ≈ a fifth of the tile height, matches the visible overlap
+  // depth in real clay-tile roofs.
+  const overlap = tileH * 0.20;
+  // Vertical column gap between adjacent tiles in the same row.
+  const sideGap = 2;
+  // Background fills any pixel not covered by a drawn tile — only
+  // visible in the column-gaps and as the "shadow line" tracing the
+  // curved outline of every row's bottom. 0.85 keeps that line in
+  // the same tonal family as the body, never a black groove.
+  const bgShade = 0.85;
+  const bg = Math.round(bgShade * 255);
+  ctx.fillStyle = `rgb(${bg},${bg},${bg})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Draw bottom row first, top row last. Combined with the extra
+  // wraparound row above r=0, this means each tile's curved bottom
+  // paints OVER the top of the row below — exactly how stacked
+  // shingles overlap. Then UV.t-wrapping is seamless because the
+  // wraparound row also overhangs row 0.
+  for (let r = rows; r >= -1; r--) {
+    // Brick-offset every other row by half a tile so vertical
+    // seams don't line up between rows.
+    const offsetX = (r % 2 === 0) ? 0 : -tileW * 0.5;
+    const yTop = r * tileH;
+    const shoulderY = yTop + tileH * 0.55;
+    const yBot = yTop + tileH + overlap;
+    // One extra column on each side so the offset wrap doesn't leave
+    // a strip of background at U=0 / U=1.
+    for (let c = -1; c <= cols; c++) {
+      const xLeft = c * tileW + offsetX + sideGap;
+      const xRight = xLeft + tileW - sideGap * 2;
+      // Deterministic ±1.5% jitter per tile so the slope reads as
+      // hand-laid rather than perfectly uniform — too much and the
+      // cel-shaded look starts to feel noisy.
+      const jitter = ((((r + 100) * 17 + (c + 100) * 13) % 7) - 3) * 0.005;
+      const bodyShade = Math.max(0, Math.min(1, 1.0 + jitter));
+      const body = Math.round(bodyShade * 255);
+      // Tile silhouette: flat top → straight sides → rounded
+      // shoulders → convex curved skirt that hangs into the row
+      // below. The two cubic-bezier control points are tucked just
+      // inside the shoulders so the curve dips smoothly to its
+      // apex at the horizontal centre.
+      ctx.beginPath();
+      ctx.moveTo(xLeft, yTop);
+      ctx.lineTo(xRight, yTop);
+      ctx.lineTo(xRight, shoulderY);
+      ctx.bezierCurveTo(
+        xRight - tileW * 0.10, yBot,
+        xLeft + tileW * 0.10, yBot,
+        xLeft, shoulderY,
+      );
+      ctx.closePath();
       ctx.fillStyle = `rgb(${body},${body},${body})`;
-      ctx.fillRect(x, y, w, h);
-      // Soft shadow band along the BOTTOM of each tile (where the next
-      // row of tiles would overlap this one in real clay roofing).
-      // 0.93 × 5%-tall band — a hairline hint that two rows meet,
-      // visible only on close inspection.
-      const shadow = Math.round(Math.max(0, Math.min(255, (0.93 + jitter * 0.5) * 255)));
-      ctx.fillStyle = `rgb(${shadow},${shadow},${shadow})`;
-      ctx.fillRect(x, y + h - h * 0.05, w, h * 0.05);
+      ctx.fill();
     }
   }
   const tex = new THREE.CanvasTexture(canvas);
