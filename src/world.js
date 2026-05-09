@@ -833,8 +833,13 @@ export class World {
     const persisted = this.placedStructures.get(key);
     if (persisted && persisted.length > 0) {
       for (const s of persisted) {
+        // Spread the descriptor first so kind-specific extras
+        // (`roof_pitched` rectangle bounds + roofColor, gate/door
+        // openDir, hidden roof_corner flag, etc.) survive a chunk
+        // reload. Then override the runtime-only fields so a stale
+        // chunk reference from an earlier life doesn't leak through.
         this.structureSpawns.push({
-          x: s.x, z: s.z, kind: s.kind, yaw: s.yaw, hp: s.hp,
+          ...s,
           // Stack height for tower-style stone walls. Defaults to 0 for
           // legacy descriptors that predate the stacking feature so an
           // older save still slots its walls onto the ground correctly.

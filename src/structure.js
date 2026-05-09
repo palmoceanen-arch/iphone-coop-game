@@ -998,7 +998,12 @@ function getRoofTileMaterial(colorName) {
   const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
   const tex = getRoofTileTexture(colorName);
   const mat = new THREE.MeshToonMaterial({
-    color: c.base,
+    // White base when a texture is present so the tile/grout/highlight
+    // colours bake into the canvas come through unmodified — multiplying
+    // by `c.base` here would crush the light/grout contrast back into a
+    // single flat tone. Falls back to `c.base` if the canvas couldn't
+    // be created (headless / SSR builds).
+    color: tex ? 0xffffff : c.base,
     map: tex || null,
     gradientMap: TOON_GRADIENT,
   });

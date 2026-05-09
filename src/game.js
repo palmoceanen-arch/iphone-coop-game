@@ -1060,6 +1060,16 @@ export class Game {
         // the rectangle's centre — its mesh autoassembles from the
         // {minX, minZ, maxX, maxZ} bounds.
         struct._ownerY = struct.y || 0;
+        // Persisted "hidden" flag on the spawn descriptor flips the
+        // corner's mesh invisible right after mount so chunk reload
+        // re-applies the visual hide that _hideRoofCornersAt did when
+        // the roof was first formed. Collider + HP stay so a sword
+        // swing against the (invisible) corner still tears the roof
+        // down via the existing _roofsAtCorner cleanup path.
+        if (s.hidden) {
+          if (struct.mesh) struct.mesh.visible = false;
+          struct._hidden = true;
+        }
         this._tryFormRoof(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'roof_pitched') {
         // Roof descriptor carries the rectangle bounds; rebuild the
@@ -1315,25 +1325,29 @@ export class Game {
           newY,
           { minX, minZ, maxX, maxZ, roofColor },
         );
-        // Once the roof is up, the four corner posts have served
-        // their purpose — consume them so the building reads as a
-        // proper finished house instead of a roof with four wooden
-        // stubs poking out of the ridge. The roof_pitched descriptor
-        // already carries the rectangle bounds, so the corners are
-        // no longer needed for chunk-reload geometry either.
-        this._consumeRoofCorners(minX, minZ, maxX, maxZ, newY);
+        // Once the roof is up, the four corner posts would just poke
+        // out of the ridge as wooden stubs. Hide their meshes (NOT
+        // mark them dead — that would trigger the corner-death cascade
+        // in compactInPlace which kills the roof too). The Structure
+        // entries stay live so a sword swing on the now-invisible
+        // corner still tears the roof down via the existing
+        // _roofsAtCorner cleanup path.
+        this._hideRoofCornersAt(minX, minZ, maxX, maxZ, newY);
         return;
       }
     }
   }
 
-  // Tear down the four roof_corner posts whose positions sit at the
-  // corners of the rectangle (minX,minZ)-(maxX,maxZ) at the given y.
-  // Mirrors the death path: forget the descriptor (so chunk reload
-  // doesn't respawn the post), drop its collider, and dispose its
-  // mesh. The Structure entry is marked dead so the next compactInPlace
-  // sweep removes it from `this.structures`.
-  _consumeRoofCorners(minX, minZ, maxX, maxZ, y) {
+  // Visually hide the four roof_corner posts whose positions sit at
+  // the corners of the rectangle (minX,minZ)-(maxX,maxZ) at the given
+  // y. The Structure entries stay alive (HP, collider, descriptor)
+  // — only the rendered mesh is set invisible so the roof-formed
+  // building reads as a clean roof+walls combo without four wooden
+  // stubs poking out of the ridge. We MUST NOT mark them dead: the
+  // structure-death sweep in compactInPlace runs `_roofsAtCorner`
+  // for any dying corner and would tear the freshly-spawned roof
+  // down with it.
+  _hideRoofCornersAt(minX, minZ, maxX, maxZ, y) {
     const eps = 0.15;
     const yEps = 0.5;
     const targets = [
@@ -1342,36 +1356,49 @@ export class Game {
       { x: maxX, z: minZ },
       { x: maxX, z: maxZ },
     ];
+    let touched = false;
+    const spawns = this.world.structureSpawns || [];
     for (const t of targets) {
-      // Drop the descriptor first so a chunk unload between this and
-      // the structure-side cleanup doesn't leave it behind.
+      // Mark the persisted descriptor hidden so chunk reload re-applies
+      // the visual hide on the rebuilt corner mesh.
       const ck = this.world.chunkKeyOf(t.x, t.z);
       const arr = this.world.placedStructures.get(ck);
       if (arr) {
-        for (let i = arr.length - 1; i >= 0; i--) {
-          const d = arr[i];
+        for (const d of arr) {
           if (d.kind !== 'roof_corner') continue;
           if (Math.abs(d.x - t.x) >= eps) continue;
           if (Math.abs(d.z - t.z) >= eps) continue;
           if (Math.abs((d.y || 0) - y) >= yEps) continue;
-          this.world.forgetStructure(ck, d.x, d.z, d.y || 0);
+          if (!d.hidden) { d.hidden = true; touched = true; }
           break;
         }
       }
-      // Drop the live Structure (mesh + collider) so the post
-      // disappears from the scene immediately, not on next reload.
+      // The roof forms the moment the player drops the 4th corner, but
+      // corners 2/3/4's spawn entries may still be sitting in the
+      // drain queue (we got here while processing the 1st corner). Flag
+      // them so the spawn drainer's "if (s.hidden)" branch flips the
+      // freshly-built mesh invisible the moment they mount.
+      for (const sp of spawns) {
+        if (sp.kind !== 'roof_corner') continue;
+        if (Math.abs(sp.x - t.x) >= eps) continue;
+        if (Math.abs(sp.z - t.z) >= eps) continue;
+        if (Math.abs((sp.y || 0) - y) >= yEps) continue;
+        sp.hidden = true;
+        break;
+      }
+      // Hide any already-mounted live Structure's mesh so the post
+      // disappears from the scene immediately.
       for (const s of this.structures) {
         if (!s.alive || s.kind !== 'roof_corner') continue;
         if (Math.abs(s.pos.x - t.x) >= eps) continue;
         if (Math.abs(s.pos.z - t.z) >= eps) continue;
         if (Math.abs((s.y || 0) - y) >= yEps) continue;
-        s.alive = false;
-        s.hp = 0;
-        s.removeCollider();
-        s.destroyMesh();
+        if (s.mesh) s.mesh.visible = false;
+        s._hidden = true;
         break;
       }
     }
+    if (touched) this.world._markPersistDirty?.();
   }
 
   // True if any persisted roof_pitched descriptor in chunks near
