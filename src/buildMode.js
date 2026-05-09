@@ -45,11 +45,13 @@ const WALL_STACK_STEP = 1.0;
 
 // Manual vertical layer (m) the player drives via Shift / Ctrl while in
 // build mode. STEP_Y matches WALL_STACK_STEP so a layer-1 ghost lands
-// flush on top of a layer-0 wall. MAX_LAYER caps the cursor at 3
-// stories — beyond that the gameplay y / camera frustum start to fight
-// the top-down camera and the player can't see what they're placing.
+// flush on top of a layer-0 wall. MAX_LAYER caps the cursor at 8
+// storeys — high enough that the procedural roof apex (which grows
+// max(w,d)/2 above the corner y) clears any reasonable building, while
+// still keeping a finite ceiling so the top-down camera doesn't have
+// to chase a runaway ghost off-screen.
 const STEP_Y = 1.0;
-const MAX_LAYER = 3;
+const MAX_LAYER = 8;
 
 // Yaw step when the player presses interact. 90° matches a 1m grid wall
 // orientation (axis-aligned looks tidy; finer angles risk visible
