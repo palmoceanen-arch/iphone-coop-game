@@ -910,14 +910,14 @@ export function buildRoofCornerMesh() {
   return g;
 }
 
-// World-space size of a single tile in the roof's tile imitation. 3m
-// horizontal × 2m vertical reads as "large clay scale" — visible from
-// the typical isometric camera distance without dissolving into a flat
-// colour, and matching the chunky cel-shaded silhouette of the rest of
-// the game's geometry. Used to compute UVs so the same tile texture
-// tiles cleanly across roofs of any footprint.
-const ROOF_TILE_W = 3.0;
-const ROOF_TILE_H = 2.0;
+// World-space size of a single tile in the roof's tile imitation. 9m
+// horizontal × 6m vertical so a typical 5×5m roof shows roughly one
+// tile across its slope — chunky, cel-shaded shingles that match the
+// game's blocky silhouette instead of a fine repeating pattern. Used
+// to compute UVs so the same tile texture tiles cleanly across roofs
+// of any footprint.
+const ROOF_TILE_W = 9.0;
+const ROOF_TILE_H = 6.0;
 
 // Single shared grayscale tile-pattern texture. Multiplied against the
 // palette colour set on each material via `material.color = c.base`,
