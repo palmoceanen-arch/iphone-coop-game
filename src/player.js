@@ -195,6 +195,11 @@ export class Player {
     this.level = 1;
     this.xp = 0;
     this.alive = true;
+    // Solo-mode phantom flag. When true, this Player is a hidden, invulnerable
+    // stand-in for the absent second player so all the multi-player code paths
+    // (leash, partner items, revive, two-camera fit) can run unmodified. Game
+    // glues the phantom's position to the live player every fixed step.
+    this._phantom = false;
 
     // Stats (modifiable by upgrades). The combat-window stats live in
     // `weaponProfile` and are refreshed every time the player equips a new
@@ -389,6 +394,10 @@ export class Player {
 
   takeDamage(amount, fromX, fromZ, attacker = null) {
     if (!this.alive || this.invuln > 0) return false;
+    // Solo-mode phantom partner: never takes damage. Stays "alive" so
+    // partner-aware callsites (item hooks, leash math, camera fit) keep
+    // their normal happy path.
+    if (this._phantom) return false;
 
     // Item hook: dodge / pre-mitigation. Hooks may set ctx.dodged or
     // adjust ctx.amount.

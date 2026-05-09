@@ -315,6 +315,9 @@ export class Enemy {
     let best = null, bestD = Infinity;
     for (const p of players) {
       if (!p.alive) continue;
+      // Solo-mode phantom partner is glued to the live player and is
+      // invulnerable — skip it so enemies don't waste hits on a ghost.
+      if (p._phantom) continue;
       const d = vdist(this.pos, p.pos);
       if (d < bestD) { bestD = d; best = p; }
     }

@@ -4,7 +4,7 @@ import { io } from 'socket.io-client';
 import QRCode from 'qrcode';
 
 export class Lobby {
-  constructor() {
+  constructor(opts = {}) {
     this.socket = null;
     this.code = null;
     this.controllers = [false, false]; // slot 0 / 1 connected
@@ -12,6 +12,10 @@ export class Lobby {
     this.onInputEvent = null;          // (slot, event) => void
     this.onStart = null;               // () => void
     this.onControllerJoined = null;    // (slot) => void
+    // Solo mode: a single phone controller (or just keyboard) is enough to
+    // start. Affects only the "Начать приключение" button label/enabled
+    // state — the keyboard fallback always works regardless.
+    this.solo = !!opts.solo;
   }
 
   connect() {
@@ -101,17 +105,21 @@ export class Lobby {
   }
 
   _renderControllers() {
-    const both = this.controllers[0] && this.controllers[1];
+    const required = this.solo ? 1 : 2;
+    const ready = this.solo
+      ? this.controllers[0]
+      : (this.controllers[0] && this.controllers[1]);
     for (let i = 0; i < 2; i++) {
       const dot = document.getElementById(`lobby-slot-${i + 1}`);
       if (dot) dot.classList.toggle('on', this.controllers[i]);
     }
     const startBtn = document.getElementById('lobby-start');
     if (startBtn) {
-      startBtn.disabled = !both;
-      startBtn.textContent = both
+      startBtn.disabled = !ready;
+      const have = this.controllers.filter(Boolean).length;
+      startBtn.textContent = ready
         ? 'Начать приключение'
-        : `Ждём игроков… (${this.controllers.filter(Boolean).length}/2)`;
+        : `Ждём игроков… (${have}/${required})`;
     }
   }
 }

@@ -88,6 +88,15 @@
       .buildbar .hint { opacity: 0.55; font-size: 11px; }
       #buildbar1 { left: 14px; }
       #buildbar2 { right: 14px; }
+      /* Solo mode: hide the P2 slice of the HUD so the screen reads as
+         a single-player run. The phantom slot still exists in JS — it's
+         just visually removed from view. */
+      body.solo .hud.right,
+      body.solo #buildbar2,
+      body.solo #lobby-slot-2,
+      body.solo .shop-col.p2 { display: none; }
+      body.solo #leash { display: none; }
+      body.solo #shop .shop-row { grid-template-columns: 1fr; }
       #leash {
         position: absolute; inset: 0; pointer-events: none;
         background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%);
@@ -359,6 +368,19 @@
       .start-seed-row .control button:hover { filter: brightness(1.1); }
       .start-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       @media (max-width: 720px) { .start-slots { grid-template-columns: 1fr; } }
+      /* Solo mode collapses the slot grid to a single centred column. */
+      #start-menu.solo .start-slots { grid-template-columns: minmax(280px, 480px); justify-content: center; }
+      /* Mode-toggle pill for "1 player / 2 players". */
+      .start-mode-row {
+        display: flex; justify-content: center; gap: 8px;
+        margin: 0 0 10px;
+      }
+      .start-mode-btn {
+        background: #1a1f29; color: #cfd6e1; border: 1px solid rgba(255,255,255,0.08);
+        padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 600;
+      }
+      .start-mode-btn:hover { filter: brightness(1.15); }
+      .start-mode-btn.active { background: #2c3a52; color: #fff; border-color: #4a78c8; }
       .start-slot {
         background: #0e1218; border-radius: 12px; padding: 10px 12px 12px;
         border: 1px solid rgba(255,255,255,0.06);
@@ -694,6 +716,10 @@
                   <input id="start-seed" type="text" maxlength="12" autocomplete="off" spellcheck="false" />
                   <button id="start-seed-random" type="button">Случайный</button>
                 </div>
+              </div>
+              <div class="start-mode-row">
+                <button type="button" class="start-mode-btn" data-solo-mode="coop">Два игрока</button>
+                <button type="button" class="start-mode-btn" data-solo-mode="solo">Один игрок</button>
               </div>
               <div id="start-slots" class="start-slots"></div>
               <div class="start-footer">

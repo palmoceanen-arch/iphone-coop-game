@@ -29,6 +29,7 @@ export function renderShop(player1, player2, onBuy) {
     const el = document.getElementById(containerId);
     if (!el) return;
     el.innerHTML = '';
+    if (!player || player._phantom) return;
     UPGRADES.forEach((u, idx) => {
       const lvl = player.upgradeLevels[u.id] || 0;
       const price = priceFor(player, u);
@@ -55,13 +56,16 @@ export function renderShop(player1, player2, onBuy) {
   };
   rebuild('shop-upgs-1', player1, 0);
   rebuild('shop-upgs-2', player2, 1);
-  document.getElementById('shop-gold1').textContent = String(player1.gold);
-  document.getElementById('shop-gold2').textContent = String(player2.gold);
+  const gold1El = document.getElementById('shop-gold1');
+  if (gold1El) gold1El.textContent = String((player1 && !player1._phantom) ? player1.gold : 0);
+  const gold2El = document.getElementById('shop-gold2');
+  if (gold2El) gold2El.textContent = String((player2 && !player2._phantom) ? player2.gold : 0);
 
   const renderInv = (containerId, player) => {
     const el = document.getElementById(containerId);
     if (!el) return;
     el.innerHTML = '';
+    if (!player || player._phantom) return;
 
     // Ability
     const ah = document.createElement('h4');

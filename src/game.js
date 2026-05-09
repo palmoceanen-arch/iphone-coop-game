@@ -162,6 +162,27 @@ export class Game {
       new Player(0, this.world, this.effects, this.sound, playerOpts[0] || {}),
       new Player(1, this.world, this.effects, this.sound, playerOpts[1] || {}),
     ];
+    // Solo mode: hide and freeze player 2 so a single player can run the
+    // whole game without the other slot ever showing up. We still build
+    // the second Player instance so partner-aware code (item hooks, leash
+    // math, two-camera fit, save/load) keeps its existing 2-slot shape.
+    this.solo = !!opts.solo;
+    if (this.solo) {
+      const ghost = this.players[1];
+      ghost._phantom = true;
+      ghost.alive = true;
+      if (ghost.mesh) ghost.mesh.visible = false;
+      // Glue the phantom to player 0 so the leash distance is always 0
+      // (no drain) and so any AoE that catches both at once just hits
+      // the live player twice through the same point.
+      ghost.pos.x = this.players[0].pos.x;
+      ghost.pos.z = this.players[0].pos.z;
+      ghost.smoothPos = { x: ghost.pos.x, z: ghost.pos.z };
+      // Tag the body so HUD CSS hides the P2 health bar / gold / build bar.
+      try { document.body?.classList?.add('solo'); } catch { /* no-op */ }
+    } else {
+      try { document.body?.classList?.remove('solo'); } catch { /* no-op */ }
+    }
     // Starter abilities so phone & desktop have something to cast immediately.
     this.players[0].setAbility('fireball');
     this.players[1].setAbility('icebolt');
@@ -333,6 +354,52 @@ export class Game {
       this.renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
+    // Dev/cheat helpers, exposed via `window.__game.cheat` for quick
+    // manual testing (free building, fast gold). Side-effect-only —
+    // none of these are referenced by gameplay code paths.
+    this.cheat = {
+      give: (n = 9999) => {
+        if (this.world?.resources) {
+          this.world.resources.wood = (this.world.resources.wood || 0) + n;
+          this.world.resources.stone = (this.world.resources.stone || 0) + n;
+          this.world.resources.seeds = (this.world.resources.seeds || 0) + n;
+        }
+        for (const p of this.players || []) {
+          if (p && !p._phantom) p.gold = (p.gold || 0) + n;
+        }
+        return {
+          wood: this.world?.resources?.wood,
+          stone: this.world?.resources?.stone,
+          seeds: this.world?.resources?.seeds,
+          gold: this.players?.[0]?.gold,
+        };
+      },
+      wood: (n = 9999) => {
+        if (this.world?.resources) this.world.resources.wood = (this.world.resources.wood || 0) + n;
+        return this.world?.resources?.wood;
+      },
+      stone: (n = 9999) => {
+        if (this.world?.resources) this.world.resources.stone = (this.world.resources.stone || 0) + n;
+        return this.world?.resources?.stone;
+      },
+      seeds: (n = 9999) => {
+        if (this.world?.resources) this.world.resources.seeds = (this.world.resources.seeds || 0) + n;
+        return this.world?.resources?.seeds;
+      },
+      gold: (n = 9999) => {
+        for (const p of this.players || []) {
+          if (p && !p._phantom) p.gold = (p.gold || 0) + n;
+        }
+        return (this.players || []).map((p) => p?.gold);
+      },
+      hp: () => {
+        for (const p of this.players || []) {
+          if (p && !p._phantom) p.hp = p.maxHP;
+        }
+        return (this.players || []).map((p) => p?.hp);
+      },
+    };
+
     // start screen
     this._waitingForStart = true;
     this._lastT = performance.now();
@@ -503,6 +570,9 @@ export class Game {
     if (!this.lobby) return;
     const p = this.players[slot];
     if (!p) return;
+    // Solo mode: don't broadcast a phantom slot to the lobby — there's no
+    // phone connected to it and the HUD is hidden anyway.
+    if (p._phantom) return;
     const upgrades = UPGRADES.map(u => ({
       id: u.id,
       name: u.name,
@@ -1934,12 +2004,14 @@ export class Game {
     // edge so pressing R/K starts the lift instead of also firing a dart-away
     // dash on the same tap.
     const intents = [i1, i2];
-    for (let i = 0; i < this.players.length; i++) {
-      const dead = this.players[i];
-      const partner = this.players[1 - i];
-      if (dead.alive || !partner.alive) continue;
-      if (vdist(dead.pos, partner.pos) <= REVIVE_RANGE) {
-        intents[partner.index].dash = false;
+    if (!this.solo) {
+      for (let i = 0; i < this.players.length; i++) {
+        const dead = this.players[i];
+        const partner = this.players[1 - i];
+        if (dead.alive || !partner.alive) continue;
+        if (vdist(dead.pos, partner.pos) <= REVIVE_RANGE) {
+          intents[partner.index].dash = false;
+        }
       }
     }
 
@@ -2058,9 +2130,26 @@ export class Game {
       },
     };
 
-    // Update players
-    this.players[0].update(dt, i1, this.players[1], damageables, swingHit, combatCtx);
-    this.players[1].update(dt, i2, this.players[0], damageables, swingHit, combatCtx);
+    // Update players. In solo mode the phantom partner doesn't tick at
+    // all — we just snap its position onto the live player so leash math
+    // and partner item hooks see a zero-distance ghost.
+    if (this.solo) {
+      const ghost = this.players[1];
+      const live = this.players[0];
+      ghost.pos.x = live.pos.x;
+      ghost.pos.z = live.pos.z;
+      ghost.smoothPos = ghost.smoothPos || { x: 0, z: 0 };
+      ghost.smoothPos.x = live.pos.x;
+      ghost.smoothPos.z = live.pos.z;
+      ghost._renderPrev = { x: live.pos.x, z: live.pos.z };
+      ghost._renderPos = { x: live.pos.x, z: live.pos.z };
+      ghost.hp = ghost.maxHP;
+      ghost.alive = true;
+      this.players[0].update(dt, i1, null, damageables, swingHit, combatCtx);
+    } else {
+      this.players[0].update(dt, i1, this.players[1], damageables, swingHit, combatCtx);
+      this.players[1].update(dt, i2, this.players[0], damageables, swingHit, combatCtx);
+    }
 
     // Altar interaction — if a player just pressed interact next to an
     // altar, open the altar UI and consume the press so a nearby chest
@@ -2302,21 +2391,28 @@ export class Game {
     // them in lockstep with the rest of the chunk's entities).
     compactInPlace(this.resources, r => r.state !== 'gone');
 
-    // Leash mechanic
-    const dBetween = vdist(this.players[0].pos, this.players[1].pos);
-    const beyond = Math.max(0, dBetween - LEASH_WARN);
-    this.leashRatio = clamp(beyond / (LEASH_MAX - LEASH_WARN), 0, 1);
-    if (dBetween > LEASH_MAX) {
-      const drain = LEASH_DRAIN * dt * (1 + (dBetween - LEASH_MAX) * 0.05);
-      for (const p of this.players) {
-        if (p.alive) {
-          p.hp = Math.max(0, p.hp - drain);
-          if (p.hp <= 0) p.die();
+    // Leash mechanic. Skipped entirely in solo mode — there's no second
+    // player to drift away from, and the phantom is glued to slot 0
+    // anyway, but we leave the math out so a fade/warn never triggers
+    // on a phantom hiccup.
+    if (this.solo) {
+      this.leashRatio = 0;
+    } else {
+      const dBetween = vdist(this.players[0].pos, this.players[1].pos);
+      const beyond = Math.max(0, dBetween - LEASH_WARN);
+      this.leashRatio = clamp(beyond / (LEASH_MAX - LEASH_WARN), 0, 1);
+      if (dBetween > LEASH_MAX) {
+        const drain = LEASH_DRAIN * dt * (1 + (dBetween - LEASH_MAX) * 0.05);
+        for (const p of this.players) {
+          if (p.alive) {
+            p.hp = Math.max(0, p.hp - drain);
+            if (p.hp <= 0) p.die();
+          }
         }
-      }
-      // subtle warn sound at intervals
-      if (Math.floor(this.elapsed * 2) % 2 === 0 && defaultRandom() < 0.05) {
-        this.sound.tone({ freq: 240, type: 'sawtooth', dur: 0.2, gain: 0.15, slide: -50 });
+        // subtle warn sound at intervals
+        if (Math.floor(this.elapsed * 2) % 2 === 0 && defaultRandom() < 0.05) {
+          this.sound.tone({ freq: 240, type: 'sawtooth', dur: 0.2, gain: 0.15, slide: -50 });
+        }
       }
     }
 
@@ -2327,6 +2423,10 @@ export class Game {
     for (let i = 0; i < this.players.length; i++) {
       const dead = this.players[i];
       if (dead.alive) continue;
+      // Solo mode: dead phantom never reaches here (it's pinned alive),
+      // and the live player has no partner to revive them — skip the loop
+      // body for both slots.
+      if (this.solo) continue;
       const partner = this.players[1 - i];
       const intent = partner.index === 0 ? i1 : i2;
       const inRange = partner.alive && vdist(dead.pos, partner.pos) <= REVIVE_RANGE;
@@ -2581,6 +2681,10 @@ export class Game {
 
   _cameraTarget(p) {
     if (!p) return { alive: false, pos: { x: 0, z: 0 } };
+    // Solo-mode phantom partner is glued to player 0 — pretend it isn't
+    // alive for camera-fit so the camera doesn't try to expand its frame
+    // to include a (zero-distance) ghost.
+    if (p._phantom) return { alive: false, pos: p._renderPos || p.pos };
     return {
       alive: p.alive,
       pos: p._renderPos || p.pos,

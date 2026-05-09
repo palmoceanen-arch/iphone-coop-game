@@ -79,6 +79,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     game = new Game({
       seed: config.seed,
       players: config.players,
+      solo: !!config.solo,
       pauseMenu,
       loadSave,
     });
@@ -100,7 +101,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     const introEl = document.getElementById('intro');
     if (introEl) introEl.style.display = 'flex';
 
-    lobby = new Lobby();
+    lobby = new Lobby({ solo: !!config.solo });
     lobby.connect();
     window.__lobby = lobby;
     game.lobby = lobby;

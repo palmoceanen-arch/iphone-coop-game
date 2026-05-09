@@ -93,6 +93,10 @@ export class StartMenu {
       },
     ];
     this.seed = initialSeed();
+    // Solo mode: when true, the second slot is hidden in the picker and
+    // only one Player is configured. Game still builds a phantom slot 2
+    // (hidden, invulnerable) so partner-aware code keeps its 2-slot shape.
+    this.solo = false;
 
     // 3D preview state per slot, set up lazily inside _renderSlots(): each
     // entry is `{ renderer, scene, camera, mixer, character }`.
@@ -160,16 +164,39 @@ export class StartMenu {
       if (seedInp) seedInp.value = this.seed;
     });
 
+    // Solo / co-op toggle. Re-renders the slot grid so the second
+    // panel disappears in solo mode but stays available in co-op.
+    const soloBtns = r.querySelectorAll('[data-solo-mode]');
+    const applySoloUi = () => {
+      soloBtns.forEach((b) => {
+        const on = b.dataset.soloMode === (this.solo ? 'solo' : 'coop');
+        b.classList.toggle('active', on);
+      });
+      this.root.classList.toggle('solo', this.solo);
+    };
+    soloBtns.forEach((b) => {
+      b.addEventListener('click', () => {
+        const next = b.dataset.soloMode === 'solo';
+        if (next === this.solo) return;
+        this.solo = next;
+        applySoloUi();
+        this._renderSlots();
+        this._resizePreviews();
+      });
+    });
+    applySoloUi();
+
     r.querySelector('#start-btn-confirm').addEventListener('click', () => {
       const seed = (this.seed && this.seed.length > 0) ? this.seed : randomSeed();
-      const players = this.config.map((c) => ({
+      const slotCount = this.solo ? 1 : 2;
+      const players = this.config.slice(0, slotCount).map((c) => ({
         character: c.character,
         color: presetHex(PLAYER_COLOR_PRESETS, c.color),
         capeColor: presetHex(CAPE_COLOR_PRESETS, c.cape),
         weapon: c.weapon,
       }));
       this.close();
-      this.onStart && this.onStart({ mode: 'new', seed, players });
+      this.onStart && this.onStart({ mode: 'new', seed, players, solo: this.solo });
     });
 
     // Confirm button on the load view — visible only when a save was
@@ -235,8 +262,17 @@ export class StartMenu {
   _renderSlots() {
     const wrap = this.root.querySelector('#start-slots');
     if (!wrap) return;
+    // Tear down existing preview canvases so the WebGL contexts get
+    // released before the slot DOM is replaced — otherwise switching
+    // between solo/coop leaks renderers each time.
+    for (const prev of this._previews || []) {
+      if (prev?.renderer) prev.renderer.dispose();
+    }
+    this._previews = [];
+    this._weaponRows = [];
     wrap.innerHTML = '';
-    for (let i = 0; i < 2; i++) {
+    const count = this.solo ? 1 : 2;
+    for (let i = 0; i < count; i++) {
       wrap.appendChild(this._buildSlot(i));
     }
   }
