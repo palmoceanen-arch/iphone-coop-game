@@ -936,13 +936,11 @@ function getRoofTileTexture() {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  // Grout fill — multiplied by c.base it gives a softly lighter (when
-  // > body brightness) or marginally darker (when < body) variant of
-  // the roof colour. Set to 0.85 so the seam reads as a pale highlight
-  // line against the body rather than a heavy dark grid — gives the
-  // tiles a stylised cel-shaded outline instead of a dirty mortar
-  // look.
-  const groutShade = 0.85;
+  // Grout fill — set close to 1.0 so the seam reads as the SAME tone
+  // as the tile body, just barely darker. Multiplied by c.base it
+  // produces a hairline that's still a recognisable boundary between
+  // tiles but never reads as a dark mortar line.
+  const groutShade = 0.92;
   const g = Math.round(groutShade * 255);
   ctx.fillStyle = `rgb(${g},${g},${g})`;
   ctx.fillRect(0, 0, 256, 256);
@@ -972,9 +970,10 @@ function getRoofTileTexture() {
       ctx.fillRect(x, y, w, h);
       // Soft shadow band along the BOTTOM of each tile (where the next
       // row of tiles would overlap this one in real clay roofing).
-      // 0.65 brightness drops the body down to a cleanly distinct
-      // half-tone band when multiplied by the toon-shaded base colour.
-      const shadow = Math.round(Math.max(0, Math.min(255, (0.65 + jitter * 0.5) * 255)));
+      // 0.80 keeps the band in the same tonal family as the body —
+      // visible as a row separator without reading as a hard black
+      // stripe.
+      const shadow = Math.round(Math.max(0, Math.min(255, (0.80 + jitter * 0.5) * 255)));
       ctx.fillStyle = `rgb(${shadow},${shadow},${shadow})`;
       ctx.fillRect(x, y + h - h * 0.22, w, h * 0.22);
     }
