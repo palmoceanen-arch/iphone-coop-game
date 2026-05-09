@@ -910,40 +910,25 @@ export function buildRoofCornerMesh() {
   return g;
 }
 
-// World-space size of a single tile in the roof's tile imitation. 0.6m
-// horizontal × 0.4m vertical reads as "clay tile" without making the
-// rows look pixelated on a small (4m × 4m) building or oversized on a
-// large one. Used to compute UVs so the same tile texture tiles cleanly
-// across roofs of any footprint.
-const ROOF_TILE_W = 0.6;
-const ROOF_TILE_H = 0.4;
+// World-space size of a single tile in the roof's tile imitation. 3m
+// horizontal × 2m vertical reads as "large clay scale" — visible from
+// the typical isometric camera distance without dissolving into a flat
+// colour, and matching the chunky cel-shaded silhouette of the rest of
+// the game's geometry. Used to compute UVs so the same tile texture
+// tiles cleanly across roofs of any footprint.
+const ROOF_TILE_W = 3.0;
+const ROOF_TILE_H = 2.0;
 
-// CanvasTexture cache, keyed by colour name. Generated lazily the first
-// time a roof of a given colour is built and reused for every subsequent
-// roof of the same colour so the GPU only ever uploads one texture per
-// palette entry.
-const ROOF_TILE_TEXTURES = new Map();
-function hexToRGB(hex) {
-  return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
-}
-function hexCSS(hex) {
-  return '#' + hex.toString(16).padStart(6, '0');
-}
-function shadeCSS(hex, factor) {
-  const [r, g, b] = hexToRGB(hex);
-  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
-  return `rgb(${clamp(r * factor)},${clamp(g * factor)},${clamp(b * factor)})`;
-}
-
-// Build a 256×256 tile-pattern canvas texture for the named palette
-// entry. Pattern: 8 horizontal rows × 4 columns of slightly tonally
-// varied tiles, brick-offset every other row, with a thin grout between
-// tiles and a bright top edge per tile so the slope reads as overlapping
+// Single shared grayscale tile-pattern texture. Multiplied against the
+// palette colour set on each material via `material.color = c.base`,
+// so MeshToonMaterial's gradientMap-driven cel banding still controls
+// the lighting (matching the rest of the game's MeshToonMaterials)
+// while the texture only injects darker grout lines and a soft shadow
+// stripe at the bottom of each tile so the slope reads as overlapping
 // scales rather than a flat coloured triangle.
-function getRoofTileTexture(colorName) {
-  const cached = ROOF_TILE_TEXTURES.get(colorName);
-  if (cached) return cached;
-  const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
+let ROOF_TILE_TEX = null;
+function getRoofTileTexture() {
+  if (ROOF_TILE_TEX) return ROOF_TILE_TEX;
   const canvas = (typeof document !== 'undefined' && document.createElement)
     ? document.createElement('canvas')
     : null;
@@ -951,14 +936,17 @@ function getRoofTileTexture(colorName) {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  // Grout fill — every gap between tiles ends up showing this colour.
-  ctx.fillStyle = hexCSS(c.dark);
+  // Grout fill — multiplied by c.base this gives a clearly darker
+  // shade of the roof colour, drawing visible tile boundaries.
+  const groutShade = 0.40;
+  const g = Math.round(groutShade * 255);
+  ctx.fillStyle = `rgb(${g},${g},${g})`;
   ctx.fillRect(0, 0, 256, 256);
   const rows = 8;
   const cols = 4;
   const tileH = canvas.height / rows;
   const tileW = canvas.width / cols;
-  const grout = 1.5;
+  const grout = 2.0;
   for (let r = 0; r < rows; r++) {
     const offset = (r % 2 === 0) ? 0 : tileW * 0.5;
     // Draw one extra column on each side so the brick offset wraps
@@ -968,15 +956,23 @@ function getRoofTileTexture(colorName) {
       const y = r * tileH + grout;
       const w = tileW - grout * 2;
       const h = tileH - grout * 2;
-      // Deterministic per-tile tonal jitter so the roof reads as hand
-      // -laid tiles, not a perfect repeating pattern.
-      const jitter = (((r * 17 + i * 13) % 7) - 3) * 0.025;
-      ctx.fillStyle = shadeCSS(c.base, 1.0 + jitter);
+      // Deterministic per-tile brightness jitter (±2.5% only — too much
+      // and the cel-shaded look starts to read as noisy rather than
+      // hand-laid).
+      const jitter = (((r * 17 + i * 13) % 5) - 2) * 0.012;
+      // Tile body: white-ish so material.color × tile ≈ material.color,
+      // i.e. the roof's dominant tone matches the palette base just
+      // like the other plain MeshToonMaterials in the game.
+      const body = Math.round(Math.max(0, Math.min(255, (1.0 + jitter) * 255)));
+      ctx.fillStyle = `rgb(${body},${body},${body})`;
       ctx.fillRect(x, y, w, h);
-      // Highlight stripe along the top edge of each tile — sells the
-      // "row of curved scales" look without modelling actual curvature.
-      ctx.fillStyle = shadeCSS(c.light, 1.0 + jitter * 0.5);
-      ctx.fillRect(x, y, w, Math.max(1, h * 0.18));
+      // Soft shadow band along the BOTTOM of each tile (where the next
+      // row of tiles would overlap this one in real clay roofing).
+      // 0.65 brightness drops the body down to a cleanly distinct
+      // half-tone band when multiplied by the toon-shaded base colour.
+      const shadow = Math.round(Math.max(0, Math.min(255, (0.65 + jitter * 0.5) * 255)));
+      ctx.fillStyle = `rgb(${shadow},${shadow},${shadow})`;
+      ctx.fillRect(x, y + h - h * 0.22, w, h * 0.22);
     }
   }
   const tex = new THREE.CanvasTexture(canvas);
@@ -984,26 +980,22 @@ function getRoofTileTexture(colorName) {
   tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  ROOF_TILE_TEXTURES.set(colorName, tex);
+  ROOF_TILE_TEX = tex;
   return tex;
 }
 
 // MeshToonMaterial cache, keyed by colour name. Each roof shares one
 // material across its 4 face triangles so a chunk full of buildings
-// stays cheap to draw.
+// stays cheap to draw. The grayscale tile texture is shared across all
+// palette entries and only the per-colour `material.color` differs.
 const ROOF_TILE_MATERIALS = new Map();
 function getRoofTileMaterial(colorName) {
   const cached = ROOF_TILE_MATERIALS.get(colorName);
   if (cached) return cached;
   const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
-  const tex = getRoofTileTexture(colorName);
+  const tex = getRoofTileTexture();
   const mat = new THREE.MeshToonMaterial({
-    // White base when a texture is present so the tile/grout/highlight
-    // colours bake into the canvas come through unmodified — multiplying
-    // by `c.base` here would crush the light/grout contrast back into a
-    // single flat tone. Falls back to `c.base` if the canvas couldn't
-    // be created (headless / SSR builds).
-    color: tex ? 0xffffff : c.base,
+    color: c.base,
     map: tex || null,
     gradientMap: TOON_GRADIENT,
   });
