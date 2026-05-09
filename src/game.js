@@ -1223,6 +1223,57 @@ export class Game {
     }
   }
 
+  // X-ray the roof for any player standing inside it. Walks every live
+  // roof_pitched, tests each player's XZ against the roof's rectangle
+  // bounds (with a 0.5m margin so brushing the wall doesn't pop the
+  // fade), and lerps the roof's per-instance opacity toward 0.1
+  // (somebody is inside) or 1.0 (everyone outside). The lerp is
+  // frame-rate-independent so the fade timing matches at 30/60/120 fps.
+  // Roofs without bounds (legacy / mid-load) and dead roofs are skipped.
+  _updateRoofFade(dt) {
+    const FADE_OPACITY = 0.10;
+    // 1 - exp(-dt * k) is a frame-rate-independent lerp; k≈8 reaches
+    // 99% of the target in ~0.6s, which feels snappy without being
+    // jarring as you cross the threshold.
+    const k = 8;
+    const lerp = 1 - Math.exp(-dt * k);
+    const margin = 0.5;
+    for (const s of this.structures) {
+      if (!s.alive || s.kind !== 'roof_pitched' || !s.mesh) continue;
+      const b = s._roofBounds;
+      if (!b) continue;
+      let inside = false;
+      for (const p of this.players) {
+        if (!p) continue;
+        if (p.pos.x < b.minX - margin) continue;
+        if (p.pos.x > b.maxX + margin) continue;
+        if (p.pos.z < b.minZ - margin) continue;
+        if (p.pos.z > b.maxZ + margin) continue;
+        inside = true;
+        break;
+      }
+      const target = inside ? FADE_OPACITY : 1.0;
+      const cur = (typeof s._roofOpacity === 'number') ? s._roofOpacity : 1.0;
+      let next = cur + (target - cur) * lerp;
+      // Snap to target near the end of the lerp so we don't sit at
+      // 0.9998 forever flagging materials as faded.
+      if (Math.abs(next - target) < 0.005) next = target;
+      if (next === cur) continue;
+      s._roofOpacity = next;
+      // Drop depthWrite once we're noticeably translucent so the roof
+      // stops occluding whatever's below it in the depth buffer; flip
+      // it back on at full opacity so adjacent solid geometry sorts
+      // correctly against the roof.
+      const transparentLook = next < 0.99;
+      s.mesh.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+        if (!child.userData?.isRoofOuter && !child.userData?.isRoofInner) return;
+        child.material.opacity = next;
+        child.material.depthWrite = !transparentLook;
+      });
+    }
+  }
+
   // Rebuild a roof_pitched mesh from its descriptor's rectangle bounds.
   // The mesh is centred on (cx,cz) and parented at the corner-y so the
   // apex hovers above the centre at apexH = max(w,d)/2. Caller stores
@@ -2684,6 +2735,14 @@ export class Game {
     // updated HP into the placedStructures map so a mid-damage wall
     // survives chunk unload at its current health.
     for (const s of this.structures) s.update(dt);
+    // Roof X-ray: when any player is standing inside a roof's footprint,
+    // lerp that roof's opacity down to 0.1 so the player can see what's
+    // happening under it (otherwise the roof completely hides the
+    // building interior from the top-down camera). Walking back out
+    // lerps it back up to 1.0. Each roof has its own cloned material
+    // (see buildRoofPitchedMesh) so this is per-instance — adjacent
+    // buildings keep their roofs solid.
+    this._updateRoofFade(dt);
     for (const s of this.structures) {
       if (s.alive && s.chunkKey) {
         // Cheap save-system stub: keep the persisted descriptor's HP in

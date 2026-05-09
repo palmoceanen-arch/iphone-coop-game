@@ -936,9 +936,13 @@ function getRoofTileTexture() {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  // Grout fill — multiplied by c.base this gives a clearly darker
-  // shade of the roof colour, drawing visible tile boundaries.
-  const groutShade = 0.40;
+  // Grout fill — multiplied by c.base it gives a softly lighter (when
+  // > body brightness) or marginally darker (when < body) variant of
+  // the roof colour. Set to 0.85 so the seam reads as a pale highlight
+  // line against the body rather than a heavy dark grid — gives the
+  // tiles a stylised cel-shaded outline instead of a dirty mortar
+  // look.
+  const groutShade = 0.85;
   const g = Math.round(groutShade * 255);
   ctx.fillStyle = `rgb(${g},${g},${g})`;
   ctx.fillRect(0, 0, 256, 256);
@@ -1068,17 +1072,33 @@ export function buildRoofPitchedMesh(width, depth, colorName = null) {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.computeVertexNormals();
-  const outerMat = colorName
+  // Clone the cached materials so each roof has its OWN material
+  // instance — the per-roof transparency fade ("player walks under
+  // the roof, the slope lerps to ~10% opacity") needs to mutate
+  // .opacity / .transparent / .depthWrite on a per-instance basis.
+  // If we used the shared cached material every roof of that colour
+  // in the world would fade together.
+  const baseOuter = colorName
     ? getRoofTileMaterial(colorName)
     : MATERIALS.plank;
+  const outerMat = baseOuter.clone();
+  // Mark transparent up front so the per-roof opacity fade can animate
+  // .opacity each frame without forcing a shader recompile (which a
+  // mid-flight transparent=false→true flip would). At opacity=1.0 the
+  // roof renders effectively opaque so this costs us nothing visually.
+  outerMat.transparent = true;
+  outerMat.opacity = 1.0;
+  outerMat.depthWrite = true;
   const mesh = new THREE.Mesh(geo, outerMat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+  mesh.userData.isRoofOuter = true;
   g.add(mesh);
   // Thin under-side plank so a player looking up from inside doesn't
   // see backface culling holes — same triangles flipped, plain plank
   // material so the underside reads as a wooden ceiling regardless of
-  // the outer tile colour.
+  // the outer tile colour. Cloned for the same per-roof transparency
+  // reason as the outer mat.
   const innerPositions = new Float32Array(faces.length * 3 * 3);
   for (let f = 0; f < faces.length; f++) {
     const face = faces[f];
@@ -1094,9 +1114,14 @@ export function buildRoofPitchedMesh(width, depth, colorName = null) {
   const innerGeo = new THREE.BufferGeometry();
   innerGeo.setAttribute('position', new THREE.BufferAttribute(innerPositions, 3));
   innerGeo.computeVertexNormals();
-  const inner = new THREE.Mesh(innerGeo, MATERIALS.plankDark);
+  const innerMat = MATERIALS.plankDark.clone();
+  innerMat.transparent = true;
+  innerMat.opacity = 1.0;
+  innerMat.depthWrite = true;
+  const inner = new THREE.Mesh(innerGeo, innerMat);
   inner.castShadow = false;
   inner.receiveShadow = true;
+  inner.userData.isRoofInner = true;
   g.add(inner);
   return g;
 }
