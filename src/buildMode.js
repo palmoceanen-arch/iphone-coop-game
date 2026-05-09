@@ -199,9 +199,13 @@ export class BuildController {
   // chunk's already-placed structures.
   _spotFree(x, z, y = 0, kind = null) {
     const eps2 = MIN_STRUCT_SPACING * MIN_STRUCT_SPACING;
-    const yEps = 0.5;               // half-cell tolerance: structures on the same y-layer collide
     const placingFloor = (kind === 'floor_wood');
     const ck0 = this.world.chunkKeyOf(x, z);
+    // Floor-span of the placement, in integer floor indices. Most
+    // recipes occupy one floor; door_full is two-blocks tall so it
+    // reserves both its base floor and the floor directly above.
+    const placeBase = Math.round((y || 0) / STEP_Y);
+    const placeTop = placeBase + ((kind === 'door_full') ? 1 : 0);
     // Collect placed-structure descriptors from the centre + 4 cardinal
     // neighbours so a wall on the chunk seam is also seen.
     const seamOffsets = [
@@ -216,8 +220,13 @@ export class BuildController {
       for (const d of arr) {
         const dx = d.x - x, dz = d.z - z;
         if (dx * dx + dz * dz >= eps2) continue;
-        const dy = (d.y || 0) - y;
-        if (Math.abs(dy) >= yEps) continue;
+        const dBase = Math.round((d.y || 0) / STEP_Y);
+        const dTop = dBase + ((d.kind === 'door_full') ? 1 : 0);
+        // Reject only if the two floor-spans overlap. door_full at
+        // floor 0 occupies [0,1], so a Shift-placed wall trying to
+        // claim floor 1 in the same cell is rejected here even
+        // though descriptor.y == 0.
+        if (placeTop < dBase || placeBase > dTop) continue;
         // Two floors on the same tile + same y would z-fight and waste
         // resources, so reject that even though either side alone is
         // a "floor".

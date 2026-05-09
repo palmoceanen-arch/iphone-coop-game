@@ -1052,7 +1052,7 @@ export class Game {
         if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildDoorFullMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0, 'door_full');
       }
     }
   }
@@ -1070,20 +1070,24 @@ export class Game {
     const arr = this.world.placedStructures.get(ck);
     if (!arr) return false;
     const eps = 0.15;
-    const yEps = 0.5;             // half-floor tolerance — same y-layer = same floor
+    const queryFloor = Math.round((y || 0) / 1.0);   // STEP_Y = 1m
     for (const d of arr) {
       // Wood / glass walls and the full-height door are also rigid block
       // structures that fence rails should plug into seamlessly, so they
       // count as fence-connectable for the run-extension logic. The
       // y-match guard keeps a 2nd-storey wood wall from sprouting an
       // arm just because the stone wall directly *below* its neighbour
-      // tile happens to be fence-connectable.
-      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate'
+      // tile happens to be fence-connectable. door_full claims TWO
+      // consecutive floors so a wall on the upper floor next to a
+      // door also gets to terminate cleanly against the door jamb.
+      if (!(d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate'
            || d.kind === 'wood_wall' || d.kind === 'glass_wall'
-           || d.kind === 'door_full')
-          && Math.abs(d.x - x) < eps
-          && Math.abs(d.z - z) < eps
-          && Math.abs((d.y || 0) - y) < yEps) return true;
+           || d.kind === 'door_full')) continue;
+      if (Math.abs(d.x - x) >= eps) continue;
+      if (Math.abs(d.z - z) >= eps) continue;
+      const dBase = Math.round((d.y || 0) / 1.0);
+      const dTop = dBase + ((d.kind === 'door_full') ? 1 : 0);
+      if (queryFloor >= dBase && queryFloor <= dTop) return true;
     }
     return false;
   }
@@ -1221,23 +1225,29 @@ export class Game {
   // fence/gate neighbours. Walks `this.structures` (live entities only);
   // any descriptor-only entry still queued for spawn picks up the right
   // connections when it drains.
-  _rebuildFenceNeighborsOf(x, z, y = 0) {
+  _rebuildFenceNeighborsOf(x, z, y = 0, selfKind = null) {
     const eps = 0.15;
     const yEps = 0.5;
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = x + dx, nz = z + dz;
-      for (const s of this.structures) {
-        if (!s.alive) continue;
-        if (s.kind !== 'fence' && s.kind !== 'gate'
-            && s.kind !== 'wood_wall' && s.kind !== 'glass_wall') continue;
-        if (Math.abs(s.pos.x - nx) < eps
-            && Math.abs(s.pos.z - nz) < eps
-            && Math.abs((s.y || 0) - y) < yEps) {
-          if (s.kind === 'fence') this._rebuildFenceMesh(s);
-          else if (s.kind === 'gate') this._rebuildGateMesh(s);
-          else if (s.kind === 'wood_wall') this._rebuildWoodWallMesh(s);
-          else if (s.kind === 'glass_wall') this._rebuildGlassWallMesh(s);
-          break;
+    // door_full claims two consecutive floors, so changing one nudges
+    // neighbours on both its base floor and the floor above. Other
+    // recipes are single-floor so the inner loop runs once.
+    const floors = (selfKind === 'door_full') ? [y, y + 1.0] : [y];
+    for (const fy of floors) {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, nz = z + dz;
+        for (const s of this.structures) {
+          if (!s.alive) continue;
+          if (s.kind !== 'fence' && s.kind !== 'gate'
+              && s.kind !== 'wood_wall' && s.kind !== 'glass_wall') continue;
+          if (Math.abs(s.pos.x - nx) < eps
+              && Math.abs(s.pos.z - nz) < eps
+              && Math.abs((s.y || 0) - fy) < yEps) {
+            if (s.kind === 'fence') this._rebuildFenceMesh(s);
+            else if (s.kind === 'gate') this._rebuildGateMesh(s);
+            else if (s.kind === 'wood_wall') this._rebuildWoodWallMesh(s);
+            else if (s.kind === 'glass_wall') this._rebuildGlassWallMesh(s);
+            break;
+          }
         }
       }
     }
@@ -2458,7 +2468,7 @@ export class Game {
         if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate'
             || s.kind === 'wood_wall' || s.kind === 'glass_wall'
             || s.kind === 'door_full') {
-          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z, s.y || 0);
+          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z, s.y || 0, s.kind);
         }
         // Drop any attached Crop too — the planter mesh is gone so no
         // visible mesh remains, but the Crop entry would otherwise linger
