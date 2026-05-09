@@ -1098,11 +1098,16 @@ export function buildRoofPitchedMesh(width, depth, colorName = null) {
   mesh.receiveShadow = true;
   mesh.userData.isRoofOuter = true;
   g.add(mesh);
-  // Thin under-side plank so a player looking up from inside doesn't
-  // see backface culling holes — same triangles flipped, plain plank
-  // material so the underside reads as a wooden ceiling regardless of
-  // the outer tile colour. Cloned for the same per-roof transparency
-  // reason as the outer mat.
+  // Reverse-wound under-side plank: originally there so a player
+  // looking up from inside the building wouldn't see backface-culled
+  // holes through the roof. With our locked top-down isometric camera
+  // that's a view we never have — and during the per-roof opacity
+  // fade the inner-mesh's BACK-of-building slope is front-facing to
+  // the camera through the now-translucent outer mesh, painting a
+  // dark wooden plank rectangle against whatever's behind the
+  // building (looks like a stray "back wall through the roof" to the
+  // player). Built but kept invisible: cheaper than ripping the code
+  // out and trivial to re-enable for any future first-person camera.
   const innerPositions = new Float32Array(faces.length * 3 * 3);
   for (let f = 0; f < faces.length; f++) {
     const face = faces[f];
@@ -1110,7 +1115,6 @@ export function buildRoofPitchedMesh(width, depth, colorName = null) {
     const v1 = face.verts[1];
     const v2 = face.verts[2];
     const pBase = f * 9;
-    // Reverse winding so the underside faces inward.
     innerPositions[pBase + 0] = v2[0]; innerPositions[pBase + 1] = v2[1]; innerPositions[pBase + 2] = v2[2];
     innerPositions[pBase + 3] = v1[0]; innerPositions[pBase + 4] = v1[1]; innerPositions[pBase + 5] = v1[2];
     innerPositions[pBase + 6] = v0[0]; innerPositions[pBase + 7] = v0[1]; innerPositions[pBase + 8] = v0[2];
@@ -1126,6 +1130,7 @@ export function buildRoofPitchedMesh(width, depth, colorName = null) {
   inner.castShadow = false;
   inner.receiveShadow = true;
   inner.userData.isRoofInner = true;
+  inner.visible = false;
   g.add(inner);
   return g;
 }
