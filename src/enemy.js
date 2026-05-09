@@ -60,6 +60,12 @@ export class Enemy {
     this.asleep = false;
     this.elite = !!opts.elite;
     this._frozen = 0;
+    // _stunned is the immobilize-only counterpart to _frozen — it
+    // also prevents movement and resets the attack windup, but it
+    // tints the model gold instead of icy blue. Used by the Knight's
+    // shield-bash charge so a stunned enemy doesn't read as
+    // "frozen" (the icy tint is reserved for actual ice damage).
+    this._stunned = 0;
     this._slow = 0;
     this._poison = null;
     this.config(level);
@@ -379,6 +385,7 @@ export class Enemy {
     // Only store status effects when present so a save with a thousand
     // idle slimes doesn't carry a thousand `_frozen: 0` entries.
     if (this._frozen && this._frozen > 0) ov._frozen = this._frozen;
+    if (this._stunned && this._stunned > 0) ov._stunned = this._stunned;
     if (this._slow && this._slow > 0) ov._slow = this._slow;
     if (this._poison && this._poison.dur > 0) {
       ov._poison = { dps: this._poison.dps, dur: this._poison.dur };
@@ -405,6 +412,7 @@ export class Enemy {
       if (this.mesh) this.mesh.visible = !ov.asleep;
     }
     if (typeof ov._frozen === 'number') this._frozen = ov._frozen;
+    if (typeof ov._stunned === 'number') this._stunned = ov._stunned;
     if (typeof ov._slow === 'number') this._slow = ov._slow;
     if (ov._poison && typeof ov._poison.dur === 'number') {
       this._poison = { dps: ov._poison.dps || 0, dur: ov._poison.dur, src: null };
@@ -491,6 +499,7 @@ export class Enemy {
 
     // Status effects ------------------------------------------------
     this._frozen = Math.max(0, (this._frozen || 0) - dt);
+    this._stunned = Math.max(0, (this._stunned || 0) - dt);
     this._slow = Math.max(0, (this._slow || 0) - dt);
     if (this._poison && this._poison.dur > 0) {
       this._poison.dur -= dt;
@@ -503,7 +512,7 @@ export class Enemy {
     } else if (this._poison) {
       this._poison = null;
     }
-    if (this._frozen > 0) {
+    if (this._frozen > 0 || this._stunned > 0) {
       this._isMoving = false;
       this._updateVisualEffects(dt);
       return;
@@ -776,6 +785,7 @@ export class Enemy {
   _updateVisualEffects(dt) {
     // Hit flash + status effect visuals via cached materials' emissive channel.
     const isFrozen = this._frozen > 0;
+    const isStunned = this._stunned > 0;
     const isSlowed = this._slow > 0;
     const isPoisoned = this._poison && this._poison.dur > 0;
     for (const m of this._materials || []) {
@@ -786,6 +796,11 @@ export class Enemy {
       } else if (isFrozen && m.emissive) {
         m.emissive.setHex(0x9dfcff);
         m.emissiveIntensity = 0.4;
+      } else if (isStunned && m.emissive) {
+        // Stun tint — gold, distinct from the icy blue of _frozen so
+        // the player can read "Knight bashed it" vs "Mage froze it".
+        m.emissive.setHex(0xffe066);
+        m.emissiveIntensity = 0.35;
       } else if (isPoisoned && m.emissive) {
         m.emissive.setHex(0x6cd25b);
         m.emissiveIntensity = 0.25 + Math.sin(performance.now() * 0.01) * 0.1;

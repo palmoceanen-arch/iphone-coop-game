@@ -106,7 +106,7 @@ export const ITEMS = [
   {
     id: 'pyromancer', name: 'Уголёк феникса', icon: 'flame', rarity: 'common', maxStacks: MAX_STACKS,
     element: 'fire',
-    desc: 'Огненные способности (Фаербол, Берсерк) сильнее. 1 стак: +25% урона. 3: +60%. 5: +100%.',
+    desc: 'Огненные способности (Фаербол) сильнее. 1 стак: +25% урона. 3: +60%. 5: +100%.',
     // No combat hooks — applied at ability cast time via elementDamageMult().
     hooks: {},
   },
@@ -259,7 +259,7 @@ export const ITEMS = [
   {
     id: 'stormcaller', name: 'Жезл бури', icon: 'bolt', rarity: 'rare', maxStacks: MAX_STACKS,
     element: 'lightning',
-    desc: 'Молнии (Цепная молния, Ветер удар) сильнее, цепная молния прыгает на больше целей. 1 стак: +30% урона. 3: +75%, +1 цель. 5: +120%, +2 цели.',
+    desc: 'Молнии (Цепная молния) сильнее, цепная молния прыгает на больше целей. 1 стак: +30% урона. 3: +75%, +1 цель. 5: +120%, +2 цели.',
     hooks: {},
   },
 
@@ -283,8 +283,11 @@ export const ITEMS = [
           if (d <= r + e.radius) e.takeDamage(dmg, ctx.enemy.pos.x, ctx.enemy.pos.z, 5);
         }
         if (player.effects?.flashSphere) {
-          player.effects.flashSphere(ctx.enemy.pos.x, 1.5, ctx.enemy.pos.z, 0x9dfcff, r, 0.3);
-          player.effects.ring(ctx.enemy.pos.x, 0.05, ctx.enemy.pos.z, 0x9dfcff, r, 0.4);
+          // Thor's hammer is a lightning AoE — visuals use the same
+          // lightning-yellow palette as chain lightning / cycle, not
+          // the icy blue that previously made it read as a freeze.
+          player.effects.flashSphere(ctx.enemy.pos.x, 1.5, ctx.enemy.pos.z, 0xfff7a0, r, 0.3);
+          player.effects.ring(ctx.enemy.pos.x, 0.05, ctx.enemy.pos.z, 0xfff7a0, r, 0.4);
         }
         player.sound?.bomb?.();
       },

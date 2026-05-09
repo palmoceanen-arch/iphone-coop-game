@@ -1670,8 +1670,11 @@ export class Game {
       // Per-character charge attack post-hit effects ----------------
       // Knight Block_Attack stuns every enemy it connects with, giving
       // the player a free counter window after the bash resolves.
+      // Uses `_stunned` (gold tint) instead of `_frozen` (icy blue) so
+      // the visual reads as a bash stun and not as ice freeze — only
+      // ice-element sources should ever produce the blue freeze look.
       if (swing?.charKind === 'shieldBash' && swing.stunDuration > 0) {
-        enemy._frozen = Math.max(enemy._frozen || 0, swing.stunDuration);
+        enemy._stunned = Math.max(enemy._stunned || 0, swing.stunDuration);
         this.effects.ring(enemy.pos.x, 0.05, enemy.pos.z, 0xffe066, 1.2, 0.25);
       }
       // Rogue dash-strike steals a small amount of gold from each
