@@ -790,29 +790,28 @@ export function buildWoodWallMesh(connections) {
   return g;
 }
 
-// Sibling of `buildWoodWallMesh` for the glass-wall variant: same fence
-// post + 4-cardinal panel layout, but the panels use the translucent
-// glass material and the post stays plank-coloured so the pane reads
-// as a window with a wooden frame.
+// Sibling of `buildWoodWallMesh` for the glass-wall variant: a single
+// translucent pane spans the full post-to-post width on each connected
+// side. No wood frame in the centre — a continuous run of glass walls
+// reads as a clean window strip with no opaque pillars breaking it up.
+// An isolated glass wall (no connections) still gets a small standalone
+// pane so it's visible on the grid.
 export function buildGlassWallMesh(connections) {
   ensureMaterials();
   const c = connections || { N: false, S: false, E: false, W: false };
   const g = new THREE.Group();
-  const post = new THREE.Mesh(
-    new THREE.BoxGeometry(_POST_THICK, _SOLID_WALL_HEIGHT, _POST_THICK),
-    MATERIALS.plankDark,
-  );
-  post.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
-  post.castShadow = true; post.receiveShadow = true;
-  g.add(post);
-  // Glass panels are slightly thinner than the wood panels so the
-  // surrounding wood frame still has visual presence at oblique angles.
   const paneThick = 0.10;
+  const anyConn = c.N || c.S || c.E || c.W;
+  // Each connected pane reaches all the way from the cell centre out
+  // to the cell boundary (length 0.50, midpoint 0.25), so two adjacent
+  // glass walls' panes meet flush at the seam with no opaque interrupt.
+  const FULL_LEN = 0.50;
+  const FULL_OFF = 0.25;
   const dirs = [
-    [c.E, [+_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0], [_PANEL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
-    [c.W, [-_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0], [_PANEL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
-    [c.N, [0, _SOLID_WALL_HEIGHT / 2, -_PANEL_OFFSET], [paneThick, _SOLID_WALL_HEIGHT, _PANEL_LEN]],
-    [c.S, [0, _SOLID_WALL_HEIGHT / 2, +_PANEL_OFFSET], [paneThick, _SOLID_WALL_HEIGHT, _PANEL_LEN]],
+    [c.E, [+FULL_OFF, _SOLID_WALL_HEIGHT / 2, 0], [FULL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.W, [-FULL_OFF, _SOLID_WALL_HEIGHT / 2, 0], [FULL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.N, [0, _SOLID_WALL_HEIGHT / 2, -FULL_OFF], [paneThick, _SOLID_WALL_HEIGHT, FULL_LEN]],
+    [c.S, [0, _SOLID_WALL_HEIGHT / 2, +FULL_OFF], [paneThick, _SOLID_WALL_HEIGHT, FULL_LEN]],
   ];
   for (const [on, pos, size] of dirs) {
     if (!on) continue;
@@ -821,6 +820,18 @@ export function buildGlassWallMesh(connections) {
     p.castShadow = false;            // transparent meshes don't write to shadow map
     p.receiveShadow = true;
     g.add(p);
+  }
+  if (!anyConn) {
+    // Standalone glass tile: a small block at the cell centre so the
+    // recipe is visible when the player builds one with no neighbours.
+    const stub = new THREE.Mesh(
+      new THREE.BoxGeometry(0.30, _SOLID_WALL_HEIGHT, paneThick),
+      MATERIALS.glass,
+    );
+    stub.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
+    stub.castShadow = false;
+    stub.receiveShadow = true;
+    g.add(stub);
   }
   return g;
 }

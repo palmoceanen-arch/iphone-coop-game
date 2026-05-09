@@ -1018,7 +1018,7 @@ export class Game {
       // naturally on their own first build below.
       if (s.kind === 'fence') {
         this._rebuildFenceMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'gate') {
         // Restore persisted open state (chunk reload after the player
         // toggled the gate, then walked away). Gate's `openDir` lives
@@ -1028,22 +1028,22 @@ export class Game {
         if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildGateMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'wall') {
         // Stone walls don't render any connection arms themselves, but
         // their presence flips a fence/gate neighbour's connection bit,
         // so refresh those too.
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'wood_wall') {
         // Wood walls grow fence-style panels toward their neighbours;
         // build the mesh with the current connection mask, then refresh
         // adjacent fence/gate/wood/glass walls so their arms terminate
         // against this new tile.
         this._rebuildWoodWallMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'glass_wall') {
         this._rebuildGlassWallMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'door_full') {
         // Restore persisted open state (chunk reload after the player
         // toggled the door, then walked away) and rebuild the panel
@@ -1052,7 +1052,7 @@ export class Game {
         if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildDoorFullMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       }
     }
   }
@@ -1065,33 +1065,40 @@ export class Game {
   // plots and a fence rail visually dead-ending at one would look weird.
   // Cheap O(n) scan of the chunk's descriptor list — typical chunk has
   // <20 structures so this is fine inside a 4-neighbour loop.
-  _isFenceConnectableAt(x, z) {
+  _isFenceConnectableAt(x, z, y = 0) {
     const ck = this.world.chunkKeyOf(x, z);
     const arr = this.world.placedStructures.get(ck);
     if (!arr) return false;
     const eps = 0.15;
+    const yEps = 0.5;             // half-floor tolerance — same y-layer = same floor
     for (const d of arr) {
       // Wood / glass walls and the full-height door are also rigid block
       // structures that fence rails should plug into seamlessly, so they
-      // count as fence-connectable for the run-extension logic.
+      // count as fence-connectable for the run-extension logic. The
+      // y-match guard keeps a 2nd-storey wood wall from sprouting an
+      // arm just because the stone wall directly *below* its neighbour
+      // tile happens to be fence-connectable.
       if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate'
            || d.kind === 'wood_wall' || d.kind === 'glass_wall'
            || d.kind === 'door_full')
           && Math.abs(d.x - x) < eps
-          && Math.abs(d.z - z) < eps) return true;
+          && Math.abs(d.z - z) < eps
+          && Math.abs((d.y || 0) - y) < yEps) return true;
     }
     return false;
   }
 
   // Compute the {N,S,E,W} connection mask for a fence at world (x,z) by
   // probing the four cardinal neighbour cells. North is -Z (matches the
-  // facing-vector convention used elsewhere in the codebase).
-  _fenceConnectionsAt(x, z) {
+  // facing-vector convention used elsewhere in the codebase). y picks
+  // which floor we're querying so a 2nd-storey wood wall ignores any
+  // ground-level neighbour stone walls beneath it.
+  _fenceConnectionsAt(x, z, y = 0) {
     return {
-      N: this._isFenceConnectableAt(x, z - 1),
-      S: this._isFenceConnectableAt(x, z + 1),
-      E: this._isFenceConnectableAt(x + 1, z),
-      W: this._isFenceConnectableAt(x - 1, z),
+      N: this._isFenceConnectableAt(x, z - 1, y),
+      S: this._isFenceConnectableAt(x, z + 1, y),
+      E: this._isFenceConnectableAt(x + 1, z, y),
+      W: this._isFenceConnectableAt(x - 1, z, y),
     };
   }
 
@@ -1125,11 +1132,12 @@ export class Game {
   // mesh is N/S/E/W-symmetric and the arms must stay world-aligned.
   _rebuildWoodWallMesh(struct) {
     if (!struct || struct.kind !== 'wood_wall' || !struct.alive || !struct.group) return;
-    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const y = struct.y || 0;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z, y);
     const old = struct.mesh;
     if (old && old.parent) old.parent.remove(old);
     const next = buildWoodWallMesh(conns);
-    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
+    next.position.set(struct.pos.x, y, struct.pos.z);
     next.rotation.y = 0;
     struct.group.add(next);
     struct.mesh = next;
@@ -1138,11 +1146,12 @@ export class Game {
 
   _rebuildGlassWallMesh(struct) {
     if (!struct || struct.kind !== 'glass_wall' || !struct.alive || !struct.group) return;
-    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const y = struct.y || 0;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z, y);
     const old = struct.mesh;
     if (old && old.parent) old.parent.remove(old);
     const next = buildGlassWallMesh(conns);
-    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
+    next.position.set(struct.pos.x, y, struct.pos.z);
     next.rotation.y = 0;
     struct.group.add(next);
     struct.mesh = next;
@@ -1209,15 +1218,18 @@ export class Game {
   // fence/gate neighbours. Walks `this.structures` (live entities only);
   // any descriptor-only entry still queued for spawn picks up the right
   // connections when it drains.
-  _rebuildFenceNeighborsOf(x, z) {
+  _rebuildFenceNeighborsOf(x, z, y = 0) {
     const eps = 0.15;
+    const yEps = 0.5;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = x + dx, nz = z + dz;
       for (const s of this.structures) {
         if (!s.alive) continue;
         if (s.kind !== 'fence' && s.kind !== 'gate'
             && s.kind !== 'wood_wall' && s.kind !== 'glass_wall') continue;
-        if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
+        if (Math.abs(s.pos.x - nx) < eps
+            && Math.abs(s.pos.z - nz) < eps
+            && Math.abs((s.y || 0) - y) < yEps) {
           if (s.kind === 'fence') this._rebuildFenceMesh(s);
           else if (s.kind === 'gate') this._rebuildGateMesh(s);
           else if (s.kind === 'wood_wall') this._rebuildWoodWallMesh(s);
@@ -2443,7 +2455,7 @@ export class Game {
         if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate'
             || s.kind === 'wood_wall' || s.kind === 'glass_wall'
             || s.kind === 'door_full') {
-          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
+          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z, s.y || 0);
         }
         // Drop any attached Crop too — the planter mesh is gone so no
         // visible mesh remains, but the Crop entry would otherwise linger
