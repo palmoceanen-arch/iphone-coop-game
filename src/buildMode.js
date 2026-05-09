@@ -298,14 +298,17 @@ export class BuildController {
     // (a 2nd-storey building needs a 2nd-storey plank floor).
     const groundOnly = (kind === 'planter' || kind === 'campfire' || kind === 'torch');
     let layerY = groundOnly ? 0 : (this.cursorLayer * STEP_Y);
-    // Auto-stack support for the legacy stone wall recipe — preserved so
-    // a stone wall placed on an existing tower keeps its old "tap to
-    // stack" feel. New wall kinds (wood / glass) rely on the manual
-    // Shift/Ctrl layer instead so the player has explicit control.
+    // Auto-stack support for the simple stackable kinds (stone walls
+    // and wooden fences). Tapping place onto a tile that already has
+    // one of these lands the new piece flush on top of the existing
+    // tower, no Shift required. Both are 1m tall and grid-aligned so
+    // consecutive taps build a clean column. Newer wall kinds
+    // (wood_wall / glass_wall) opt out and require Shift instead so
+    // the player has explicit control over the second-storey layout.
     let stackY = layerY;
     let stackBase = null;
-    if (kind === 'wall' && this.cursorLayer === 0) {
-      stackBase = this._topWallAt(c.x, c.z);
+    if ((kind === 'wall' || kind === 'fence') && this.cursorLayer === 0) {
+      stackBase = this._topStackableAt(c.x, c.z, kind);
       if (stackBase) stackY = (stackBase.y || 0) + WALL_STACK_STEP;
     }
     const spotOK = stackBase
@@ -337,18 +340,19 @@ export class BuildController {
     return true;            // active build mode always consumes the tick
   }
 
-  // Find the highest-y wall descriptor at (x,z), or null if no wall sits
-  // there. Used for the stack-walls feature: a new wall placed on the
-  // same tile lands on top of this base. Only `wall` is stackable —
-  // wood structures (fence/gate/planter) can't carry weight.
-  _topWallAt(x, z) {
+  // Find the highest-y descriptor of the given `kind` at (x,z), or null
+  // if no matching structure sits there. Used for the tap-stack feature:
+  // a new wall (or fence) placed on the same tile lands on top of this
+  // base. Each stackable kind (`wall`, `fence`) is checked separately so
+  // a wall doesn't auto-stack onto a fence or vice versa.
+  _topStackableAt(x, z, kind) {
     const ck = this.world.chunkKeyOf(x, z);
     const arr = this.world.placedStructures.get(ck);
     if (!arr) return null;
     const eps = 0.15;
     let top = null;
     for (const d of arr) {
-      if (d.kind !== 'wall') continue;
+      if (d.kind !== kind) continue;
       if (Math.abs(d.x - x) >= eps || Math.abs(d.z - z) >= eps) continue;
       const y = d.y || 0;
       if (!top || y > (top.y || 0)) top = d;

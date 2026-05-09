@@ -28,7 +28,7 @@ import { Resource, harvestYield } from './resource.js';
 import {
   Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
   buildWoodWallMesh, buildGlassWallMesh, buildRoofPitchedMesh,
-  GATE_OPEN_RADIUS, structureMaterial,
+  GATE_OPEN_RADIUS, structureMaterial, pickRandomRoofColor,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
 import { Crop, CROP_ORDER, cropLabel } from './farming.js';
@@ -1060,14 +1060,28 @@ export class Game {
         // the rectangle's centre — its mesh autoassembles from the
         // {minX, minZ, maxX, maxZ} bounds.
         struct._ownerY = struct.y || 0;
+        // Persisted "hidden" flag on the spawn descriptor flips the
+        // corner's mesh invisible right after mount so chunk reload
+        // re-applies the visual hide that _hideRoofCornersAt did when
+        // the roof was first formed. Collider + HP stay so a sword
+        // swing against the (invisible) corner still tears the roof
+        // down via the existing _roofsAtCorner cleanup path.
+        if (s.hidden) {
+          if (struct.mesh) struct.mesh.visible = false;
+          struct._hidden = true;
+        }
         this._tryFormRoof(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'roof_pitched') {
         // Roof descriptor carries the rectangle bounds; rebuild the
         // mesh with the right dimensions and centre it above the
-        // bounding rectangle.
+        // bounding rectangle. The persisted `roofColor` (one of the
+        // entries in ROOF_COLOR_PALETTE) drives the tile-imitation
+        // skin so a chunk reload picks the same colour we randomised
+        // when the roof first formed.
         struct._roofBounds = {
           minX: s.minX, minZ: s.minZ, maxX: s.maxX, maxZ: s.maxZ,
         };
+        struct._roofColor = s.roofColor || null;
         this._rebuildRoofPitchedMesh(struct);
       }
     }
@@ -1209,6 +1223,57 @@ export class Game {
     }
   }
 
+  // X-ray the roof for any player standing inside it. Walks every live
+  // roof_pitched, tests each player's XZ against the roof's rectangle
+  // bounds (with a 0.5m margin so brushing the wall doesn't pop the
+  // fade), and lerps the roof's per-instance opacity toward 0.1
+  // (somebody is inside) or 1.0 (everyone outside). The lerp is
+  // frame-rate-independent so the fade timing matches at 30/60/120 fps.
+  // Roofs without bounds (legacy / mid-load) and dead roofs are skipped.
+  _updateRoofFade(dt) {
+    const FADE_OPACITY = 0.10;
+    // 1 - exp(-dt * k) is a frame-rate-independent lerp; k≈8 reaches
+    // 99% of the target in ~0.6s, which feels snappy without being
+    // jarring as you cross the threshold.
+    const k = 8;
+    const lerp = 1 - Math.exp(-dt * k);
+    const margin = 0.5;
+    for (const s of this.structures) {
+      if (!s.alive || s.kind !== 'roof_pitched' || !s.mesh) continue;
+      const b = s._roofBounds;
+      if (!b) continue;
+      let inside = false;
+      for (const p of this.players) {
+        if (!p) continue;
+        if (p.pos.x < b.minX - margin) continue;
+        if (p.pos.x > b.maxX + margin) continue;
+        if (p.pos.z < b.minZ - margin) continue;
+        if (p.pos.z > b.maxZ + margin) continue;
+        inside = true;
+        break;
+      }
+      const target = inside ? FADE_OPACITY : 1.0;
+      const cur = (typeof s._roofOpacity === 'number') ? s._roofOpacity : 1.0;
+      let next = cur + (target - cur) * lerp;
+      // Snap to target near the end of the lerp so we don't sit at
+      // 0.9998 forever flagging materials as faded.
+      if (Math.abs(next - target) < 0.005) next = target;
+      if (next === cur) continue;
+      s._roofOpacity = next;
+      // Drop depthWrite once we're noticeably translucent so the roof
+      // stops occluding whatever's below it in the depth buffer; flip
+      // it back on at full opacity so adjacent solid geometry sorts
+      // correctly against the roof.
+      const transparentLook = next < 0.99;
+      s.mesh.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+        if (!child.userData?.isRoofOuter && !child.userData?.isRoofInner) return;
+        child.material.opacity = next;
+        child.material.depthWrite = !transparentLook;
+      });
+    }
+  }
+
   // Rebuild a roof_pitched mesh from its descriptor's rectangle bounds.
   // The mesh is centred on (cx,cz) and parented at the corner-y so the
   // apex hovers above the centre at apexH = max(w,d)/2. Caller stores
@@ -1223,7 +1288,7 @@ export class Game {
     const cz = (b.minZ + b.maxZ) / 2;
     const old = struct.mesh;
     if (old && old.parent) old.parent.remove(old);
-    const next = buildRoofPitchedMesh(w, d);
+    const next = buildRoofPitchedMesh(w, d, struct._roofColor || null);
     next.position.set(cx, struct.y || 0, cz);
     next.rotation.y = 0;
     struct.group.add(next);
@@ -1297,19 +1362,94 @@ export class Game {
         // De-dupe: skip if a roof already exists with these bounds.
         if (this._roofExistsFor(minX, minZ, maxX, maxZ, newY)) continue;
         // Spawn the roof. Anchor at the rectangle centre so the
-        // descriptor's chunkKey lands on a sensible chunk.
+        // descriptor's chunkKey lands on a sensible chunk. Pick a
+        // random tile colour so each new roof has its own look; the
+        // name is persisted on the descriptor so chunk reload
+        // re-uses the same one.
         const cx = (minX + maxX) / 2;
         const cz = (minZ + maxZ) / 2;
         const roofRecipe = RECIPES.roof_pitched;
+        const roofColor = pickRandomRoofColor();
         this.world.placeStructure(
           cx, cz, 'roof_pitched', 0,
           roofRecipe?.hp ?? 80,
           newY,
-          { minX, minZ, maxX, maxZ },
+          { minX, minZ, maxX, maxZ, roofColor },
         );
+        // Once the roof is up, the four corner posts would just poke
+        // out of the ridge as wooden stubs. Hide their meshes (NOT
+        // mark them dead — that would trigger the corner-death cascade
+        // in compactInPlace which kills the roof too). The Structure
+        // entries stay live so a sword swing on the now-invisible
+        // corner still tears the roof down via the existing
+        // _roofsAtCorner cleanup path.
+        this._hideRoofCornersAt(minX, minZ, maxX, maxZ, newY);
         return;
       }
     }
+  }
+
+  // Visually hide the four roof_corner posts whose positions sit at
+  // the corners of the rectangle (minX,minZ)-(maxX,maxZ) at the given
+  // y. The Structure entries stay alive (HP, collider, descriptor)
+  // — only the rendered mesh is set invisible so the roof-formed
+  // building reads as a clean roof+walls combo without four wooden
+  // stubs poking out of the ridge. We MUST NOT mark them dead: the
+  // structure-death sweep in compactInPlace runs `_roofsAtCorner`
+  // for any dying corner and would tear the freshly-spawned roof
+  // down with it.
+  _hideRoofCornersAt(minX, minZ, maxX, maxZ, y) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const targets = [
+      { x: minX, z: minZ },
+      { x: minX, z: maxZ },
+      { x: maxX, z: minZ },
+      { x: maxX, z: maxZ },
+    ];
+    let touched = false;
+    const spawns = this.world.structureSpawns || [];
+    for (const t of targets) {
+      // Mark the persisted descriptor hidden so chunk reload re-applies
+      // the visual hide on the rebuilt corner mesh.
+      const ck = this.world.chunkKeyOf(t.x, t.z);
+      const arr = this.world.placedStructures.get(ck);
+      if (arr) {
+        for (const d of arr) {
+          if (d.kind !== 'roof_corner') continue;
+          if (Math.abs(d.x - t.x) >= eps) continue;
+          if (Math.abs(d.z - t.z) >= eps) continue;
+          if (Math.abs((d.y || 0) - y) >= yEps) continue;
+          if (!d.hidden) { d.hidden = true; touched = true; }
+          break;
+        }
+      }
+      // The roof forms the moment the player drops the 4th corner, but
+      // corners 2/3/4's spawn entries may still be sitting in the
+      // drain queue (we got here while processing the 1st corner). Flag
+      // them so the spawn drainer's "if (s.hidden)" branch flips the
+      // freshly-built mesh invisible the moment they mount.
+      for (const sp of spawns) {
+        if (sp.kind !== 'roof_corner') continue;
+        if (Math.abs(sp.x - t.x) >= eps) continue;
+        if (Math.abs(sp.z - t.z) >= eps) continue;
+        if (Math.abs((sp.y || 0) - y) >= yEps) continue;
+        sp.hidden = true;
+        break;
+      }
+      // Hide any already-mounted live Structure's mesh so the post
+      // disappears from the scene immediately.
+      for (const s of this.structures) {
+        if (!s.alive || s.kind !== 'roof_corner') continue;
+        if (Math.abs(s.pos.x - t.x) >= eps) continue;
+        if (Math.abs(s.pos.z - t.z) >= eps) continue;
+        if (Math.abs((s.y || 0) - y) >= yEps) continue;
+        if (s.mesh) s.mesh.visible = false;
+        s._hidden = true;
+        break;
+      }
+    }
+    if (touched) this.world._markPersistDirty?.();
   }
 
   // True if any persisted roof_pitched descriptor in chunks near
@@ -2595,6 +2735,14 @@ export class Game {
     // updated HP into the placedStructures map so a mid-damage wall
     // survives chunk unload at its current health.
     for (const s of this.structures) s.update(dt);
+    // Roof X-ray: when any player is standing inside a roof's footprint,
+    // lerp that roof's opacity down to 0.1 so the player can see what's
+    // happening under it (otherwise the roof completely hides the
+    // building interior from the top-down camera). Walking back out
+    // lerps it back up to 1.0. Each roof has its own cloned material
+    // (see buildRoofPitchedMesh) so this is per-instance — adjacent
+    // buildings keep their roofs solid.
+    this._updateRoofFade(dt);
     for (const s of this.structures) {
       if (s.alive && s.chunkKey) {
         // Cheap save-system stub: keep the persisted descriptor's HP in
