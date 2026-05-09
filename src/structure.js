@@ -919,13 +919,12 @@ export function buildRoofCornerMesh() {
 
 // World-space size of one tile-texture-repeat. The texture itself
 // packs a 4×4 grid of clay shingles, so each visible shingle is
-// (ROOF_TILE_W/4 × ROOF_TILE_H/4) m on the mesh. 3×2m repeat = a
-// shingle ~0.75×0.5m, which reads at the right "real clay tile"
-// density from the top-down isometric camera. Used to compute UVs
-// so the same tile texture tiles cleanly across roofs of any
-// footprint.
-const ROOF_TILE_W = 3.0;
-const ROOF_TILE_H = 2.0;
+// (ROOF_TILE_W/4 × ROOF_TILE_H/4) m on the mesh. 2×1.333m repeat
+// = a shingle ~0.5×0.33m, the right "real clay tile" density from
+// the top-down isometric camera. Used to compute UVs so the same
+// tile texture tiles cleanly across roofs of any footprint.
+const ROOF_TILE_W = 2.0;
+const ROOF_TILE_H = 1.333;
 
 // Single shared grayscale tile-pattern texture. Multiplied against the
 // palette colour set on each material via `material.color = c.base`,
@@ -965,11 +964,10 @@ function getRoofTileTexture() {
   const sideGap = 2;
   // Background fills any pixel not covered by a drawn tile — only
   // visible in the column-gaps and as the "shadow line" tracing the
-  // curved outline of every row's bottom. 0.93 keeps that line a
-  // hairline shade darker than the body, in the same tonal family
-  // as the palette base — the tile silhouette is visible without
-  // any heavy shadow line under it.
-  const bgShade = 0.93;
+  // curved outline of every row's bottom. 0.96 keeps that line
+  // barely-there: just enough to read the curved tile silhouette
+  // at distance, never a visible groove on close inspection.
+  const bgShade = 0.96;
   const bg = Math.round(bgShade * 255);
   ctx.fillStyle = `rgb(${bg},${bg},${bg})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
