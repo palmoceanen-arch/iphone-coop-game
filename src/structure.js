@@ -38,6 +38,19 @@ function ensureMaterials() {
     // darker than woodDark so a campfire reads as "already lit" even
     // when the procedural flame mesh is paused mid-flicker.
     woodCharred: new THREE.MeshToonMaterial({ color: 0x2a1d12, gradientMap: TOON_GRADIENT }),
+    // Plain plank colour for full-cell wooden walls / doors / floors —
+    // a touch warmer than the fence post wood so a row of wood walls
+    // reads as "carpentered planks", not "fence on steroids".
+    plank: new THREE.MeshToonMaterial({ color: 0xa6794a, gradientMap: TOON_GRADIENT }),
+    plankDark: new THREE.MeshToonMaterial({ color: 0x6a4622, gradientMap: TOON_GRADIENT }),
+    // Translucent pale-blue for glass walls. MeshPhongMaterial keeps the
+    // toon-friendly silhouette while supporting transparency without
+    // needing the full PBR stack. depthWrite stays true so neighbour
+    // walls still occlude correctly behind glass.
+    glass: new THREE.MeshPhongMaterial({
+      color: 0xb6e6ff, transparent: true, opacity: 0.45,
+      shininess: 80, specular: 0x88aacc,
+    }),
     // Flame-orange. MeshBasicMaterial is unlit (no shading) so the
     // flame always glows the same colour day/night — the closest the
     // toon stack gets to an emissive without dragging in a full
@@ -120,6 +133,76 @@ export const RECIPES = {
     radius: 0.18,
     height: 1.50,
   },
+  // Solid wooden block-wall. Same form factor as `wall` (1m cube,
+  // stackable via build-mode shift/ctrl) so a row of these tiles into
+  // a seamless wood facade. Cheaper and weaker than the stone wall —
+  // wood is the early-game material.
+  wood_wall: {
+    name: 'Деревянная стена',
+    cost: { wood: 3 },
+    hp: 60,
+    radius: 0.40,
+    // 1m matches the build-mode stack step so a Shift-stacked tower
+    // of wood walls reads as a continuous facade with no seam gaps.
+    height: 1.0,
+  },
+  // Translucent glass block. Same footprint as wall/wood_wall so it
+  // tiles into a window strip or fills an upper-floor opening.
+  glass_wall: {
+    name: 'Стекло',
+    cost: { stone: 2 },
+    hp: 25,
+    radius: 0.40,
+    height: 1.0,
+  },
+  // Full-cell, two-block-tall door. Behaves like a gate (E to open /
+  // close), but spans the entire cell width and reaches the same
+  // height as a stacked wood-wall, so it slots into a 2-block-tall
+  // wood-wall row without leaving a sky gap.
+  door_full: {
+    name: 'Дверь',
+    cost: { wood: 4 },
+    hp: 60,
+    // Same collider radius as `wall` so the closed door blocks
+    // movement; build-mode swaps to GATE_OPEN_RADIUS on open.
+    radius: 0.40,
+    height: 2.0,
+  },
+  // Thin walkable wooden floor tile. radius=0 so it doesn't block
+  // the player; sits a hair above the terrain plane so it doesn't
+  // z-fight with the ground texture.
+  floor_wood: {
+    name: 'Деревянный пол',
+    cost: { wood: 1 },
+    hp: 18,
+    radius: 0.0,
+    height: 0.10,
+  },
+  // Roof corner — small marker the player drops on each of the four
+  // top corners of a building. Once four markers form an axis-aligned
+  // rectangle at the same y, the game spawns a procedural pitched
+  // roof (kind=`roof_pitched`) bridging the rectangle. Killing any
+  // corner takes the roof down with it. The corner itself has a
+  // collider so it counts as wall-equivalent for fence connections.
+  roof_corner: {
+    name: 'Угол крыши',
+    cost: { wood: 1 },
+    hp: 30,
+    radius: 0.18,
+    height: 0.40,
+  },
+  // Procedural pitched (hip) roof. NOT in RECIPE_ORDER — players never
+  // place this directly; it's auto-spawned the moment four roof_corner
+  // markers complete a rectangle. Cost is paid via the four markers,
+  // so this entry has cost: {} and is exempt from the affordability
+  // check (the build wheel doesn't surface it).
+  roof_pitched: {
+    name: 'Покатая крыша',
+    cost: {},
+    hp: 80,
+    radius: 0.0,                  // walk-through (it's overhead)
+    height: 0.30,
+  },
 };
 
 // Catalog ordering controls the recipe-cycling order in build mode and the
@@ -127,7 +210,10 @@ export const RECIPES = {
 // have number-key fast paths; the rest live behind the build-wheel UI).
 // Keep the cheapest / quickest builds first so a new player can spam
 // fences immediately.
-export const RECIPE_ORDER = ['fence', 'wall', 'gate', 'planter', 'campfire', 'torch'];
+export const RECIPE_ORDER = [
+  'fence', 'wall', 'gate', 'planter', 'campfire', 'torch',
+  'wood_wall', 'glass_wall', 'door_full', 'floor_wood', 'roof_corner',
+];
 
 // Burst colour shown when a structure is destroyed — matches its primary
 // material. Reused by Game._onStructureDestroyed for the death VFX.
@@ -138,6 +224,12 @@ const BURST_COLOR = {
   planter: 0x4b3522,
   campfire: 0xff8a3a,             // flame-orange so the death burst reads as "poof"
   torch: 0xff8a3a,
+  wood_wall: 0xa6794a,
+  glass_wall: 0xb6e6ff,
+  door_full: 0x6a4622,
+  floor_wood: 0x8c5a2c,
+  roof_corner: 0x8c5a2c,
+  roof_pitched: 0x8c5a2c,
 };
 
 // What a structure is *made of* — used by combat-side code to pick the
@@ -157,6 +249,12 @@ const MATERIAL_BY_KIND = {
   // wood (a stick).
   campfire: 'wood',
   torch: 'wood',
+  wood_wall: 'wood',
+  glass_wall: 'stone',            // glass returns to the stone pool on break (closest material slot)
+  door_full: 'wood',
+  floor_wood: 'wood',
+  roof_corner: 'wood',
+  roof_pitched: 'wood',
 };
 export function structureMaterial(kind) {
   return MATERIAL_BY_KIND[kind] || 'wood';
@@ -556,8 +654,297 @@ export function buildStructureMesh(kind, x, z) {
     g.add(soil);
     return g;
   }
+  if (kind === 'wood_wall') {
+    // Default standalone preview (no neighbours). Live wood walls in the
+    // world get rebuilt by `buildWoodWallMesh()` from game.js when their
+    // fence-style {N,S,E,W} mask flips.
+    return buildWoodWallMesh({ N: false, E: false, S: false, W: false });
+  }
+  if (kind === 'glass_wall') {
+    return buildGlassWallMesh({ N: false, E: false, S: false, W: false });
+  }
+  if (kind === 'door_full') {
+    // Default door preview: closed. Live doors get rebuilt by
+    // `buildDoorFullMesh()` from game.js when their open state toggles.
+    return buildDoorFullMesh(0);
+  }
+  if (kind === 'floor_wood') {
+    // 1×1m walkable plank floor. radius=0 so it doesn't push the player;
+    // sits at y≈0.05 so it covers the terrain triangle but doesn't
+    // protrude visibly above neighbour grass.
+    const plank = new THREE.Mesh(
+      new THREE.BoxGeometry(0.98, 0.10, 0.98),
+      MATERIALS.plank,
+    );
+    plank.position.set(0, 0.05, 0);
+    plank.castShadow = false;       // too thin to cast a useful shadow; saves draws
+    plank.receiveShadow = true;
+    g.add(plank);
+    // Thin darker grooves running across the plank to break up the
+    // surface — three slats at x=±0.30, 0 read as "boards".
+    for (const x of [-0.30, 0.0, 0.30]) {
+      const slat = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.02, 0.96),
+        MATERIALS.plankDark,
+      );
+      slat.position.set(x, 0.105, 0);
+      slat.receiveShadow = true;
+      g.add(slat);
+    }
+    return g;
+  }
+  if (kind === 'roof_corner') {
+    return buildRoofCornerMesh();
+  }
+  if (kind === 'roof_pitched') {
+    // Default zero-size preview; live roof_pitched structures get
+    // rebuilt with the correct rectangle dimensions from game.js.
+    return buildRoofPitchedMesh(1, 1);
+  }
   // Unknown kind — return an empty group so caller's parenting logic still
   // works without conditional null-checks.
+  return g;
+}
+
+// Build a full-cell two-block-tall door, hinged on the cell's west side
+// (y rotation in caller picks the swing axis). Same open/close semantic
+// as buildGateMesh: 0 = closed (door panel spans the cell), ±1 = open
+// at 80°. Collider radius is shrunk to GATE_OPEN_RADIUS by the runtime
+// gate-toggle code so the player can walk through.
+export function buildDoorFullMesh(openDir) {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const door = new THREE.Group();
+  door.position.set(-0.50, 0, 0);
+  // Main panel: nearly-full cell width × 2m tall × thin depth.
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(1.00, 1.95, 0.08),
+    MATERIALS.plank,
+  );
+  panel.position.set(0.50, 1.00, 0);
+  panel.castShadow = true; panel.receiveShadow = true;
+  door.add(panel);
+  // Round latch knob on the latch end (away from the hinge) — only
+  // surface detail kept on the door so the player can tell which
+  // side opens. No contrasting plank trim — door reads as a single
+  // solid colour to match the wood wall it sits between.
+  const knob = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 8, 6),
+    MATERIALS.stoneDark,
+  );
+  knob.position.set(0.85, 1.00, 0.06);
+  knob.castShadow = true;
+  door.add(knob);
+  if (openDir !== 0) {
+    // Swing 80° around the hinge axis (door-local y at x=0). Positive
+    // openDir swings towards +Z; negative towards -Z.
+    door.rotation.y = (openDir > 0 ? -1 : 1) * (Math.PI * 0.45);
+  }
+  g.add(door);
+  return g;
+}
+
+// Heights for the solid wall variants (wood / glass). 1.0m matches
+// one stack-step (WALL_STACK_STEP) so a wood/glass wall slots cleanly
+// into a building grid: place one on the ground, Shift-place a second
+// directly on top, and the upper block sits flush on the lower one
+// with no visible seam. Same height as the fence post and as one
+// auto-stacked stone-wall layer.
+const _SOLID_WALL_HEIGHT = 1.00;
+const _POST_THICK = 0.20;
+const _PANEL_THICK = 0.20;
+const _PANEL_LEN = 0.40;
+const _PANEL_OFFSET = 0.30;
+
+// Build a fence-style wood wall: a thin centre post + up to four solid
+// plank panels reaching out to the cell boundary in the directions that
+// have a fence-connectable neighbour. Same {N,S,E,W} mask shape as
+// `buildFenceMesh`, so two adjacent wood walls' panels meet flush at
+// the seam (panels span x ∈ [0.10, 0.50] / [-0.50, -0.10] etc.) and
+// the run reads as a continuous solid wall instead of a row of
+// detached posts.
+export function buildWoodWallMesh(connections) {
+  ensureMaterials();
+  const c = connections || { N: false, S: false, E: false, W: false };
+  const g = new THREE.Group();
+  // Centre post — same width as the fence post and the same plank
+  // colour as the panels so the wall reads as a single solid colour.
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(_POST_THICK, _SOLID_WALL_HEIGHT, _POST_THICK),
+    MATERIALS.plank,
+  );
+  post.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  if (c.E) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_LEN, _SOLID_WALL_HEIGHT, _PANEL_THICK),
+      MATERIALS.plank,
+    );
+    p.position.set(+_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.W) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_LEN, _SOLID_WALL_HEIGHT, _PANEL_THICK),
+      MATERIALS.plank,
+    );
+    p.position.set(-_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.N) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_THICK, _SOLID_WALL_HEIGHT, _PANEL_LEN),
+      MATERIALS.plank,
+    );
+    p.position.set(0, _SOLID_WALL_HEIGHT / 2, -_PANEL_OFFSET);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.S) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_THICK, _SOLID_WALL_HEIGHT, _PANEL_LEN),
+      MATERIALS.plank,
+    );
+    p.position.set(0, _SOLID_WALL_HEIGHT / 2, +_PANEL_OFFSET);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  return g;
+}
+
+// Sibling of `buildWoodWallMesh` for the glass-wall variant: a single
+// translucent pane spans the full post-to-post width on each connected
+// side. No wood frame in the centre — a continuous run of glass walls
+// reads as a clean window strip with no opaque pillars breaking it up.
+// An isolated glass wall (no connections) still gets a small standalone
+// pane so it's visible on the grid.
+export function buildGlassWallMesh(connections) {
+  ensureMaterials();
+  const c = connections || { N: false, S: false, E: false, W: false };
+  const g = new THREE.Group();
+  const paneThick = 0.10;
+  const anyConn = c.N || c.S || c.E || c.W;
+  // Each connected pane reaches all the way from the cell centre out
+  // to the cell boundary (length 0.50, midpoint 0.25), so two adjacent
+  // glass walls' panes meet flush at the seam with no opaque interrupt.
+  const FULL_LEN = 0.50;
+  const FULL_OFF = 0.25;
+  const dirs = [
+    [c.E, [+FULL_OFF, _SOLID_WALL_HEIGHT / 2, 0], [FULL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.W, [-FULL_OFF, _SOLID_WALL_HEIGHT / 2, 0], [FULL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.N, [0, _SOLID_WALL_HEIGHT / 2, -FULL_OFF], [paneThick, _SOLID_WALL_HEIGHT, FULL_LEN]],
+    [c.S, [0, _SOLID_WALL_HEIGHT / 2, +FULL_OFF], [paneThick, _SOLID_WALL_HEIGHT, FULL_LEN]],
+  ];
+  for (const [on, pos, size] of dirs) {
+    if (!on) continue;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), MATERIALS.glass);
+    p.position.set(pos[0], pos[1], pos[2]);
+    p.castShadow = false;            // transparent meshes don't write to shadow map
+    p.receiveShadow = true;
+    g.add(p);
+  }
+  if (!anyConn) {
+    // Standalone glass tile: a small block at the cell centre so the
+    // recipe is visible when the player builds one with no neighbours.
+    const stub = new THREE.Mesh(
+      new THREE.BoxGeometry(0.30, _SOLID_WALL_HEIGHT, paneThick),
+      MATERIALS.glass,
+    );
+    stub.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
+    stub.castShadow = false;
+    stub.receiveShadow = true;
+    g.add(stub);
+  }
+  return g;
+}
+
+// Small marker the player drops on each of the four top corners of a
+// building. Visually a short tapered post so the player can spot it from
+// the ground and tell which is the "roof side". The pitched roof spawns
+// automatically as soon as four of these complete a rectangle.
+export function buildRoofCornerMesh() {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(0.30, 0.40, 0.30),
+    MATERIALS.plank,
+  );
+  post.position.set(0, 0.20, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  // Tiny pointer cone on top so the corner reads as "tip of a roof"
+  // before the roof itself spawns.
+  const cap = new THREE.Mesh(
+    new THREE.ConeGeometry(0.22, 0.22, 4),
+    MATERIALS.plank,
+  );
+  cap.position.set(0, 0.51, 0);
+  cap.rotation.y = Math.PI / 4;
+  cap.castShadow = true; cap.receiveShadow = true;
+  g.add(cap);
+  return g;
+}
+
+// Procedural hip-roof bridging an axis-aligned rectangle. width is the
+// rectangle's X extent, depth its Z extent. Apex is centered above the
+// rectangle at a height proportional to the longer side so the pitch is
+// natural-looking regardless of footprint. Caller positions the group
+// at the rectangle's centre on the ground (xz centre, y = corner y +
+// corner height) — the roof mesh extends upward from there.
+export function buildRoofPitchedMesh(width, depth) {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const w = Math.max(0.5, width);
+  const d = Math.max(0.5, depth);
+  // Apex height: half the longer side of the rectangle. Gives ~45° pitch
+  // for square buildings, slightly shallower for rectangular ones.
+  const apexH = Math.max(w, d) * 0.5;
+  // Four base vertices (rectangle corners) + apex.
+  const verts = new Float32Array([
+    -w / 2, 0, -d / 2,    // 0 NW
+    +w / 2, 0, -d / 2,    // 1 NE
+    +w / 2, 0, +d / 2,    // 2 SE
+    -w / 2, 0, +d / 2,    // 3 SW
+    0, apexH, 0,          // 4 apex
+  ]);
+  // Four triangular faces, wound CCW when viewed from outside so face
+  // normals point outward and three.js culls back-faces correctly.
+  const idx = new Uint16Array([
+    0, 4, 1,    // N face
+    1, 4, 2,    // E face
+    2, 4, 3,    // S face
+    3, 4, 0,    // W face
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, MATERIALS.plank);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  g.add(mesh);
+  // Thin under-side plank so a player looking up from inside doesn't
+  // see backface culling holes — same geometry but flipped winding so
+  // the inside is also lit. Same material so the underside reads as
+  // a wooden ceiling.
+  const innerVerts = verts.slice();
+  const innerIdx = new Uint16Array([
+    1, 4, 0,    // N face flipped
+    2, 4, 1,    // E flipped
+    3, 4, 2,    // S flipped
+    0, 4, 3,    // W flipped
+  ]);
+  const innerGeo = new THREE.BufferGeometry();
+  innerGeo.setAttribute('position', new THREE.BufferAttribute(innerVerts, 3));
+  innerGeo.setIndex(new THREE.BufferAttribute(innerIdx, 1));
+  innerGeo.computeVertexNormals();
+  const inner = new THREE.Mesh(innerGeo, MATERIALS.plankDark);
+  inner.castShadow = false;
+  inner.receiveShadow = true;
+  g.add(inner);
   return g;
 }
 

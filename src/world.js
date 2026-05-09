@@ -1054,7 +1054,7 @@ export class World {
   // the structure, and (if the chunk is currently loaded) also queues a
   // `structureSpawn` so Game._drainStructureSpawns can mount it this frame.
   // Returns the descriptor object for caller convenience.
-  placeStructure(x, z, kind, yaw = 0, hp = null, y = 0) {
+  placeStructure(x, z, kind, yaw = 0, hp = null, y = 0, extra = null) {
     const chunkKey = this.chunkKeyOf(x, z);
     // `y` is the stack height (m) above the base tile. Only walls (the
     // single stackable kind) ever pass a non-zero value; everything else
@@ -1062,17 +1062,25 @@ export class World {
     // re-instantiates a stacked tower at the correct heights.
     const desc = { x, z, kind, yaw, hp };
     if (y && y > 0) desc.y = y;
+    // Optional extra fields (e.g. `roof_pitched` carries the rectangle
+    // bounds of the roof_corners that spawned it). Merged into both the
+    // persisted descriptor and the structureSpawn entry so the load
+    // path sees the same geometry-driving data on first build and on
+    // chunk reload.
+    if (extra) Object.assign(desc, extra);
     let arr = this.placedStructures.get(chunkKey);
     if (!arr) { arr = []; this.placedStructures.set(chunkKey, arr); }
     arr.push(desc);
     const chunk = this.chunks.get(chunkKey);
     if (chunk) {
-      this.structureSpawns.push({
+      const spawn = {
         x, z, kind, yaw, hp, y: desc.y || 0,
         chunkKey,
         group: chunk.group,
         colliderArray: chunk.colliders,
-      });
+      };
+      if (extra) Object.assign(spawn, extra);
+      this.structureSpawns.push(spawn);
     }
     if (this._onChunkChanged) this._onChunkChanged(chunkKey);
     this._markPersistDirty();

@@ -26,7 +26,8 @@ import { Chest } from './chest.js';
 import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import {
-  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh,
+  Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
+  buildWoodWallMesh, buildGlassWallMesh, buildRoofPitchedMesh,
   GATE_OPEN_RADIUS, structureMaterial,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
@@ -1017,7 +1018,7 @@ export class Game {
       // naturally on their own first build below.
       if (s.kind === 'fence') {
         this._rebuildFenceMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'gate') {
         // Restore persisted open state (chunk reload after the player
         // toggled the gate, then walked away). Gate's `openDir` lives
@@ -1027,12 +1028,47 @@ export class Game {
         if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildGateMesh(struct);
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
       } else if (s.kind === 'wall') {
-        // Walls don't render any connection arms themselves, but their
-        // presence flips a fence/gate neighbour's connection bit, so
-        // refresh those too.
-        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+        // Stone walls don't render any connection arms themselves, but
+        // their presence flips a fence/gate neighbour's connection bit,
+        // so refresh those too.
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
+      } else if (s.kind === 'wood_wall') {
+        // Wood walls grow fence-style panels toward their neighbours;
+        // build the mesh with the current connection mask, then refresh
+        // adjacent fence/gate/wood/glass walls so their arms terminate
+        // against this new tile.
+        this._rebuildWoodWallMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
+      } else if (s.kind === 'glass_wall') {
+        this._rebuildGlassWallMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0);
+      } else if (s.kind === 'door_full') {
+        // Restore persisted open state (chunk reload after the player
+        // toggled the door, then walked away) and rebuild the panel
+        // mesh in that state. Also nudges fence/gate neighbours so a
+        // fence rail terminates against the door jamb cleanly.
+        if (typeof s.openDir === 'number') struct.openDir = s.openDir | 0;
+        else struct.openDir = s.open ? -1 : 0;
+        this._rebuildDoorFullMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0, 'door_full');
+      } else if (s.kind === 'roof_corner') {
+        // After the corner spawns, search for 3 other corners forming
+        // an axis-aligned rectangle at the same y. If found and no
+        // roof yet exists for it, drop a `roof_pitched` descriptor at
+        // the rectangle's centre — its mesh autoassembles from the
+        // {minX, minZ, maxX, maxZ} bounds.
+        struct._ownerY = struct.y || 0;
+        this._tryFormRoof(struct.pos.x, struct.pos.z, struct.y || 0);
+      } else if (s.kind === 'roof_pitched') {
+        // Roof descriptor carries the rectangle bounds; rebuild the
+        // mesh with the right dimensions and centre it above the
+        // bounding rectangle.
+        struct._roofBounds = {
+          minX: s.minX, minZ: s.minZ, maxX: s.maxX, maxZ: s.maxZ,
+        };
+        this._rebuildRoofPitchedMesh(struct);
       }
     }
   }
@@ -1045,28 +1081,44 @@ export class Game {
   // plots and a fence rail visually dead-ending at one would look weird.
   // Cheap O(n) scan of the chunk's descriptor list — typical chunk has
   // <20 structures so this is fine inside a 4-neighbour loop.
-  _isFenceConnectableAt(x, z) {
+  _isFenceConnectableAt(x, z, y = 0) {
     const ck = this.world.chunkKeyOf(x, z);
     const arr = this.world.placedStructures.get(ck);
     if (!arr) return false;
     const eps = 0.15;
+    const queryFloor = Math.round((y || 0) / 1.0);   // STEP_Y = 1m
     for (const d of arr) {
-      if ((d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate')
-          && Math.abs(d.x - x) < eps
-          && Math.abs(d.z - z) < eps) return true;
+      // Wood / glass walls and the full-height door are also rigid block
+      // structures that fence rails should plug into seamlessly, so they
+      // count as fence-connectable for the run-extension logic. The
+      // y-match guard keeps a 2nd-storey wood wall from sprouting an
+      // arm just because the stone wall directly *below* its neighbour
+      // tile happens to be fence-connectable. door_full claims TWO
+      // consecutive floors so a wall on the upper floor next to a
+      // door also gets to terminate cleanly against the door jamb.
+      if (!(d.kind === 'fence' || d.kind === 'wall' || d.kind === 'gate'
+           || d.kind === 'wood_wall' || d.kind === 'glass_wall'
+           || d.kind === 'door_full')) continue;
+      if (Math.abs(d.x - x) >= eps) continue;
+      if (Math.abs(d.z - z) >= eps) continue;
+      const dBase = Math.round((d.y || 0) / 1.0);
+      const dTop = dBase + ((d.kind === 'door_full') ? 1 : 0);
+      if (queryFloor >= dBase && queryFloor <= dTop) return true;
     }
     return false;
   }
 
   // Compute the {N,S,E,W} connection mask for a fence at world (x,z) by
   // probing the four cardinal neighbour cells. North is -Z (matches the
-  // facing-vector convention used elsewhere in the codebase).
-  _fenceConnectionsAt(x, z) {
+  // facing-vector convention used elsewhere in the codebase). y picks
+  // which floor we're querying so a 2nd-storey wood wall ignores any
+  // ground-level neighbour stone walls beneath it.
+  _fenceConnectionsAt(x, z, y = 0) {
     return {
-      N: this._isFenceConnectableAt(x, z - 1),
-      S: this._isFenceConnectableAt(x, z + 1),
-      E: this._isFenceConnectableAt(x + 1, z),
-      W: this._isFenceConnectableAt(x - 1, z),
+      N: this._isFenceConnectableAt(x, z - 1, y),
+      S: this._isFenceConnectableAt(x, z + 1, y),
+      E: this._isFenceConnectableAt(x + 1, z, y),
+      W: this._isFenceConnectableAt(x - 1, z, y),
     };
   }
 
@@ -1088,6 +1140,38 @@ export class Game {
     if (old && old.parent) old.parent.remove(old);
     const next = buildFenceMesh(conns);
     next.position.set(struct.pos.x, 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
+  // Sibling of `_rebuildFenceMesh` for the wood-wall recipe — same fence
+  // post + 4-cardinal-arm topology, but the arms are full-storey solid
+  // plank panels. yaw isn't applied for the same reason as fence: the
+  // mesh is N/S/E/W-symmetric and the arms must stay world-aligned.
+  _rebuildWoodWallMesh(struct) {
+    if (!struct || struct.kind !== 'wood_wall' || !struct.alive || !struct.group) return;
+    const y = struct.y || 0;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z, y);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildWoodWallMesh(conns);
+    next.position.set(struct.pos.x, y, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
+  _rebuildGlassWallMesh(struct) {
+    if (!struct || struct.kind !== 'glass_wall' || !struct.alive || !struct.group) return;
+    const y = struct.y || 0;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z, y);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildGlassWallMesh(conns);
+    next.position.set(struct.pos.x, y, struct.pos.z);
     next.rotation.y = 0;
     struct.group.add(next);
     struct.mesh = next;
@@ -1125,6 +1209,184 @@ export class Game {
     }
   }
 
+  // Rebuild a roof_pitched mesh from its descriptor's rectangle bounds.
+  // The mesh is centred on (cx,cz) and parented at the corner-y so the
+  // apex hovers above the centre at apexH = max(w,d)/2. Caller stores
+  // the bounds on struct._roofBounds before the first call.
+  _rebuildRoofPitchedMesh(struct) {
+    if (!struct || struct.kind !== 'roof_pitched' || !struct.alive || !struct.group) return;
+    const b = struct._roofBounds;
+    if (!b) return;
+    const w = b.maxX - b.minX;
+    const d = b.maxZ - b.minZ;
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildRoofPitchedMesh(w, d);
+    next.position.set(cx, struct.y || 0, cz);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    // The structure's authoritative pos was the descriptor's (x,z).
+    // For the spawn descriptor we used the rectangle centre, but
+    // floats can drift; sync mesh-side authoritative position back so
+    // hit-tests and minimap markers locate the roof centre.
+    struct.pos.x = cx;
+    struct.pos.z = cz;
+  }
+
+  // Search for a complete axis-aligned rectangle of 4 roof_corners
+  // including (newX, newZ, newY) at the same y. If found AND no
+  // roof_pitched already covers it, spawn one.
+  _tryFormRoof(newX, newZ, newY) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    // Gather all roof_corner descriptors at the same y from the chunks
+    // around (newX, newZ). 5×5 chunks is plenty even for a large
+    // building since corners are placed on cell edges and chunks are
+    // 16m wide (default).
+    const cornerDescs = [];
+    const seen = new Set();
+    const radius = 32;            // m — covers buildings up to ~64m on a side
+    for (let ox = -radius; ox <= radius; ox += 8) {
+      for (let oz = -radius; oz <= radius; oz += 8) {
+        const ck = this.world.chunkKeyOf(newX + ox, newZ + oz);
+        if (seen.has(ck)) continue;
+        seen.add(ck);
+        const arr = this.world.placedStructures.get(ck);
+        if (!arr) continue;
+        for (const d of arr) {
+          if (d.kind !== 'roof_corner') continue;
+          if (Math.abs((d.y || 0) - newY) >= yEps) continue;
+          cornerDescs.push(d);
+        }
+      }
+    }
+    if (cornerDescs.length < 4) return;
+    // For each pair of OTHER corners, check if they form a rectangle
+    // with (newX, newZ). Specifically: looking for OA along the same
+    // X (== newX), OB along the same Z (== newZ), and a 4th corner at
+    // (OB.x, OA.z). Iterate distinct pairs only.
+    for (let i = 0; i < cornerDescs.length; i++) {
+      const A = cornerDescs[i];
+      if (Math.abs(A.x - newX) >= eps) continue;
+      if (Math.abs(A.z - newZ) < eps) continue;     // same point as new
+      for (let j = 0; j < cornerDescs.length; j++) {
+        if (i === j) continue;
+        const B = cornerDescs[j];
+        if (Math.abs(B.z - newZ) >= eps) continue;
+        if (Math.abs(B.x - newX) < eps) continue;
+        // Rectangle is (newX,newZ)-(B.x,newZ)-(B.x,A.z)-(newX,A.z).
+        // We need a 4th corner at (B.x, A.z).
+        let fourth = null;
+        for (const C of cornerDescs) {
+          if (Math.abs(C.x - B.x) < eps && Math.abs(C.z - A.z) < eps) {
+            fourth = C; break;
+          }
+        }
+        if (!fourth) continue;
+        const minX = Math.min(newX, B.x);
+        const maxX = Math.max(newX, B.x);
+        const minZ = Math.min(newZ, A.z);
+        const maxZ = Math.max(newZ, A.z);
+        // Reject zero-area or single-cell-edge rectangles — at least
+        // 1m on each side so the apex height is non-trivial.
+        if ((maxX - minX) < 0.9 || (maxZ - minZ) < 0.9) continue;
+        // De-dupe: skip if a roof already exists with these bounds.
+        if (this._roofExistsFor(minX, minZ, maxX, maxZ, newY)) continue;
+        // Spawn the roof. Anchor at the rectangle centre so the
+        // descriptor's chunkKey lands on a sensible chunk.
+        const cx = (minX + maxX) / 2;
+        const cz = (minZ + maxZ) / 2;
+        const roofRecipe = RECIPES.roof_pitched;
+        this.world.placeStructure(
+          cx, cz, 'roof_pitched', 0,
+          roofRecipe?.hp ?? 80,
+          newY,
+          { minX, minZ, maxX, maxZ },
+        );
+        return;
+      }
+    }
+  }
+
+  // True if any persisted roof_pitched descriptor in chunks near
+  // (minX,minZ)-(maxX,maxZ) has matching bounds at the same y.
+  _roofExistsFor(minX, minZ, maxX, maxZ, y) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const seen = new Set();
+    const cx = (minX + maxX) / 2;
+    const cz = (minZ + maxZ) / 2;
+    for (let ox = -32; ox <= 32; ox += 8) {
+      for (let oz = -32; oz <= 32; oz += 8) {
+        const ck = this.world.chunkKeyOf(cx + ox, cz + oz);
+        if (seen.has(ck)) continue;
+        seen.add(ck);
+        const arr = this.world.placedStructures.get(ck);
+        if (!arr) continue;
+        for (const d of arr) {
+          if (d.kind !== 'roof_pitched') continue;
+          if (Math.abs((d.y || 0) - y) >= yEps) continue;
+          if (Math.abs(d.minX - minX) < eps
+              && Math.abs(d.minZ - minZ) < eps
+              && Math.abs(d.maxX - maxX) < eps
+              && Math.abs(d.maxZ - maxZ) < eps) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Find every live roof_pitched whose rectangle includes the corner at
+  // (cx,cz,cy). Used to drop the roof when its supporting corner is
+  // destroyed.
+  _roofsAtCorner(cx, cz, cy) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const out = [];
+    for (const s of this.structures) {
+      if (!s.alive) continue;
+      if (s.kind !== 'roof_pitched') continue;
+      if (Math.abs((s.y || 0) - cy) >= yEps) continue;
+      const b = s._roofBounds;
+      if (!b) continue;
+      const onMinX = Math.abs(b.minX - cx) < eps;
+      const onMaxX = Math.abs(b.maxX - cx) < eps;
+      const onMinZ = Math.abs(b.minZ - cz) < eps;
+      const onMaxZ = Math.abs(b.maxZ - cz) < eps;
+      if ((onMinX || onMaxX) && (onMinZ || onMaxZ)) out.push(s);
+    }
+    return out;
+  }
+
+  // Sibling of `_rebuildGateMesh` for the full-cell `door_full` recipe.
+  // Same open/close → collider toggle behaviour, but the panel geometry
+  // is taller (2m) and full-cell, so it gets its own mesh builder.
+  _rebuildDoorFullMesh(struct) {
+    if (!struct || struct.kind !== 'door_full' || !struct.alive || !struct.group) return;
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const dir = struct.openDir | 0;
+    const next = buildDoorFullMesh(dir);
+    // Honour the placement layer — a door dropped on a Shift-1 layer
+    // must rebuild at y=1 so toggling it open/close doesn't warp the
+    // mesh back down to the ground.
+    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
+    next.rotation.y = struct.yaw || 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    if (struct.collider) {
+      struct.collider.disabled = dir !== 0;
+      struct.collider.r = dir !== 0
+        ? GATE_OPEN_RADIUS
+        : (RECIPES.door_full?.radius || 0.40);
+    }
+  }
+
   // After ANY fence-connectable structure (fence/wall/gate) is placed or
   // destroyed at (x,z), refresh the meshes of the four cardinal neighbour
   // fences and gates so their arms reflect the new state. Walls don't
@@ -1132,17 +1394,29 @@ export class Game {
   // fence/gate neighbours. Walks `this.structures` (live entities only);
   // any descriptor-only entry still queued for spawn picks up the right
   // connections when it drains.
-  _rebuildFenceNeighborsOf(x, z) {
+  _rebuildFenceNeighborsOf(x, z, y = 0, selfKind = null) {
     const eps = 0.15;
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = x + dx, nz = z + dz;
-      for (const s of this.structures) {
-        if (!s.alive) continue;
-        if (s.kind !== 'fence' && s.kind !== 'gate') continue;
-        if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
-          if (s.kind === 'fence') this._rebuildFenceMesh(s);
-          else this._rebuildGateMesh(s);
-          break;
+    const yEps = 0.5;
+    // door_full claims two consecutive floors, so changing one nudges
+    // neighbours on both its base floor and the floor above. Other
+    // recipes are single-floor so the inner loop runs once.
+    const floors = (selfKind === 'door_full') ? [y, y + 1.0] : [y];
+    for (const fy of floors) {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, nz = z + dz;
+        for (const s of this.structures) {
+          if (!s.alive) continue;
+          if (s.kind !== 'fence' && s.kind !== 'gate'
+              && s.kind !== 'wood_wall' && s.kind !== 'glass_wall') continue;
+          if (Math.abs(s.pos.x - nx) < eps
+              && Math.abs(s.pos.z - nz) < eps
+              && Math.abs((s.y || 0) - fy) < yEps) {
+            if (s.kind === 'fence') this._rebuildFenceMesh(s);
+            else if (s.kind === 'gate') this._rebuildGateMesh(s);
+            else if (s.kind === 'wood_wall') this._rebuildWoodWallMesh(s);
+            else if (s.kind === 'glass_wall') this._rebuildGlassWallMesh(s);
+            break;
+          }
         }
       }
     }
@@ -1336,7 +1610,7 @@ export class Game {
     const GATE_INTERACT_RADIUS = 1.4;
     let target = null, bestD = GATE_INTERACT_RADIUS;
     for (const s of this.structures) {
-      if (!s.alive || s.kind !== 'gate') continue;
+      if (!s.alive || (s.kind !== 'gate' && s.kind !== 'door_full')) continue;
       const d = Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z);
       if (d <= bestD) { bestD = d; target = s; }
     }
@@ -1356,7 +1630,8 @@ export class Game {
       // localZ <= 0 → player on -Z side → swing door to +Z (openDir = +1)
       target.openDir = (localZ > 0) ? -1 : +1;
     }
-    this._rebuildGateMesh(target);
+    if (target.kind === 'door_full') this._rebuildDoorFullMesh(target);
+    else this._rebuildGateMesh(target);
     if (target.chunkKey) {
       this.world.updateStructureOpen(
         target.chunkKey, target.pos.x, target.pos.z, target.openDir,
@@ -1367,10 +1642,11 @@ export class Game {
     // state in Russian (matching the rest of the prompt copy).
     this.sound.till?.();
     this.effects.ring(target.pos.x, 0.05, target.pos.z, 0xc8a060, 0.9, 0.25);
-    this.effects.toast?.(
-      (target.openDir | 0) !== 0 ? 'Калитка открыта' : 'Калитка закрыта',
-      '#c8a060',
-    );
+    // "Дверь" and "Калитка" are both feminine in Russian, so they share
+    // the same открыта/закрыта endings.
+    const doorNoun = (target.kind === 'door_full') ? 'Дверь' : 'Калитка';
+    const doorVerbAdj = (target.openDir | 0) !== 0 ? 'открыта' : 'закрыта';
+    this.effects.toast?.(`${doorNoun} ${doorVerbAdj}`, '#c8a060');
     // Force a fresh prompt re-emit on the next frame so the "open /
     // close" label flips immediately instead of waiting for the prompt
     // dedup to expire.
@@ -1394,7 +1670,7 @@ export class Game {
       }
       let target = null, bestD = PROMPT_RADIUS;
       for (const s of this.structures) {
-        if (!s.alive || s.kind !== 'gate') continue;
+        if (!s.alive || (s.kind !== 'gate' && s.kind !== 'door_full')) continue;
         const d = Math.hypot(s.pos.x - p.pos.x, s.pos.z - p.pos.z);
         if (d <= bestD) { bestD = d; target = s; }
       }
@@ -1403,12 +1679,13 @@ export class Game {
         continue;
       }
       const isOpen = (target.openDir | 0) !== 0;
-      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${isOpen ? 'o' : 'c'}`;
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.kind}|${isOpen ? 'o' : 'c'}`;
       if (p._gatePromptKey === stateKey) continue;
       p._gatePromptKey = stateKey;
       const key = (p.index === 0) ? 'E' : 'J';
       const verb = isOpen ? 'закрыть' : 'открыть';
-      this.effects.toast?.(`${key}: ${verb} калитку`, '#c8a060');
+      const noun = target.kind === 'door_full' ? 'дверь' : 'калитку';
+      this.effects.toast?.(`${key}: ${verb} ${noun}`, '#c8a060');
     }
   }
 
@@ -2357,8 +2634,28 @@ export class Game {
         // their arms refreshed to stop pointing at it. forgetStructure
         // above has already removed this entry's descriptor, so the
         // rebuild sees the correct post-death state.
-        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate') {
-          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z);
+        if (s.kind === 'fence' || s.kind === 'wall' || s.kind === 'gate'
+            || s.kind === 'wood_wall' || s.kind === 'glass_wall'
+            || s.kind === 'door_full') {
+          this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z, s.y || 0, s.kind);
+        }
+        // A roof corner anchors a procedural roof above its building.
+        // Killing the corner pulls the rest of the roof down with it
+        // — find every roof_pitched whose rectangle uses this corner
+        // and mark them dead. The compactInPlace below will sweep
+        // both the corner and the roofs out of `this.structures` in
+        // the same pass.
+        if (s.kind === 'roof_corner') {
+          const roofs = this._roofsAtCorner(s.pos.x, s.pos.z, s.y || 0);
+          for (const r of roofs) {
+            r.alive = false;
+            r.hp = 0;
+            r.removeCollider();
+            r.destroyMesh();
+            if (r.chunkKey) {
+              this.world.forgetStructure(r.chunkKey, r.pos.x, r.pos.z, r.y || 0);
+            }
+          }
         }
         // Drop any attached Crop too — the planter mesh is gone so no
         // visible mesh remains, but the Crop entry would otherwise linger
@@ -2518,6 +2815,7 @@ export class Game {
       const recipe = RECIPES[b.currentRecipe()];
       const nameEl = document.getElementById(`bb${slot}-name`);
       const costEl = document.getElementById(`bb${slot}-cost`);
+      const layerEl = document.getElementById(`bb${slot}-layer`);
       if (nameEl) nameEl.textContent = recipe?.name || b.currentRecipe();
       if (costEl) {
         const parts = [];
@@ -2526,6 +2824,12 @@ export class Game {
           parts.push(`${v} ${label}`);
         }
         costEl.textContent = parts.join(' · ');
+      }
+      if (layerEl) {
+        // "Этаж" reads more naturally to a Russian speaker than "слой"
+        // for vertical level — same noun used for building floors in
+        // real architecture.
+        layerEl.textContent = `этаж ${b.cursorLayer | 0}`;
       }
     }
     // Live affordability re-paint for any open build-wheel — without

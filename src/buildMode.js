@@ -43,6 +43,16 @@ const CURSOR_MOVE_SPEED = 6.0;
 // elsewhere; the visible mesh is shorter.)
 const WALL_STACK_STEP = 1.0;
 
+// Manual vertical layer (m) the player drives via Shift / Ctrl while in
+// build mode. STEP_Y matches WALL_STACK_STEP so a layer-1 ghost lands
+// flush on top of a layer-0 wall. MAX_LAYER caps the cursor at 8
+// storeys — high enough that the procedural roof apex (which grows
+// max(w,d)/2 above the corner y) clears any reasonable building, while
+// still keeping a finite ceiling so the top-down camera doesn't have
+// to chase a runaway ghost off-screen.
+const STEP_Y = 1.0;
+const MAX_LAYER = 8;
+
 // Yaw step when the player presses interact. 90° matches a 1m grid wall
 // orientation (axis-aligned looks tidy; finer angles risk visible
 // collider-vs-mesh mismatches).
@@ -80,6 +90,10 @@ export class BuildController {
     // immediately drop a second one on the same frame's cursor (rare, but
     // possible on high-DPI inputs that emit repeated edge events).
     this._placeCooldown = 0;
+    // Manual vertical layer (0..MAX_LAYER). Player nudges this with Shift
+    // (up) / Ctrl (down) while in build mode so they can drop a wall on
+    // top of an existing one or skip a row when building stairs.
+    this.cursorLayer = 0;
   }
 
   // Enter build mode (or switch recipe if already active). Public entry
@@ -185,9 +199,15 @@ export class BuildController {
   // We also walk the centre tile's eight 1m neighbours' `placedStructures`
   // entries so a build at a chunk seam isn't blind to a neighbouring
   // chunk's already-placed structures.
-  _spotFree(x, z) {
+  _spotFree(x, z, y = 0, kind = null) {
     const eps2 = MIN_STRUCT_SPACING * MIN_STRUCT_SPACING;
+    const placingFloor = (kind === 'floor_wood');
     const ck0 = this.world.chunkKeyOf(x, z);
+    // Floor-span of the placement, in integer floor indices. Most
+    // recipes occupy one floor; door_full is two-blocks tall so it
+    // reserves both its base floor and the floor directly above.
+    const placeBase = Math.round((y || 0) / STEP_Y);
+    const placeTop = placeBase + ((kind === 'door_full') ? 1 : 0);
     // Collect placed-structure descriptors from the centre + 4 cardinal
     // neighbours so a wall on the chunk seam is also seen.
     const seamOffsets = [
@@ -201,14 +221,36 @@ export class BuildController {
       if (!arr) continue;
       for (const d of arr) {
         const dx = d.x - x, dz = d.z - z;
-        if (dx * dx + dz * dz < eps2) return false;
+        if (dx * dx + dz * dz >= eps2) continue;
+        const dBase = Math.round((d.y || 0) / STEP_Y);
+        const dTop = dBase + ((d.kind === 'door_full') ? 1 : 0);
+        // Reject only if the two floor-spans overlap. door_full at
+        // floor 0 occupies [0,1], so a Shift-placed wall trying to
+        // claim floor 1 in the same cell is rejected here even
+        // though descriptor.y == 0.
+        if (placeTop < dBase || placeBase > dTop) continue;
+        // Two floors on the same tile + same y would z-fight and waste
+        // resources, so reject that even though either side alone is
+        // a "floor".
+        const otherIsFloor = (d.kind === 'floor_wood');
+        if (placingFloor && otherIsFloor) return false;
+        // A wood floor is a thin walkable tile — players can drop walls
+        // on top of it, and they can drop a floor under any existing
+        // non-floor structure. So allow same-tile coexistence when
+        // exactly one side of the conflict is a floor.
+        if (otherIsFloor || placingFloor) continue;
+        return false;
       }
     }
     // Natural world colliders only — anything tagged `placed: true` was
-    // pushed by a structure and is already covered by the loop above. The
-    // +0.55 buffer is sized for tree/rock radii so a wall doesn't overlap
+    // pushed by a structure and is already covered by the loop above.
+    // For elevated layers (y > 0) we skip this check entirely: trees and
+    // rocks live on the ground and don't reach 1m+ up, so a 2nd-storey
+    // wall placed "inside" a tree's canopy is fine. The +0.55 buffer
+    // here is sized for tree/rock radii so a ground wall doesn't overlap
     // a trunk; structures don't need that buffer because we *want* them
     // flush on adjacent grid cells.
+    if (y >= 0.5) return true;
     const cols = this.world.colliders;
     if (cols && cols.length) {
       for (const c of cols) {
@@ -241,18 +283,34 @@ export class BuildController {
       this.yaw = (this.yaw + YAW_STEP) % (Math.PI * 2);
       if (this.ghost) this.ghost.rotation.y = this.yaw;
     }
+    // Layer up / down — Shift / Ctrl edges from input.intent. Clamped to
+    // [0, MAX_LAYER]; floors / planters / campfires / torches snap back
+    // to the ground because they're conceptually 1-storey ground props.
+    if (intent.buildLayerUp) this.cursorLayer = Math.min(MAX_LAYER, this.cursorLayer + 1);
+    if (intent.buildLayerDown) this.cursorLayer = Math.max(0, this.cursorLayer - 1);
     const c = this._computeCursor(dt, intent.moveX || 0, intent.moveZ || 0);
     const kind = this.currentRecipe();
     const recipe = RECIPES[kind];
-    // Stack support: stone walls can be placed on top of an existing
-    // wall in the same cell. Find the topmost wall at (cx, cz); if it's
-    // a wall and we're holding the wall recipe, the new wall sits on a
-    // raised Y (recipe.height per stack level) and the spot-free check
-    // is bypassed for that one cell. Other recipes still get the
-    // standard "no two structures on the same tile" rule.
-    const stackBase = (kind === 'wall') ? this._topWallAt(c.x, c.z) : null;
-    const stackY = stackBase ? ((stackBase.y || 0) + WALL_STACK_STEP) : 0;
-    const spotOK = stackBase ? true : this._spotFree(c.x, c.z);
+    // Single-storey ground props (planter / campfire / torch) ignore the
+    // manual layer — they're conceptually outdoor decorations and a
+    // floating campfire would be confusing. floor_wood, in contrast,
+    // is the *flooring* of upper storeys, so it MUST honour the layer
+    // (a 2nd-storey building needs a 2nd-storey plank floor).
+    const groundOnly = (kind === 'planter' || kind === 'campfire' || kind === 'torch');
+    let layerY = groundOnly ? 0 : (this.cursorLayer * STEP_Y);
+    // Auto-stack support for the legacy stone wall recipe — preserved so
+    // a stone wall placed on an existing tower keeps its old "tap to
+    // stack" feel. New wall kinds (wood / glass) rely on the manual
+    // Shift/Ctrl layer instead so the player has explicit control.
+    let stackY = layerY;
+    let stackBase = null;
+    if (kind === 'wall' && this.cursorLayer === 0) {
+      stackBase = this._topWallAt(c.x, c.z);
+      if (stackBase) stackY = (stackBase.y || 0) + WALL_STACK_STEP;
+    }
+    const spotOK = stackBase
+      ? true
+      : this._spotFree(c.x, c.z, stackY, kind);
     const affordable = canAfford(this.world.resources, kind) && spotOK;
     this._setGhostAffordable(affordable);
     if (this.ghost) {
