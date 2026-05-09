@@ -27,6 +27,7 @@ import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import {
   Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
+  buildWoodWallMesh, buildGlassWallMesh,
   GATE_OPEN_RADIUS, structureMaterial,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
@@ -1028,10 +1029,20 @@ export class Game {
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildGateMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
-      } else if (s.kind === 'wall' || s.kind === 'wood_wall' || s.kind === 'glass_wall') {
-        // Walls don't render any connection arms themselves, but their
-        // presence flips a fence/gate neighbour's connection bit, so
-        // refresh those too.
+      } else if (s.kind === 'wall') {
+        // Stone walls don't render any connection arms themselves, but
+        // their presence flips a fence/gate neighbour's connection bit,
+        // so refresh those too.
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'wood_wall') {
+        // Wood walls grow fence-style panels toward their neighbours;
+        // build the mesh with the current connection mask, then refresh
+        // adjacent fence/gate/wood/glass walls so their arms terminate
+        // against this new tile.
+        this._rebuildWoodWallMesh(struct);
+        this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
+      } else if (s.kind === 'glass_wall') {
+        this._rebuildGlassWallMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z);
       } else if (s.kind === 'door_full') {
         // Restore persisted open state (chunk reload after the player
@@ -1108,6 +1119,36 @@ export class Game {
     struct._restRotZ = next.rotation.z;
   }
 
+  // Sibling of `_rebuildFenceMesh` for the wood-wall recipe — same fence
+  // post + 4-cardinal-arm topology, but the arms are full-storey solid
+  // plank panels. yaw isn't applied for the same reason as fence: the
+  // mesh is N/S/E/W-symmetric and the arms must stay world-aligned.
+  _rebuildWoodWallMesh(struct) {
+    if (!struct || struct.kind !== 'wood_wall' || !struct.alive || !struct.group) return;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildWoodWallMesh(conns);
+    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
+  _rebuildGlassWallMesh(struct) {
+    if (!struct || struct.kind !== 'glass_wall' || !struct.alive || !struct.group) return;
+    const conns = this._fenceConnectionsAt(struct.pos.x, struct.pos.z);
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildGlassWallMesh(conns);
+    next.position.set(struct.pos.x, struct.y || 0, struct.pos.z);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+  }
+
   // Rebuild a single gate's mesh with the current open state. The gate's
   // `openDir` (0/+1/-1) stays on the Structure between calls so the
   // toggle interaction is the only place that flips it. Yaw is
@@ -1174,10 +1215,13 @@ export class Game {
       const nx = x + dx, nz = z + dz;
       for (const s of this.structures) {
         if (!s.alive) continue;
-        if (s.kind !== 'fence' && s.kind !== 'gate') continue;
+        if (s.kind !== 'fence' && s.kind !== 'gate'
+            && s.kind !== 'wood_wall' && s.kind !== 'glass_wall') continue;
         if (Math.abs(s.pos.x - nx) < eps && Math.abs(s.pos.z - nz) < eps) {
           if (s.kind === 'fence') this._rebuildFenceMesh(s);
-          else this._rebuildGateMesh(s);
+          else if (s.kind === 'gate') this._rebuildGateMesh(s);
+          else if (s.kind === 'wood_wall') this._rebuildWoodWallMesh(s);
+          else if (s.kind === 'glass_wall') this._rebuildGlassWallMesh(s);
           break;
         }
       }

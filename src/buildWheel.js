@@ -95,7 +95,11 @@ export class BuildWheel {
     for (const s of this._slices) s.el.remove();
     this._slices = [];
     const N = RECIPE_ORDER.length;
-    const radius = 110;           // px from ring centre to slice centre
+    // Slice radius scales with recipe count so 6 recipes hug the centre
+    // (compact picker) and 10+ recipes spread out toward the ring edge
+    // (no overlapping slices). The ring itself is 360px wide so the
+    // outer edge sits at ~155px from centre (180 - slice half-height).
+    const radius = N <= 6 ? 110 : 145;
     for (let i = 0; i < N; i++) {
       const kind = RECIPE_ORDER[i];
       const recipe = RECIPES[kind];

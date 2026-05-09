@@ -624,51 +624,13 @@ export function buildStructureMesh(kind, x, z) {
     return g;
   }
   if (kind === 'wood_wall') {
-    // Solid 1m wood block — same footprint as the stone wall so adjacent
-    // tiles seam into a continuous facade. Uses the plank material plus
-    // a thin darker rim at top + bottom for visual readability against
-    // the wood ground in forest biomes.
-    const block = new THREE.Mesh(
-      new RoundedBoxGeometry(1.00, 1.00, 1.00, 2, 0.06),
-      MATERIALS.plank,
-    );
-    block.position.set(0, 0.50, 0);
-    block.castShadow = true; block.receiveShadow = true;
-    g.add(block);
-    const rim = new THREE.Mesh(
-      new THREE.BoxGeometry(1.02, 0.08, 1.02),
-      MATERIALS.plankDark,
-    );
-    rim.position.set(0, 0.04, 0);
-    rim.castShadow = true; rim.receiveShadow = true;
-    g.add(rim);
-    const rimTop = rim.clone();
-    rimTop.position.set(0, 0.96, 0);
-    g.add(rimTop);
-    return g;
+    // Default standalone preview (no neighbours). Live wood walls in the
+    // world get rebuilt by `buildWoodWallMesh()` from game.js when their
+    // fence-style {N,S,E,W} mask flips.
+    return buildWoodWallMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'glass_wall') {
-    // Translucent block. Slightly inset from the cell boundary so the
-    // edge has a visible "frame" effect against the neighbour wall.
-    const pane = new THREE.Mesh(
-      new THREE.BoxGeometry(0.95, 0.95, 0.95),
-      MATERIALS.glass,
-    );
-    pane.position.set(0, 0.50, 0);
-    pane.castShadow = false;        // transparent meshes don't write to shadow map
-    pane.receiveShadow = true;
-    g.add(pane);
-    // Thin plank frame top + bottom so the pane reads as "window" not
-    // "floating ice cube". No side frame — neighbour walls supply the
-    // jambs when this tile is dropped into a wall row.
-    const frameGeo = new THREE.BoxGeometry(1.00, 0.06, 0.12);
-    for (const y of [0.04, 0.96]) {
-      const f = new THREE.Mesh(frameGeo, MATERIALS.plankDark);
-      f.position.set(0, y, 0);
-      f.castShadow = true; f.receiveShadow = true;
-      g.add(f);
-    }
-    return g;
+    return buildGlassWallMesh({ N: false, E: false, S: false, W: false });
   }
   if (kind === 'door_full') {
     // Default door preview: closed. Live doors get rebuilt by
@@ -753,6 +715,113 @@ export function buildDoorFullMesh(openDir) {
     door.rotation.y = (openDir > 0 ? -1 : 1) * (Math.PI * 0.45);
   }
   g.add(door);
+  return g;
+}
+
+// Heights for the full-storey solid wall variants (wood / glass). The
+// post matches the fence post (0.20×0.20) so a wood-wall slot in the
+// middle of a fence run reads as a fence post wearing a tall plank
+// jacket; the panels reach the same 1.6m gameplay height as the
+// existing stone wall so the player can stand behind one and not be
+// shot over the top.
+const _SOLID_WALL_HEIGHT = 1.60;
+const _POST_THICK = 0.20;
+const _PANEL_THICK = 0.20;
+const _PANEL_LEN = 0.40;
+const _PANEL_OFFSET = 0.30;
+
+// Build a fence-style wood wall: a thin centre post + up to four solid
+// plank panels reaching out to the cell boundary in the directions that
+// have a fence-connectable neighbour. Same {N,S,E,W} mask shape as
+// `buildFenceMesh`, so two adjacent wood walls' panels meet flush at
+// the seam (panels span x ∈ [0.10, 0.50] / [-0.50, -0.10] etc.) and
+// the run reads as a continuous solid wall instead of a row of
+// detached posts.
+export function buildWoodWallMesh(connections) {
+  ensureMaterials();
+  const c = connections || { N: false, S: false, E: false, W: false };
+  const g = new THREE.Group();
+  // Centre post — same width as the fence post but reaching the full
+  // wall height. Slightly darker than the panels so the post reads
+  // as the structural element when a single wall stands isolated.
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(_POST_THICK, _SOLID_WALL_HEIGHT, _POST_THICK),
+    MATERIALS.plankDark,
+  );
+  post.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  if (c.E) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_LEN, _SOLID_WALL_HEIGHT, _PANEL_THICK),
+      MATERIALS.plank,
+    );
+    p.position.set(+_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.W) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_LEN, _SOLID_WALL_HEIGHT, _PANEL_THICK),
+      MATERIALS.plank,
+    );
+    p.position.set(-_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.N) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_THICK, _SOLID_WALL_HEIGHT, _PANEL_LEN),
+      MATERIALS.plank,
+    );
+    p.position.set(0, _SOLID_WALL_HEIGHT / 2, -_PANEL_OFFSET);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  if (c.S) {
+    const p = new THREE.Mesh(
+      new THREE.BoxGeometry(_PANEL_THICK, _SOLID_WALL_HEIGHT, _PANEL_LEN),
+      MATERIALS.plank,
+    );
+    p.position.set(0, _SOLID_WALL_HEIGHT / 2, +_PANEL_OFFSET);
+    p.castShadow = true; p.receiveShadow = true;
+    g.add(p);
+  }
+  return g;
+}
+
+// Sibling of `buildWoodWallMesh` for the glass-wall variant: same fence
+// post + 4-cardinal panel layout, but the panels use the translucent
+// glass material and the post stays plank-coloured so the pane reads
+// as a window with a wooden frame.
+export function buildGlassWallMesh(connections) {
+  ensureMaterials();
+  const c = connections || { N: false, S: false, E: false, W: false };
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(_POST_THICK, _SOLID_WALL_HEIGHT, _POST_THICK),
+    MATERIALS.plankDark,
+  );
+  post.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  // Glass panels are slightly thinner than the wood panels so the
+  // surrounding wood frame still has visual presence at oblique angles.
+  const paneThick = 0.10;
+  const dirs = [
+    [c.E, [+_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0], [_PANEL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.W, [-_PANEL_OFFSET, _SOLID_WALL_HEIGHT / 2, 0], [_PANEL_LEN, _SOLID_WALL_HEIGHT, paneThick]],
+    [c.N, [0, _SOLID_WALL_HEIGHT / 2, -_PANEL_OFFSET], [paneThick, _SOLID_WALL_HEIGHT, _PANEL_LEN]],
+    [c.S, [0, _SOLID_WALL_HEIGHT / 2, +_PANEL_OFFSET], [paneThick, _SOLID_WALL_HEIGHT, _PANEL_LEN]],
+  ];
+  for (const [on, pos, size] of dirs) {
+    if (!on) continue;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), MATERIALS.glass);
+    p.position.set(pos[0], pos[1], pos[2]);
+    p.castShadow = false;            // transparent meshes don't write to shadow map
+    p.receiveShadow = true;
+    g.add(p);
+  }
   return g;
 }
 
