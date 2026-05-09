@@ -969,12 +969,11 @@ function getRoofTileTexture() {
       ctx.fillRect(x, y, w, h);
       // Soft shadow band along the BOTTOM of each tile (where the next
       // row of tiles would overlap this one in real clay roofing).
-      // 0.88 brightness × narrow 10% band keeps the "valley between
-      // tiles" hint subtle — tones in the same family as the body,
-      // never a heavy dark groove.
-      const shadow = Math.round(Math.max(0, Math.min(255, (0.88 + jitter * 0.5) * 255)));
+      // 0.93 × 5%-tall band — a hairline hint that two rows meet,
+      // visible only on close inspection.
+      const shadow = Math.round(Math.max(0, Math.min(255, (0.93 + jitter * 0.5) * 255)));
       ctx.fillStyle = `rgb(${shadow},${shadow},${shadow})`;
-      ctx.fillRect(x, y + h - h * 0.10, w, h * 0.10);
+      ctx.fillRect(x, y + h - h * 0.05, w, h * 0.05);
     }
   }
   const tex = new THREE.CanvasTexture(canvas);
