@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Twin Hearts — Coop Adventure</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E" />
+    <!-- PWA: installable Chrome app + iOS Add-to-Home-Screen. The
+         manifest declares display:fullscreen so once installed the
+         game window has no browser chrome and (on supported OSs)
+         takes the whole screen. The companion service worker is
+         intentionally a no-op fetch passthrough — Chrome only
+         requires its existence to enable the "Install" affordance,
+         and a real cache strategy would just get in the way during
+         development. -->
+    <link rel="manifest" href="/game.webmanifest" />
+    <meta name="theme-color" content="#0c1015" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Twin Hearts" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1015; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e8e8; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      #ui-root { position: absolute; inset: 0; pointer-events: none; }
+      .hud {
+        position: absolute; top: 12px; padding: 10px 12px;
+        background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px; backdrop-filter: blur(4px);
+        /* Locked to a fixed width so the HP bar (and everything else inside
+           the HUD) doesn't widen as items accumulate. The item bar inside
+           wraps onto multiple rows once it exceeds this. */
+        width: 240px; box-sizing: border-box; user-select: none;
+      }
+      .hud.left { left: 12px; }
+      .hud.right { right: 12px; text-align: right; }
+      .hud .name { font-weight: 700; letter-spacing: 0.5px; font-size: 13px; }
+      .hud.left .name { color: #6ad0ff; }
+      .hud.right .name { color: #ff8a8a; }
+      .hpbar { position: relative; height: 16px; background: #1a1f28; border-radius: 6px; overflow: hidden; margin-top: 6px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
+      .hpbar > .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg,#52e07a,#2bb14a); transition: width 120ms linear; }
+      .hpbar > .text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85); pointer-events: none; letter-spacing: 0.3px; }
+      .meta { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; opacity: 0.9; }
+      .hud.right .meta { justify-content: flex-end; }
+      .item-bar { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; min-height: 24px; }
+      .hud.right .item-bar { justify-content: flex-end; }
+      .item-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; font-size: 12px; line-height: 1; gap: 2px; cursor: default; position: relative; }
+      .item-icon .stk { font-weight: 700; font-size: 11px; opacity: 0.9; color: #fff; }
+      .item-icon[data-rar="uncommon"] { border-color: #66d97a; box-shadow: 0 0 6px rgba(102,217,122,0.35); }
+      .item-icon[data-rar="rare"] { border-color: #6aa6ff; box-shadow: 0 0 8px rgba(106,166,255,0.45); }
+      .item-icon[data-rar="legendary"] { border-color: #ffb84d; box-shadow: 0 0 10px rgba(255,184,77,0.6); }
+      .ability-slot { position: relative; display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 8px 4px 6px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; font-size: 12px; min-width: 80px; }
+      .hud.right .ability-slot { float: right; }
+      .ability-slot .icon-wrap { position: relative; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: #1a1f28; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.1); }
+      .ability-slot .icon { font-size: 16px; line-height: 1; }
+      .ability-slot .cd-overlay { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
+      .ability-slot .cd-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
+      .ability-slot .ab-name { font-weight: 600; font-size: 11px; opacity: 0.9; }
+      .ability-slot .keyhint { font-size: 10px; opacity: 0.6; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,0.08); margin-left: auto; }
+      .ability-slot.ready .icon-wrap { box-shadow: inset 0 0 0 2px rgba(122,255,138,0.6); }
+      .ability-slot.empty { opacity: 0.45; }
+      .gold { color: #ffd166; font-weight: 700; }
+      .wood { color: #d6a373; font-weight: 700; }
+      .stone { color: #c4c8d0; font-weight: 700; }
+      .seed { color: #b8e293; font-weight: 700; }
+      #topbar {
+        position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+        background: rgba(8,12,18,0.55); border: 1px solid rgba(255,255,255,0.08);
+        padding: 8px 14px; border-radius: 999px; font-size: 13px;
+        display: flex; gap: 14px; align-items: center;
+      }
+      #topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #ffd166; }
+      #topbar .sep { width: 1px; height: 14px; background: rgba(255,255,255,0.18); }
+      #topbar .glyph { vertical-align: -2px; }
+      .buildbar {
+        position: absolute; bottom: 96px;
+        background: rgba(8,12,18,0.7); border: 1px solid rgba(255,255,255,0.12);
+        padding: 7px 12px; border-radius: 10px; font-size: 12px;
+        display: none; gap: 12px; align-items: center; max-width: 320px;
+        pointer-events: none;
+      }
+      .buildbar.active { display: flex; }
+      .buildbar.bad { border-color: rgba(255,91,91,0.55); background: rgba(34,8,8,0.7); }
+      .buildbar .recipe { font-weight: 700; letter-spacing: 0.02em; }
+      .buildbar .cost { opacity: 0.8; }
+      .buildbar .hint { opacity: 0.55; font-size: 11px; }
+      #buildbar1 { left: 14px; }
+      #buildbar2 { right: 14px; }
+      /* Solo mode: hide the P2 slice of the HUD so the screen reads as
+         a single-player run. The phantom slot still exists in JS — it's
+         just visually removed from view. */
+      body.solo .hud.right,
+      body.solo #buildbar2,
+      body.solo #lobby-slot-2,
+      body.solo .shop-col.p2 { display: none; }
+      body.solo #leash { display: none; }
+      body.solo #shop .shop-row { grid-template-columns: 1fr; }
+      #leash {
+        position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%);
+        opacity: 0; transition: opacity 200ms linear;
+        mix-blend-mode: multiply;
+      }
+      #grey { position: absolute; inset: 0; pointer-events: none; backdrop-filter: grayscale(0%); transition: backdrop-filter 200ms; }
+      #toast { position: absolute; left: 50%; top: 80px; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); font-size: 14px; opacity: 0; transition: opacity 200ms; }
+      #shop {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.55); pointer-events: auto;
+      }
+      #shop.open { display: flex; }
+      .shop-panel { width: min(720px, 92vw); background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 18px 20px; }
+      .shop-panel h2 { margin: 0 0 6px; font-size: 18px; }
+      .shop-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.7; }
+      .shop-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .shop-col { background: #0e1218; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 12px; }
+      .shop-col.p1 { border-color: #6ad0ff44; }
+      .shop-col.p2 { border-color: #ff8a8a44; }
+      .shop-col h3 { margin: 0 0 8px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+      .shop-col.p1 h3 .who { color: #6ad0ff; }
+      .shop-col.p2 h3 .who { color: #ff8a8a; }
+      .upg { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin: 6px 0; background: #1a2029; border-radius: 8px; font-size: 13px; }
+      .upg .lvl { font-size: 11px; opacity: 0.7; }
+      .upg .price { color: #ffd166; font-weight: 700; }
+      .upg.locked { opacity: 0.4; }
+      .inv-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+      .inv-section h4 { margin: 0 0 6px; font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.5px; }
+      .inv-item, .inv-ability { padding: 5px 8px; margin: 3px 0; background: #1a2029; border-radius: 6px; font-size: 12px; line-height: 1.4; cursor: pointer; user-select: none; }
+      .inv-item:hover, .inv-ability:hover { background: #222a36; }
+      .inv-item .inv-name, .inv-ability .inv-name { font-weight: 600; }
+      .inv-item .inv-desc, .inv-ability .inv-desc { display: none; opacity: 0.6; font-size: 11px; margin-top: 3px; }
+      .inv-item.open .inv-desc, .inv-ability.open .inv-desc { display: block; }
+      .inv-empty { opacity: 0.4; font-size: 11px; font-style: italic; padding: 4px 0; }
+      /* Altar overlay (item-management menu, opened on E/J near a stone altar). */
+      .altar-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); pointer-events: auto; z-index: 60; }
+      .altar-overlay.open { display: flex; }
+      .altar-panel { width: min(720px, 94vw); max-height: 86vh; overflow-y: auto; background: linear-gradient(180deg,#1a1612,#161b22); border: 1px solid rgba(255,209,102,0.35); border-radius: 16px; padding: 18px 22px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+      .altar-panel header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .altar-panel h2 { margin: 0; font-size: 20px; color: #ffd166; letter-spacing: 0.4px; }
+      .altar-meta { display: flex; gap: 14px; align-items: center; font-size: 13px; opacity: 0.95; }
+      .altar-meta .charges b { color: #ffd166; }
+      .altar-meta .gold b { color: #ffd166; }
+      .altar-close { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: #fff; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; font-size: 18px; line-height: 1; padding: 0; }
+      .altar-close:hover { background: rgba(255,255,255,0.08); }
+      .altar-help { margin: 8px 0 14px; padding: 10px 12px; font-size: 12.5px; line-height: 1.55; background: rgba(255,209,102,0.07); border: 1px solid rgba(255,209,102,0.2); border-radius: 10px; color: #d8d2c4; }
+      .altar-help b { color: #ffd166; }
+      .altar-items { display: flex; flex-direction: column; gap: 8px; }
+      .altar-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; background: #1a2029; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+      .altar-row.rar-uncommon  { border-color: rgba(102,217,122,0.4); }
+      .altar-row.rar-rare      { border-color: rgba(106,166,255,0.5); }
+      .altar-row.rar-legendary { border-color: rgba(255,184,77,0.6); box-shadow: 0 0 14px rgba(255,184,77,0.15); }
+      .altar-icon { display: flex; align-items: center; justify-content: center; }
+      .altar-info { min-width: 0; }
+      .altar-name { font-size: 14px; font-weight: 600; }
+      .altar-name .altar-count { font-size: 11px; opacity: 0.7; margin-left: 6px; }
+      .altar-desc { font-size: 11.5px; opacity: 0.7; margin-top: 2px; line-height: 1.4; }
+      .altar-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+      .altar-actions button { background: #20262e; color: #fff; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-family: inherit; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1.2; min-width: 76px; }
+      .altar-actions button:hover:not(:disabled) { background: #2a313b; border-color: rgba(255,209,102,0.5); }
+      .altar-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+      .altar-actions button .cost { font-size: 10px; opacity: 0.75; color: #ffd166; }
+      .altar-empty { padding: 14px 12px; text-align: center; opacity: 0.6; font-size: 13px; font-style: italic; }
+      .altar-footer { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; opacity: 0.7; font-size: 11px; }
+      .altar-hint { font-style: italic; }
+      /* Build wheel — circular recipe picker. Opened by B (P1) / N (P2)
+         or by tapping the build button on mobile. Per-player so two
+         couch-coop players can have their own picker open at once. */
+      .build-wheel { position: absolute; inset: 0; display: none; pointer-events: none; z-index: 55; }
+      .build-wheel.open { display: block; }
+      .build-wheel .ring { position: absolute; pointer-events: auto; width: 280px; height: 280px; border-radius: 50%; background: radial-gradient(circle, rgba(8,12,18,0.85) 0%, rgba(8,12,18,0.55) 70%, rgba(8,12,18,0) 100%); box-shadow: 0 6px 28px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.06); }
+      .build-wheel.p1 .ring { left: 80px; bottom: 80px; }
+      .build-wheel.p2 .ring { right: 80px; bottom: 80px; }
+      .build-wheel .ring-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; font-size: 12px; opacity: 0.85; line-height: 1.4; pointer-events: none; }
+      .build-wheel .ring-title b { display: block; font-size: 14px; opacity: 1; letter-spacing: 0.4px; margin-bottom: 2px; }
+      .build-wheel .ring-title .dim { font-size: 10px; opacity: 0.55; margin-top: 4px; font-style: italic; }
+      .build-wheel .slice { position: absolute; left: 50%; top: 50%; width: 90px; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 9px 8px; background: #1a2029; border: 1px solid rgba(255,255,255,0.14); border-radius: 12px; cursor: pointer; user-select: none; transition: transform 90ms ease, border-color 90ms ease, background 90ms ease; }
+      .build-wheel .slice:hover { background: #232b35; border-color: rgba(255,209,102,0.6); transform: translate(-50%, -50%) scale(1.06); }
+      .build-wheel .slice.unaffordable { opacity: 0.55; border-color: rgba(255,91,91,0.45); }
+      .build-wheel .slice .ic { font-size: 22px; line-height: 1; }
+      .build-wheel .slice .nm { font-size: 11.5px; font-weight: 600; letter-spacing: 0.2px; text-align: center; }
+      .build-wheel .slice .ct { font-size: 10px; opacity: 0.7; text-align: center; }
+      .build-wheel.p1 .slice { border-left: 2px solid #6ad0ff; }
+      .build-wheel.p2 .slice { border-left: 2px solid #ff8a8a; }
+      .build-wheel .close-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); font-size: 11px; opacity: 0.6; font-style: italic; pointer-events: none; }
+      kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
+      #help .row + .row { margin-top: 4px; }
+      #help .who.p1 { color: #6ad0ff; font-weight: 700; }
+      #help .who.p2 { color: #ff8a8a; font-weight: 700; }
+      #intro { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); pointer-events: auto; }
+      #intro .panel { width: min(560px, 92vw); background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
+      #intro h1 { margin: 0 0 8px; font-size: 26px; letter-spacing: 0.5px; }
+      #intro p { margin: 6px 0; opacity: 0.85; font-size: 14px; line-height: 1.6; }
+      #intro button { margin-top: 14px; pointer-events: auto; background: linear-gradient(180deg,#3b82f6,#2563eb); color: white; border: none; padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; box-shadow: 0 6px 16px rgba(37,99,235,0.4); }
+      #intro button:hover { filter: brightness(1.1); }
+      #intro button:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+      #intro .panel { width: min(640px, 94vw); }
+      .lobby { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
+      .lobby-row { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; }
+      .lobby-qr-wrap { background: #e0e6f3; padding: 6px; border-radius: 10px; }
+      .lobby-qr { width: 160px; height: 160px; display: flex; align-items: center; justify-content: center; }
+      .lobby-qr svg { display: block; width: 100%; height: 100%; }
+      .lobby-meta { text-align: left; min-width: 180px; }
+      .lobby-label { font-size: 11px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+      .lobby-code { font-size: 36px; letter-spacing: 8px; font-weight: 800; font-family: ui-monospace, monospace; color: #fff; }
+      .lobby-instr { font-size: 13px; opacity: 0.85; margin-top: 8px; line-height: 1.5; }
+      .lobby-instr a { color: #6ad0ff; word-break: break-all; }
+      .lobby-slots { margin-top: 12px; display: flex; gap: 10px; }
+      .lobby-slots .slot { padding: 4px 10px; font-size: 12px; border-radius: 999px; background: #1a2029; border: 1px solid rgba(255,255,255,0.1); opacity: 0.5; }
+      .lobby-slots .slot.p1 { color: #6ad0ff; }
+      .lobby-slots .slot.p2 { color: #ff8a8a; }
+      .lobby-slots .slot.on { opacity: 1; background: #233040; border-color: currentColor; }
+      .lobby-or { text-align: center; opacity: 0.45; font-size: 12px; margin-top: 14px; letter-spacing: 1px; text-transform: uppercase; }
+      .lobby-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+      #start-keyboard { background: #2a313b !important; box-shadow: none !important; }
+      #death { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); pointer-events: auto; }
+      #death.open { display: flex; }
+      #death .panel { background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
+      #death h1 { margin: 0 0 12px; color: #ff6a6a; }
+      #death button { margin-top: 12px; background: #2a313b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; }
+      #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; background: #0c1015; z-index: 30; }
+      #loading.hidden { opacity: 0; transition: opacity 200ms; pointer-events: none; }
+      #loading .panel { text-align: center; padding: 18px 26px; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; background: rgba(8,12,18,0.7); }
+      #loading h2 { margin: 0 0 8px; font-weight: 600; font-size: 16px; letter-spacing: 0.5px; }
+      #loading .bar { width: 220px; height: 8px; background: #1a1f28; border-radius: 4px; overflow: hidden; margin: 8px auto 0; }
+      #loading .bar > .fill { height: 100%; width: 0%; background: linear-gradient(90deg,#6ad0ff,#ff8a8a); transition: width 120ms ease-out; }
+      #loading .stat { font-size: 12px; opacity: 0.6; margin-top: 6px; }
+      #pause {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.65); pointer-events: auto; z-index: 50;
+        backdrop-filter: blur(2px);
+      }
+      #pause.open { display: flex; }
+      .pause-panel {
+        width: min(640px, 94vw); max-height: 90vh; overflow-y: auto;
+        background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+        padding: 22px 26px;
+      }
+      .pause-panel h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0.5px; }
+      .pause-panel .sub { margin: 0 0 18px; font-size: 13px; opacity: 0.65; }
+      .pause-tabs { display: flex; gap: 4px; padding: 4px; background: #0e1218; border-radius: 10px; margin-bottom: 16px; }
+      .pause-tabs button {
+        flex: 1; background: transparent; border: 0; color: #cfd6e0; padding: 8px 10px;
+        font-size: 13px; border-radius: 8px; cursor: pointer; font-weight: 600;
+      }
+      .pause-tabs button.active { background: #2a313b; color: #fff; }
+      .pause-tab { display: none; }
+      .pause-tab.active { display: block; }
+      .pause-row {
+        display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; align-items: center;
+        padding: 10px 12px; margin: 6px 0; background: #0e1218; border-radius: 10px;
+      }
+      .pause-row .label { font-size: 13px; color: #cfd6e0; }
+      .pause-row .label .desc { display: block; font-size: 11px; opacity: 0.55; margin-top: 2px; font-weight: 400; }
+      .pause-row .control { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+      .seg { display: inline-flex; background: #1a2029; border-radius: 8px; padding: 2px; gap: 2px; }
+      .seg button {
+        background: transparent; border: 0; color: #cfd6e0; padding: 6px 10px;
+        font-size: 12px; border-radius: 6px; cursor: pointer; font-weight: 600;
+      }
+      .seg button.active { background: #3b82f6; color: #fff; }
+      .seg button:hover:not(.active) { background: #20262e; }
+      .pause-row .toggle {
+        position: relative; width: 44px; height: 24px; border-radius: 999px;
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.1); cursor: pointer;
+      }
+      .pause-row .toggle::after {
+        content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+        border-radius: 50%; background: #cfd6e0; transition: 160ms ease;
+      }
+      .pause-row .toggle.on { background: #3b82f6; border-color: #3b82f6; }
+      .pause-row .toggle.on::after { left: 22px; background: #fff; }
+      .pause-row .slider { display: flex; align-items: center; gap: 8px; min-width: 200px; }
+      .pause-row .slider input[type=range] { flex: 1; accent-color: #3b82f6; }
+      .pause-row .slider .val { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 38px; text-align: right; opacity: 0.85; }
+      .preset-row { display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap; }
+      .preset-row button {
+        flex: 1; min-width: 90px; background: #0e1218; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 10px 8px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px;
+      }
+      .preset-row button:hover { background: #1a2029; }
+      .preset-row button.active { border-color: #3b82f6; color: #fff; background: #1a2740; }
+      .pause-footer {
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
+      }
+      .pause-footer .left, .pause-footer .right { display: flex; gap: 10px; flex-wrap: wrap; }
+      .pause-footer button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 9px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      .pause-footer button.primary { background: linear-gradient(180deg,#3b82f6,#2563eb); border: none; box-shadow: 0 6px 16px rgba(37,99,235,0.3); }
+      .pause-footer button:hover { filter: brightness(1.08); }
+      #fps {
+        position: absolute; bottom: 12px; right: 12px; padding: 4px 8px; border-radius: 6px;
+        background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.08);
+        font-size: 12px; font-family: ui-monospace, monospace;
+        color: #7aff8a; pointer-events: none; display: none;
+      }
+      #fps.show { display: block; }
+      /* Minimap — top-down chunk-cached map of the explored world.
+         Hidden by default; toggled with the M key (see _bindUI in
+         src/game.js). When open it sits in the bottom-right with a
+         uniform 14 px gap from both edges (matches the right
+         buildbar's right:14). Rendered every frame by
+         Minimap.render() regardless of visibility, so exploration is
+         still tracked while the panel is closed; see src/minimap.js. */
+      #minimap {
+        position: absolute; bottom: 14px; right: 14px;
+        width: 220px; height: 220px;
+        background: #0a0d12;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        pointer-events: none;
+        z-index: 5;
+        display: none;
+      }
+      #minimap.open { display: block; }
+      /* Start menu — shown on launch before the lobby/QR screen. Mirrors the
+         pause-panel chrome (dark card, blue accents, segmented buttons) so
+         start, pause and altar UIs feel like the same family. */
+      #start-menu {
+        position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.7); pointer-events: auto; z-index: 40;
+        backdrop-filter: blur(2px);
+      }
+      #start-menu.open { display: flex; }
+      .start-panel {
+        width: min(880px, 94vw); max-height: 92vh; overflow-y: auto;
+        background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+        padding: 22px 24px;
+      }
+      .start-view { display: none; }
+      .start-view.active { display: block; }
+      .start-main-actions { display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 18px auto; }
+      .start-main-actions button {
+        padding: 14px 18px; font-size: 16px; font-weight: 700; letter-spacing: 0.3px;
+        border-radius: 12px; cursor: pointer; color: #fff;
+      }
+      .start-main-actions button.primary {
+        background: linear-gradient(180deg,#3b82f6,#2563eb); border: none;
+        box-shadow: 0 6px 18px rgba(37,99,235,0.35);
+      }
+      .start-main-actions button.secondary {
+        background: #2a313b; border: 1px solid rgba(255,255,255,0.1);
+      }
+      .start-main-actions button:hover:not(:disabled) { filter: brightness(1.1); }
+      .start-main-actions button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+      .start-seed-row {
+        display: flex; gap: 10px; align-items: center;
+        padding: 8px 12px; margin: 0 0 14px; background: #0e1218; border-radius: 10px;
+      }
+      .start-seed-row .label { font-size: 12px; color: #cfd6e0; flex-shrink: 0; opacity: 0.7; }
+      .start-seed-row .control { display: flex; gap: 6px; align-items: center; flex: 1; }
+      .start-seed-row input[type=text] {
+        flex: 1; min-width: 0; background: #1a2029; color: #fff;
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+        padding: 8px 10px; font-size: 13px; font-family: ui-monospace, monospace; letter-spacing: 2px;
+      }
+      .start-seed-row input[type=text]:focus { outline: 1px solid #3b82f6; border-color: #3b82f6; }
+      .start-seed-row .control button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;
+      }
+      .start-seed-row .control button:hover { filter: brightness(1.1); }
+      .start-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      @media (max-width: 720px) { .start-slots { grid-template-columns: 1fr; } }
+      /* Solo mode collapses the slot grid to a single centred column. */
+      #start-menu.solo .start-slots { grid-template-columns: minmax(280px, 480px); justify-content: center; }
+      /* Mode-toggle pill for "1 player / 2 players". */
+      .start-mode-row {
+        display: flex; justify-content: center; gap: 8px;
+        margin: 0 0 10px;
+      }
+      .start-mode-btn {
+        background: #1a1f29; color: #cfd6e1; border: 1px solid rgba(255,255,255,0.08);
+        padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 600;
+      }
+      .start-mode-btn:hover { filter: brightness(1.15); }
+      .start-mode-btn.active { background: #2c3a52; color: #fff; border-color: #4a78c8; }
+      .start-slot {
+        background: #0e1218; border-radius: 12px; padding: 10px 12px 12px;
+        border: 1px solid rgba(255,255,255,0.06);
+      }
+      .start-slot-p1 { border-top: 3px solid #6ad0ff; }
+      .start-slot-p2 { border-top: 3px solid #ff8a8a; }
+      .start-slot-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+      .start-slot-p1 .start-slot-title { color: #6ad0ff; }
+      .start-slot-p2 .start-slot-title { color: #ff8a8a; }
+      .start-preview {
+        display: block; width: 100%; height: 220px;
+        background: radial-gradient(ellipse at center, #1a2029 0%, #0a0d12 80%);
+        border-radius: 8px; margin: 4px 0 8px;
+      }
+      .start-section-label { font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 4px; }
+      /* Flat-row colour picker — wraps to 2 lines inside narrow slots
+         when the palette is large (13 colours).  Each swatch is a
+         circular 3-D-bead (radial gradient set inline in JS). */
+      .start-color-row {
+        display: flex; flex-wrap: wrap;
+        gap: 5px;
+        justify-content: flex-start;
+        margin: 4px 0 8px;
+      }
+      .start-swatch {
+        width: 24px; height: 24px;
+        border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.18);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+        cursor: pointer; padding: 0;
+        transition: transform 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
+      }
+      .start-swatch:hover { transform: scale(1.15); z-index: 2; }
+      .start-swatch.active {
+        border-color: #fff;
+        box-shadow: 0 0 0 2px rgba(59,130,246,0.7), 0 1px 3px rgba(0,0,0,0.45);
+        z-index: 3;
+      }
+      .start-weapon-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+      }
+      .start-weapon-chip {
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 6px 4px; border-radius: 6px; cursor: pointer;
+        font-size: 11px; font-weight: 600; text-align: center; line-height: 1.2;
+      }
+      .start-weapon-chip:hover { background: #20262e; }
+      .start-weapon-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
+      /* Affinity star: marks a weapon that the currently selected
+         character gets a class bonus on. Rendered with a pseudo-element
+         so the chip's centred label stays unchanged when the marker
+         appears / disappears as the character toggles. */
+      .start-weapon-chip.affinity { border-color: rgba(255, 209, 102, 0.55); }
+      .start-weapon-chip.affinity::after {
+        content: '★';
+        position: absolute; top: 1px; right: 4px;
+        color: #ffd166; font-size: 10px; line-height: 1;
+        text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+      }
+      .start-weapon-chip { position: relative; }
+      .start-weapon-chip.affinity.active { border-color: #ffd166; }
+      /* Character picker. Uses the same chip language as the weapon
+         picker but laid out in a 2-column grid because the labels are
+         longer ("Скелет-разбой" etc.) and would clip in 3 narrow
+         columns. Active chip mirrors the highlight from the weapon
+         and color rows so the three pickers feel uniform. */
+      .start-character-grid {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;
+        margin: 4px 0 8px;
+      }
+      .start-character-chip {
+        background: #1a2029; border: 1px solid rgba(255,255,255,0.08);
+        color: #cfd6e0; padding: 6px 4px; border-radius: 6px; cursor: pointer;
+        font-size: 11px; font-weight: 600; text-align: center; line-height: 1.2;
+      }
+      .start-character-chip:hover { background: #20262e; }
+      .start-character-chip.active { background: #1a2740; border-color: #3b82f6; color: #fff; }
+      .start-load-empty {
+        background: #0e1218; border-radius: 12px; padding: 26px;
+        text-align: center; opacity: 0.7; font-size: 13px; line-height: 1.6;
+      }
+      .start-footer {
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
+      }
+      .start-footer button {
+        background: #2a313b; color: #fff; border: 1px solid rgba(255,255,255,0.1);
+        padding: 9px 16px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600;
+      }
+      .start-footer button.primary {
+        background: linear-gradient(180deg,#3b82f6,#2563eb); border: none;
+        box-shadow: 0 6px 16px rgba(37,99,235,0.3);
+      }
+      .start-footer button:hover { filter: brightness(1.08); }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="canvas"></canvas>
+      <div id="loading"><div class="panel"><h2>Загружаем мир…</h2><div class="bar"><div class="fill" id="loading-fill"></div></div><div class="stat" id="loading-stat">0 / 0</div></div></div>
+      <div id="ui-root">
+        <div id="leash"></div>
+        <div id="grey"></div>
+        <div id="topbar">
+          <span id="clock">Day · 06:00</span>
+          <span class="dot" id="clockdot"></span>
+          <span class="sep"></span>
+          <span class="wood" title="Дерево (общее)"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 10h14M5 14h14M5 18h14"/></svg> <span id="wood">0</span></span>
+          <span class="stone" title="Камень (общий)"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 14L4 10l4-4 5 1 4 5-2 5-4 2z"/></svg> <span id="stone">0</span></span>
+          <span class="seed" title="Семена (общие)"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="14" r="5"/><path d="M12 9V4M9 6l3-2 3 2"/></svg> <span id="seed">0</span></span>
+        </div>
+        <div class="hud left">
+          <div class="name">Игрок 1</div>
+          <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div><span class="text" id="hpval1">100 / 100</span></div>
+          <div class="meta">
+            <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold1">0</span></span>
+            <span>LV <span id="lvl1">1</span></span>
+            <span>DMG <span id="dmg1">10</span></span>
+          </div>
+          <div class="item-bar" id="items1"></div>
+          <div class="ability-slot empty" id="ability1">
+            <div class="icon-wrap"><span class="icon">·</span><svg class="cd-overlay" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="3" stroke-dasharray="100.53" stroke-dashoffset="100.53" transform="rotate(-90 18 18)"/></svg><span class="cd-text"></span></div>
+            <span class="ab-name">пусто</span>
+            <span class="keyhint">G</span>
+          </div>
+        </div>
+        <div class="hud right">
+          <div class="name">Игрок 2</div>
+          <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div><span class="text" id="hpval2">100 / 100</span></div>
+          <div class="meta">
+            <span>DMG <span id="dmg2">10</span></span>
+            <span>LV <span id="lvl2">1</span></span>
+            <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold2">0</span></span>
+          </div>
+          <div class="item-bar" id="items2"></div>
+          <div class="ability-slot empty" id="ability2">
+            <div class="icon-wrap"><span class="icon">·</span><svg class="cd-overlay" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="3" stroke-dasharray="100.53" stroke-dashoffset="100.53" transform="rotate(-90 18 18)"/></svg><span class="cd-text"></span></div>
+            <span class="ab-name">пусто</span>
+            <span class="keyhint">H</span>
+          </div>
+        </div>
+        <div class="buildbar" id="buildbar1">
+          <span class="recipe" id="bb1-name">—</span>
+          <span class="cost" id="bb1-cost"></span>
+          <span class="hint">F:поставить · R:отмена · E:поворот</span>
+        </div>
+        <div class="buildbar" id="buildbar2">
+          <span class="recipe" id="bb2-name">—</span>
+          <span class="cost" id="bb2-cost"></span>
+          <span class="hint">L:поставить · K:отмена · J:поворот</span>
+        </div>
+        <canvas id="minimap" width="220" height="220" aria-label="Карта местности"></canvas>
+        <div id="toast"></div>
+        <div id="shop">
+          <div class="shop-panel">
+            <h2>Campfire Upgrades</h2>
+            <p>Spend gold to permanently upgrade your hero. Press <kbd>Tab</kbd> to close.</p>
+            <div class="shop-row">
+              <div class="shop-col p1">
+                <h3><span class="who">Игрок 1</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold1">0</span></span></h3>
+                <div id="shop-upgs-1"></div>
+                <div id="shop-inv-1" class="inv-section"></div>
+              </div>
+              <div class="shop-col p2">
+                <h3><span class="who">Игрок 2</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold2">0</span></span></h3>
+                <div id="shop-upgs-2"></div>
+                <div id="shop-inv-2" class="inv-section"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="death">
+          <div class="panel">
+            <h1>You both fell.</h1>
+            <p>Stay close to each other — the bond is your lifeline.</p>
+            <button id="restart">Restart</button>
+          </div>
+        </div>
+        <div id="fps">FPS … · — ms</div>
+        <div id="pause" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+          <div class="pause-panel">
+            <h1 id="pause-title">Пауза</h1>
+            <p class="sub">Нажми <kbd>Esc</kbd>, чтобы вернуться в игру. Настройки сохраняются автоматически.</p>
+            <div class="pause-tabs" role="tablist">
+              <button id="pause-tab-video" class="active" role="tab">Видео</button>
+              <button id="pause-tab-audio" role="tab">Звук</button>
+            </div>
+
+            <div id="pause-pane-video" class="pause-tab active" role="tabpanel">
+              <div class="label" style="margin-bottom:6px;">Профиль качества <span class="desc">Применяет связку настроек одной кнопкой.</span></div>
+              <div class="preset-row" id="preset-row">
+                <button data-preset="low">Низкое</button>
+                <button data-preset="medium">Среднее</button>
+                <button data-preset="high">Высокое</button>
+                <button data-preset="ultra">Ультра</button>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Тени<span class="desc">Размер карты теней. Влияет на чёткость и нагрузку на GPU.</span></div>
+                <div class="control"><div class="seg" data-key="shadows" data-type="seg">
+                  <button data-val="off">Выкл</button>
+                  <button data-val="low">Низкие</button>
+                  <button data-val="medium">Средн.</button>
+                  <button data-val="high">Высокие</button>
+                  <button data-val="ultra">Ультра</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Качество теней<span class="desc">Жёсткие — быстрее, мягкие — красивее.</span></div>
+                <div class="control"><div class="seg" data-key="shadowType" data-type="seg">
+                  <button data-val="hard">Жёсткие</button>
+                  <button data-val="pcf">PCF</button>
+                  <button data-val="soft">Мягкие</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Разрешение<span class="desc">Масштаб внутреннего рендера. Понизь, если игра тормозит.</span></div>
+                <div class="control"><div class="seg" data-key="resolutionScale" data-type="seg-num">
+                  <button data-val="0.5">50%</button>
+                  <button data-val="0.75">75%</button>
+                  <button data-val="1">100%</button>
+                  <button data-val="1.25">125%</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Эффекты частиц<span class="desc">Густота брызг от ударов и взрывов.</span></div>
+                <div class="control"><div class="seg" data-key="particles" data-type="seg">
+                  <button data-val="off">Выкл</button>
+                  <button data-val="low">Мало</button>
+                  <button data-val="medium">Средне</button>
+                  <button data-val="high">Много</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Вода<span class="desc">Низкое — плоский цвет. Среднее — узор без анимации. Высокое — полный шейдер.</span></div>
+                <div class="control"><div class="seg" data-key="water" data-type="seg">
+                  <button data-val="low">Низкое</button>
+                  <button data-val="medium">Средн.</button>
+                  <button data-val="high">Высокое</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Сглаживание ландшафта<span class="desc">Гладкость берегов и границ песка/леса. Низкое — клетки 2 м (быстрее), высокое — 1 м.</span></div>
+                <div class="control"><div class="seg" data-key="terrainQuality" data-type="seg">
+                  <button data-val="low">Низкое</button>
+                  <button data-val="medium">Средн.</button>
+                  <button data-val="high">Высокое</button>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Туман<span class="desc">Смягчает горизонт, скрывает дальние чанки.</span></div>
+                <div class="control"><div class="toggle" data-key="fog" data-type="toggle"></div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Поле зрения (FOV)<span class="desc">55 — кинематографично, 75 — обзорно.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="50" max="80" step="1" data-key="fov" data-type="slider">
+                  <span class="val" data-for="fov">60°</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Счётчик FPS<span class="desc">Показать FPS и frametime в углу экрана.</span></div>
+                <div class="control"><div class="toggle" data-key="showFps" data-type="toggle"></div></div>
+              </div>
+            </div>
+
+            <div id="pause-pane-audio" class="pause-tab" role="tabpanel">
+              <div class="pause-row">
+                <div class="label">Общая громкость<span class="desc">Главный регулятор звука.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="0" max="100" step="1" data-key="masterVolume" data-type="slider-pct">
+                  <span class="val" data-for="masterVolume">50%</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Эффекты (SFX)<span class="desc">Удары, взрывы, шаги.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="0" max="100" step="1" data-key="sfxVolume" data-type="slider-pct">
+                  <span class="val" data-for="sfxVolume">100%</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Окружение<span class="desc">Ветер, вода, лес, костёр, цикады.</span></div>
+                <div class="control"><div class="slider">
+                  <input type="range" min="0" max="100" step="1" data-key="ambientVolume" data-type="slider-pct">
+                  <span class="val" data-for="ambientVolume">60%</span>
+                </div></div>
+              </div>
+
+              <div class="pause-row">
+                <div class="label">Без звука<span class="desc">Полностью заглушить игру.</span></div>
+                <div class="control"><div class="toggle" data-key="muted" data-type="toggle"></div></div>
+              </div>
+            </div>
+
+            <div class="pause-footer">
+              <div class="left">
+                <button id="pause-reset">Сбросить настройки</button>
+                <button id="pause-progress-reset">Сбросить прогресс</button>
+              </div>
+              <div class="right">
+                <button id="pause-resume" class="primary">Продолжить (Esc)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="start-menu" role="dialog" aria-modal="true">
+          <div class="start-panel">
+            <!-- Main view: New game / Load / Settings -->
+            <div class="start-view active" data-view="main">
+              <div class="start-main-actions">
+                <button id="start-btn-new" class="primary">Новая игра</button>
+                <button id="start-btn-load" class="secondary">Загрузить</button>
+                <button id="start-btn-settings" class="secondary">Настройки</button>
+              </div>
+            </div>
+
+            <!-- New game: seed + per-slot color/weapon picker -->
+            <div class="start-view" data-view="newgame">
+              <div class="start-seed-row">
+                <div class="label">Сид</div>
+                <div class="control">
+                  <input id="start-seed" type="text" maxlength="12" autocomplete="off" spellcheck="false" />
+                  <button id="start-seed-random" type="button">Случайный</button>
+                </div>
+              </div>
+              <div class="start-mode-row">
+                <button type="button" class="start-mode-btn" data-solo-mode="coop">Два игрока</button>
+                <button type="button" class="start-mode-btn" data-solo-mode="solo">Один игрок</button>
+              </div>
+              <div id="start-slots" class="start-slots"></div>
+              <div class="start-footer">
+                <button data-back="main">Назад</button>
+                <button id="start-btn-confirm" class="primary">Применить и начать</button>
+              </div>
+            </div>
+
+            <!-- Load: shows the save summary if present, otherwise the
+                 empty-state message. The summary + confirm button are
+                 toggled in startMenu._openLoad() based on
+                 SaveSystem.read(). -->
+            <div class="start-view" data-view="load">
+              <div class="start-load-empty">
+                Сохранения отсутствуют.
+              </div>
+              <div id="start-load-summary" class="start-load-summary" style="display:none;"></div>
+              <div class="start-footer">
+                <button data-back="main">Назад</button>
+                <button id="start-btn-load-confirm" class="primary" style="display:none;">Загрузить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="intro" style="display:none;">
+          <div class="panel">
+            <h1>Twin Hearts</h1>
+            <p>Кооп-приключение на двоих. Не уходите далеко друг от друга — мир сереет и здоровье тает.</p>
+            <p>Убивайте врагов, собирайте золото и еду, прокачивайтесь у костра. Доживите до утра.</p>
+            <div class="lobby">
+              <div class="lobby-row">
+                <div class="lobby-qr-wrap">
+                  <div id="lobby-qr" class="lobby-qr"></div>
+                </div>
+                <div class="lobby-meta">
+                  <div class="lobby-codeblock">
+                    <div class="lobby-label">Код комнаты</div>
+                    <div class="lobby-code" id="lobby-code">····</div>
+                  </div>
+                  <div class="lobby-instr">Зайди с iPhone на<br><a id="lobby-url" href="#" target="_blank" rel="noreferrer noopener">…</a><br>и введи код.</div>
+                  <div class="lobby-slots">
+                    <span class="slot p1" id="lobby-slot-1">P1</span>
+                    <span class="slot p2" id="lobby-slot-2">P2</span>
+                  </div>
+                </div>
+              </div>
+              <div class="lobby-or">или играй на одной клавиатуре</div>
+            </div>
+            <div class="lobby-buttons">
+              <button id="lobby-start" disabled>Ждём игроков… (0/2)</button>
+              <button id="start-keyboard">Начать на клавиатуре</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+    <script>
+      // Register the no-op service worker so Chrome considers the
+      // page installable as a PWA. Wrapped in a feature check + load
+      // handler so it doesn't slow down first paint and so older
+      // browsers without SW support still load the game normally.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+            // Registration failure is non-fatal — the game still
+            // works in a normal tab, you just won't see Chrome's
+            // "Install Twin Hearts" button in the address bar.
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
