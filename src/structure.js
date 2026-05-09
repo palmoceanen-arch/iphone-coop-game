@@ -917,13 +917,15 @@ export function buildRoofCornerMesh() {
   return g;
 }
 
-// World-space size of a single tile in the roof's tile imitation. 6m
-// horizontal × 4m vertical — chunky cel-shaded shingles sized so a
-// typical 5×5m roof reads as a couple of tiles across the slope
-// rather than a fine repeating pattern. Used to compute UVs so the
-// same tile texture tiles cleanly across roofs of any footprint.
-const ROOF_TILE_W = 6.0;
-const ROOF_TILE_H = 4.0;
+// World-space size of one tile-texture-repeat. The texture itself
+// packs a 4×4 grid of clay shingles, so each visible shingle is
+// (ROOF_TILE_W/4 × ROOF_TILE_H/4) m on the mesh. 3×2m repeat = a
+// shingle ~0.75×0.5m, which reads at the right "real clay tile"
+// density from the top-down isometric camera. Used to compute UVs
+// so the same tile texture tiles cleanly across roofs of any
+// footprint.
+const ROOF_TILE_W = 3.0;
+const ROOF_TILE_H = 2.0;
 
 // Single shared grayscale tile-pattern texture. Multiplied against the
 // palette colour set on each material via `material.color = c.base`,
