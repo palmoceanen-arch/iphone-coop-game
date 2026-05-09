@@ -16,7 +16,7 @@
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { TOON_GRADIENT } from './shading.js';
+import { TOON_GRADIENT, ROOF_TOON_GRADIENT } from './shading.js';
 import { spawnProp, getPropKinds } from './models.js';
 
 // Available random roof colours. The palette is exposed by name so the
@@ -1032,10 +1032,16 @@ function getRoofTileMaterial(colorName) {
   if (cached) return cached;
   const c = ROOF_COLOR_PALETTE[colorName] || ROOF_COLOR_PALETTE.darkGreen;
   const tex = getRoofTileTexture();
+  // ROOF_TOON_GRADIENT (vs. the global TOON_GRADIENT used by walls /
+  // trees / rocks) has an extra band split inside the lit hemisphere
+  // so adjacent ~45° slopes hit different cel bands instead of all
+  // landing in one big LIGHT plateau. Without this the roof reads
+  // as flat-shaded even though the same MeshToonMaterial gives walls
+  // crisp light/shadow banding.
   const mat = new THREE.MeshToonMaterial({
     color: c.base,
     map: tex || null,
-    gradientMap: TOON_GRADIENT,
+    gradientMap: ROOF_TOON_GRADIENT,
   });
   ROOF_TILE_MATERIALS.set(colorName, mat);
   return mat;
