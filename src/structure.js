@@ -965,9 +965,11 @@ function getRoofTileTexture() {
   const sideGap = 2;
   // Background fills any pixel not covered by a drawn tile — only
   // visible in the column-gaps and as the "shadow line" tracing the
-  // curved outline of every row's bottom. 0.85 keeps that line in
-  // the same tonal family as the body, never a black groove.
-  const bgShade = 0.85;
+  // curved outline of every row's bottom. 0.93 keeps that line a
+  // hairline shade darker than the body, in the same tonal family
+  // as the palette base — the tile silhouette is visible without
+  // any heavy shadow line under it.
+  const bgShade = 0.93;
   const bg = Math.round(bgShade * 255);
   ctx.fillStyle = `rgb(${bg},${bg},${bg})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
