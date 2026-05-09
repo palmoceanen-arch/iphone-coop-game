@@ -910,14 +910,13 @@ export function buildRoofCornerMesh() {
   return g;
 }
 
-// World-space size of a single tile in the roof's tile imitation. 9m
-// horizontal × 6m vertical so a typical 5×5m roof shows roughly one
-// tile across its slope — chunky, cel-shaded shingles that match the
-// game's blocky silhouette instead of a fine repeating pattern. Used
-// to compute UVs so the same tile texture tiles cleanly across roofs
-// of any footprint.
-const ROOF_TILE_W = 9.0;
-const ROOF_TILE_H = 6.0;
+// World-space size of a single tile in the roof's tile imitation. 6m
+// horizontal × 4m vertical — chunky cel-shaded shingles sized so a
+// typical 5×5m roof reads as a couple of tiles across the slope
+// rather than a fine repeating pattern. Used to compute UVs so the
+// same tile texture tiles cleanly across roofs of any footprint.
+const ROOF_TILE_W = 6.0;
+const ROOF_TILE_H = 4.0;
 
 // Single shared grayscale tile-pattern texture. Multiplied against the
 // palette colour set on each material via `material.color = c.base`,
@@ -970,12 +969,12 @@ function getRoofTileTexture() {
       ctx.fillRect(x, y, w, h);
       // Soft shadow band along the BOTTOM of each tile (where the next
       // row of tiles would overlap this one in real clay roofing).
-      // 0.80 keeps the band in the same tonal family as the body —
-      // visible as a row separator without reading as a hard black
-      // stripe.
-      const shadow = Math.round(Math.max(0, Math.min(255, (0.80 + jitter * 0.5) * 255)));
+      // 0.88 brightness × narrow 10% band keeps the "valley between
+      // tiles" hint subtle — tones in the same family as the body,
+      // never a heavy dark groove.
+      const shadow = Math.round(Math.max(0, Math.min(255, (0.88 + jitter * 0.5) * 255)));
       ctx.fillStyle = `rgb(${shadow},${shadow},${shadow})`;
-      ctx.fillRect(x, y + h - h * 0.22, w, h * 0.22);
+      ctx.fillRect(x, y + h - h * 0.10, w, h * 0.10);
     }
   }
   const tex = new THREE.CanvasTexture(canvas);
