@@ -178,6 +178,31 @@ export const RECIPES = {
     radius: 0.0,
     height: 0.10,
   },
+  // Roof corner — small marker the player drops on each of the four
+  // top corners of a building. Once four markers form an axis-aligned
+  // rectangle at the same y, the game spawns a procedural pitched
+  // roof (kind=`roof_pitched`) bridging the rectangle. Killing any
+  // corner takes the roof down with it. The corner itself has a
+  // collider so it counts as wall-equivalent for fence connections.
+  roof_corner: {
+    name: 'Угол крыши',
+    cost: { wood: 1 },
+    hp: 30,
+    radius: 0.18,
+    height: 0.40,
+  },
+  // Procedural pitched (hip) roof. NOT in RECIPE_ORDER — players never
+  // place this directly; it's auto-spawned the moment four roof_corner
+  // markers complete a rectangle. Cost is paid via the four markers,
+  // so this entry has cost: {} and is exempt from the affordability
+  // check (the build wheel doesn't surface it).
+  roof_pitched: {
+    name: 'Покатая крыша',
+    cost: {},
+    hp: 80,
+    radius: 0.0,                  // walk-through (it's overhead)
+    height: 0.30,
+  },
 };
 
 // Catalog ordering controls the recipe-cycling order in build mode and the
@@ -187,7 +212,7 @@ export const RECIPES = {
 // fences immediately.
 export const RECIPE_ORDER = [
   'fence', 'wall', 'gate', 'planter', 'campfire', 'torch',
-  'wood_wall', 'glass_wall', 'door_full', 'floor_wood',
+  'wood_wall', 'glass_wall', 'door_full', 'floor_wood', 'roof_corner',
 ];
 
 // Burst colour shown when a structure is destroyed — matches its primary
@@ -203,6 +228,8 @@ const BURST_COLOR = {
   glass_wall: 0xb6e6ff,
   door_full: 0x6a4622,
   floor_wood: 0x8c5a2c,
+  roof_corner: 0x8c5a2c,
+  roof_pitched: 0x8c5a2c,
 };
 
 // What a structure is *made of* — used by combat-side code to pick the
@@ -226,6 +253,8 @@ const MATERIAL_BY_KIND = {
   glass_wall: 'stone',            // glass returns to the stone pool on break (closest material slot)
   door_full: 'wood',
   floor_wood: 'wood',
+  roof_corner: 'wood',
+  roof_pitched: 'wood',
 };
 export function structureMaterial(kind) {
   return MATERIAL_BY_KIND[kind] || 'wood';
@@ -664,6 +693,14 @@ export function buildStructureMesh(kind, x, z) {
     }
     return g;
   }
+  if (kind === 'roof_corner') {
+    return buildRoofCornerMesh();
+  }
+  if (kind === 'roof_pitched') {
+    // Default zero-size preview; live roof_pitched structures get
+    // rebuilt with the correct rectangle dimensions from game.js.
+    return buildRoofPitchedMesh(1, 1);
+  }
   // Unknown kind — return an empty group so caller's parenting logic still
   // works without conditional null-checks.
   return g;
@@ -687,23 +724,10 @@ export function buildDoorFullMesh(openDir) {
   panel.position.set(0.50, 1.00, 0);
   panel.castShadow = true; panel.receiveShadow = true;
   door.add(panel);
-  // Two horizontal cross-bands and a vertical stile so the door reads
-  // as a constructed plank door, not a flat slab.
-  const bandGeo = new THREE.BoxGeometry(0.98, 0.10, 0.10);
-  for (const y of [0.40, 1.60]) {
-    const band = new THREE.Mesh(bandGeo, MATERIALS.plankDark);
-    band.position.set(0.50, y, 0);
-    band.castShadow = true; band.receiveShadow = true;
-    door.add(band);
-  }
-  const stile = new THREE.Mesh(
-    new THREE.BoxGeometry(0.10, 1.95, 0.10),
-    MATERIALS.plankDark,
-  );
-  stile.position.set(0.50, 1.00, 0);
-  stile.castShadow = true; stile.receiveShadow = true;
-  door.add(stile);
-  // Round latch knob on the latch end (away from the hinge).
+  // Round latch knob on the latch end (away from the hinge) — only
+  // surface detail kept on the door so the player can tell which
+  // side opens. No contrasting plank trim — door reads as a single
+  // solid colour to match the wood wall it sits between.
   const knob = new THREE.Mesh(
     new THREE.SphereGeometry(0.06, 8, 6),
     MATERIALS.stoneDark,
@@ -743,12 +767,11 @@ export function buildWoodWallMesh(connections) {
   ensureMaterials();
   const c = connections || { N: false, S: false, E: false, W: false };
   const g = new THREE.Group();
-  // Centre post — same width as the fence post but reaching the full
-  // wall height. Slightly darker than the panels so the post reads
-  // as the structural element when a single wall stands isolated.
+  // Centre post — same width as the fence post and the same plank
+  // colour as the panels so the wall reads as a single solid colour.
   const post = new THREE.Mesh(
     new THREE.BoxGeometry(_POST_THICK, _SOLID_WALL_HEIGHT, _POST_THICK),
-    MATERIALS.plankDark,
+    MATERIALS.plank,
   );
   post.position.set(0, _SOLID_WALL_HEIGHT / 2, 0);
   post.castShadow = true; post.receiveShadow = true;
@@ -835,6 +858,93 @@ export function buildGlassWallMesh(connections) {
     stub.receiveShadow = true;
     g.add(stub);
   }
+  return g;
+}
+
+// Small marker the player drops on each of the four top corners of a
+// building. Visually a short tapered post so the player can spot it from
+// the ground and tell which is the "roof side". The pitched roof spawns
+// automatically as soon as four of these complete a rectangle.
+export function buildRoofCornerMesh() {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(
+    new THREE.BoxGeometry(0.30, 0.40, 0.30),
+    MATERIALS.plank,
+  );
+  post.position.set(0, 0.20, 0);
+  post.castShadow = true; post.receiveShadow = true;
+  g.add(post);
+  // Tiny pointer cone on top so the corner reads as "tip of a roof"
+  // before the roof itself spawns.
+  const cap = new THREE.Mesh(
+    new THREE.ConeGeometry(0.22, 0.22, 4),
+    MATERIALS.plank,
+  );
+  cap.position.set(0, 0.51, 0);
+  cap.rotation.y = Math.PI / 4;
+  cap.castShadow = true; cap.receiveShadow = true;
+  g.add(cap);
+  return g;
+}
+
+// Procedural hip-roof bridging an axis-aligned rectangle. width is the
+// rectangle's X extent, depth its Z extent. Apex is centered above the
+// rectangle at a height proportional to the longer side so the pitch is
+// natural-looking regardless of footprint. Caller positions the group
+// at the rectangle's centre on the ground (xz centre, y = corner y +
+// corner height) — the roof mesh extends upward from there.
+export function buildRoofPitchedMesh(width, depth) {
+  ensureMaterials();
+  const g = new THREE.Group();
+  const w = Math.max(0.5, width);
+  const d = Math.max(0.5, depth);
+  // Apex height: half the longer side of the rectangle. Gives ~45° pitch
+  // for square buildings, slightly shallower for rectangular ones.
+  const apexH = Math.max(w, d) * 0.5;
+  // Four base vertices (rectangle corners) + apex.
+  const verts = new Float32Array([
+    -w / 2, 0, -d / 2,    // 0 NW
+    +w / 2, 0, -d / 2,    // 1 NE
+    +w / 2, 0, +d / 2,    // 2 SE
+    -w / 2, 0, +d / 2,    // 3 SW
+    0, apexH, 0,          // 4 apex
+  ]);
+  // Four triangular faces, wound CCW when viewed from outside so face
+  // normals point outward and three.js culls back-faces correctly.
+  const idx = new Uint16Array([
+    0, 4, 1,    // N face
+    1, 4, 2,    // E face
+    2, 4, 3,    // S face
+    3, 4, 0,    // W face
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, MATERIALS.plank);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  g.add(mesh);
+  // Thin under-side plank so a player looking up from inside doesn't
+  // see backface culling holes — same geometry but flipped winding so
+  // the inside is also lit. Same material so the underside reads as
+  // a wooden ceiling.
+  const innerVerts = verts.slice();
+  const innerIdx = new Uint16Array([
+    1, 4, 0,    // N face flipped
+    2, 4, 1,    // E flipped
+    3, 4, 2,    // S flipped
+    0, 4, 3,    // W flipped
+  ]);
+  const innerGeo = new THREE.BufferGeometry();
+  innerGeo.setAttribute('position', new THREE.BufferAttribute(innerVerts, 3));
+  innerGeo.setIndex(new THREE.BufferAttribute(innerIdx, 1));
+  innerGeo.computeVertexNormals();
+  const inner = new THREE.Mesh(innerGeo, MATERIALS.plankDark);
+  inner.castShadow = false;
+  inner.receiveShadow = true;
+  g.add(inner);
   return g;
 }
 

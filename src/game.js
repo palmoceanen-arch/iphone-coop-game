@@ -27,7 +27,7 @@ import { Breakable } from './breakable.js';
 import { Resource, harvestYield } from './resource.js';
 import {
   Structure, RECIPES, buildStructureMesh, buildFenceMesh, buildGateMesh, buildDoorFullMesh,
-  buildWoodWallMesh, buildGlassWallMesh,
+  buildWoodWallMesh, buildGlassWallMesh, buildRoofPitchedMesh,
   GATE_OPEN_RADIUS, structureMaterial,
 } from './structure.js';
 import { BuildController } from './buildMode.js';
@@ -1053,6 +1053,22 @@ export class Game {
         else struct.openDir = s.open ? -1 : 0;
         this._rebuildDoorFullMesh(struct);
         this._rebuildFenceNeighborsOf(struct.pos.x, struct.pos.z, struct.y || 0, 'door_full');
+      } else if (s.kind === 'roof_corner') {
+        // After the corner spawns, search for 3 other corners forming
+        // an axis-aligned rectangle at the same y. If found and no
+        // roof yet exists for it, drop a `roof_pitched` descriptor at
+        // the rectangle's centre — its mesh autoassembles from the
+        // {minX, minZ, maxX, maxZ} bounds.
+        struct._ownerY = struct.y || 0;
+        this._tryFormRoof(struct.pos.x, struct.pos.z, struct.y || 0);
+      } else if (s.kind === 'roof_pitched') {
+        // Roof descriptor carries the rectangle bounds; rebuild the
+        // mesh with the right dimensions and centre it above the
+        // bounding rectangle.
+        struct._roofBounds = {
+          minX: s.minX, minZ: s.minZ, maxX: s.maxX, maxZ: s.maxZ,
+        };
+        this._rebuildRoofPitchedMesh(struct);
       }
     }
   }
@@ -1191,6 +1207,159 @@ export class Game {
         ? GATE_OPEN_RADIUS
         : (RECIPES.gate?.radius || 0.45);
     }
+  }
+
+  // Rebuild a roof_pitched mesh from its descriptor's rectangle bounds.
+  // The mesh is centred on (cx,cz) and parented at the corner-y so the
+  // apex hovers above the centre at apexH = max(w,d)/2. Caller stores
+  // the bounds on struct._roofBounds before the first call.
+  _rebuildRoofPitchedMesh(struct) {
+    if (!struct || struct.kind !== 'roof_pitched' || !struct.alive || !struct.group) return;
+    const b = struct._roofBounds;
+    if (!b) return;
+    const w = b.maxX - b.minX;
+    const d = b.maxZ - b.minZ;
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const old = struct.mesh;
+    if (old && old.parent) old.parent.remove(old);
+    const next = buildRoofPitchedMesh(w, d);
+    next.position.set(cx, struct.y || 0, cz);
+    next.rotation.y = 0;
+    struct.group.add(next);
+    struct.mesh = next;
+    struct._restRotZ = next.rotation.z;
+    // The structure's authoritative pos was the descriptor's (x,z).
+    // For the spawn descriptor we used the rectangle centre, but
+    // floats can drift; sync mesh-side authoritative position back so
+    // hit-tests and minimap markers locate the roof centre.
+    struct.pos.x = cx;
+    struct.pos.z = cz;
+  }
+
+  // Search for a complete axis-aligned rectangle of 4 roof_corners
+  // including (newX, newZ, newY) at the same y. If found AND no
+  // roof_pitched already covers it, spawn one.
+  _tryFormRoof(newX, newZ, newY) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    // Gather all roof_corner descriptors at the same y from the chunks
+    // around (newX, newZ). 5×5 chunks is plenty even for a large
+    // building since corners are placed on cell edges and chunks are
+    // 16m wide (default).
+    const cornerDescs = [];
+    const seen = new Set();
+    const radius = 32;            // m — covers buildings up to ~64m on a side
+    for (let ox = -radius; ox <= radius; ox += 8) {
+      for (let oz = -radius; oz <= radius; oz += 8) {
+        const ck = this.world.chunkKeyOf(newX + ox, newZ + oz);
+        if (seen.has(ck)) continue;
+        seen.add(ck);
+        const arr = this.world.placedStructures.get(ck);
+        if (!arr) continue;
+        for (const d of arr) {
+          if (d.kind !== 'roof_corner') continue;
+          if (Math.abs((d.y || 0) - newY) >= yEps) continue;
+          cornerDescs.push(d);
+        }
+      }
+    }
+    if (cornerDescs.length < 4) return;
+    // For each pair of OTHER corners, check if they form a rectangle
+    // with (newX, newZ). Specifically: looking for OA along the same
+    // X (== newX), OB along the same Z (== newZ), and a 4th corner at
+    // (OB.x, OA.z). Iterate distinct pairs only.
+    for (let i = 0; i < cornerDescs.length; i++) {
+      const A = cornerDescs[i];
+      if (Math.abs(A.x - newX) >= eps) continue;
+      if (Math.abs(A.z - newZ) < eps) continue;     // same point as new
+      for (let j = 0; j < cornerDescs.length; j++) {
+        if (i === j) continue;
+        const B = cornerDescs[j];
+        if (Math.abs(B.z - newZ) >= eps) continue;
+        if (Math.abs(B.x - newX) < eps) continue;
+        // Rectangle is (newX,newZ)-(B.x,newZ)-(B.x,A.z)-(newX,A.z).
+        // We need a 4th corner at (B.x, A.z).
+        let fourth = null;
+        for (const C of cornerDescs) {
+          if (Math.abs(C.x - B.x) < eps && Math.abs(C.z - A.z) < eps) {
+            fourth = C; break;
+          }
+        }
+        if (!fourth) continue;
+        const minX = Math.min(newX, B.x);
+        const maxX = Math.max(newX, B.x);
+        const minZ = Math.min(newZ, A.z);
+        const maxZ = Math.max(newZ, A.z);
+        // Reject zero-area or single-cell-edge rectangles — at least
+        // 1m on each side so the apex height is non-trivial.
+        if ((maxX - minX) < 0.9 || (maxZ - minZ) < 0.9) continue;
+        // De-dupe: skip if a roof already exists with these bounds.
+        if (this._roofExistsFor(minX, minZ, maxX, maxZ, newY)) continue;
+        // Spawn the roof. Anchor at the rectangle centre so the
+        // descriptor's chunkKey lands on a sensible chunk.
+        const cx = (minX + maxX) / 2;
+        const cz = (minZ + maxZ) / 2;
+        const roofRecipe = RECIPES.roof_pitched;
+        this.world.placeStructure(
+          cx, cz, 'roof_pitched', 0,
+          roofRecipe?.hp ?? 80,
+          newY,
+          { minX, minZ, maxX, maxZ },
+        );
+        return;
+      }
+    }
+  }
+
+  // True if any persisted roof_pitched descriptor in chunks near
+  // (minX,minZ)-(maxX,maxZ) has matching bounds at the same y.
+  _roofExistsFor(minX, minZ, maxX, maxZ, y) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const seen = new Set();
+    const cx = (minX + maxX) / 2;
+    const cz = (minZ + maxZ) / 2;
+    for (let ox = -32; ox <= 32; ox += 8) {
+      for (let oz = -32; oz <= 32; oz += 8) {
+        const ck = this.world.chunkKeyOf(cx + ox, cz + oz);
+        if (seen.has(ck)) continue;
+        seen.add(ck);
+        const arr = this.world.placedStructures.get(ck);
+        if (!arr) continue;
+        for (const d of arr) {
+          if (d.kind !== 'roof_pitched') continue;
+          if (Math.abs((d.y || 0) - y) >= yEps) continue;
+          if (Math.abs(d.minX - minX) < eps
+              && Math.abs(d.minZ - minZ) < eps
+              && Math.abs(d.maxX - maxX) < eps
+              && Math.abs(d.maxZ - maxZ) < eps) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Find every live roof_pitched whose rectangle includes the corner at
+  // (cx,cz,cy). Used to drop the roof when its supporting corner is
+  // destroyed.
+  _roofsAtCorner(cx, cz, cy) {
+    const eps = 0.15;
+    const yEps = 0.5;
+    const out = [];
+    for (const s of this.structures) {
+      if (!s.alive) continue;
+      if (s.kind !== 'roof_pitched') continue;
+      if (Math.abs((s.y || 0) - cy) >= yEps) continue;
+      const b = s._roofBounds;
+      if (!b) continue;
+      const onMinX = Math.abs(b.minX - cx) < eps;
+      const onMaxX = Math.abs(b.maxX - cx) < eps;
+      const onMinZ = Math.abs(b.minZ - cz) < eps;
+      const onMaxZ = Math.abs(b.maxZ - cz) < eps;
+      if ((onMinX || onMaxX) && (onMinZ || onMaxZ)) out.push(s);
+    }
+    return out;
   }
 
   // Sibling of `_rebuildGateMesh` for the full-cell `door_full` recipe.
@@ -2469,6 +2638,24 @@ export class Game {
             || s.kind === 'wood_wall' || s.kind === 'glass_wall'
             || s.kind === 'door_full') {
           this._rebuildFenceNeighborsOf(s.pos.x, s.pos.z, s.y || 0, s.kind);
+        }
+        // A roof corner anchors a procedural roof above its building.
+        // Killing the corner pulls the rest of the roof down with it
+        // — find every roof_pitched whose rectangle uses this corner
+        // and mark them dead. The compactInPlace below will sweep
+        // both the corner and the roofs out of `this.structures` in
+        // the same pass.
+        if (s.kind === 'roof_corner') {
+          const roofs = this._roofsAtCorner(s.pos.x, s.pos.z, s.y || 0);
+          for (const r of roofs) {
+            r.alive = false;
+            r.hp = 0;
+            r.removeCollider();
+            r.destroyMesh();
+            if (r.chunkKey) {
+              this.world.forgetStructure(r.chunkKey, r.pos.x, r.pos.z, r.y || 0);
+            }
+          }
         }
         // Drop any attached Crop too — the planter mesh is gone so no
         // visible mesh remains, but the Crop entry would otherwise linger

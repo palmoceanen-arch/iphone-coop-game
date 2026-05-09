@@ -26,6 +26,7 @@ const RECIPE_ICONS = {
   glass_wall: '🪟',
   door_full: '🚪',
   floor_wood: '🟧',
+  roof_corner: '🔺',
 };
 
 // Pretty-print the recipe cost as "N дерева · M камня" so the slice
