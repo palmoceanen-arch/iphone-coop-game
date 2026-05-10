@@ -52,7 +52,7 @@ const TREE_BURST_COLOR = 0x6fbf5b;
 const ROCK_BURST_COLOR = 0x8a8f99;
 
 // Regrowth window for chopped trees, expressed in *game* days (the world
-// runs on a 480s day cycle; 10 game days ≈ 80 minutes of real-time play).
+// runs on a 1920s day cycle; 10 game days ≈ 320 minutes of real-time play).
 // Stored as a constant here so the design tuning lives next to the entity.
 // Rocks never regrow — once smashed, that ore vein is gone for the chunk's
 // lifetime; chunk reload regenerates the world normally.
@@ -146,7 +146,7 @@ export class Resource {
   // Per-frame idle / hit-reaction wobble + stump regrow timer.
   // `dayLength` is `world.dayLength` (in real-time seconds) so the regrow
   // threshold tracks game-time, not wall-clock.
-  update(dt, dayLength = 480) {
+  update(dt, dayLength = 1920) {
     if (this.state === 'stump') {
       this.regrowT += dt;
       const threshold = TREE_REGROW_GAME_DAYS * dayLength;

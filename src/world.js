@@ -509,7 +509,7 @@ export class World {
     this._buildCampfire();
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
-    this.dayLength = 480;
+    this.dayLength = 1920;
     this.update(0);
   }
 
