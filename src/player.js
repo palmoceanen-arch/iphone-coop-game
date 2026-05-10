@@ -293,6 +293,7 @@ export class Player {
     this.ability = null;    // ability id
     this.abilityCd = 0;     // remaining cooldown in seconds
     this._itemSpeedMult = 1;
+    this._itemAtkSpeedMult = 1;
     this._lastIntent = null;
     // M3 farming: which crop to plant when the player taps interact on a
     // tilled planter. Cycled with Q (P1) / U (P2). Default differs per
@@ -481,6 +482,7 @@ export class Player {
     let m = this.stats.attackSpeedMult;
     if (this._berserk) m *= (1 / this._berserk.atk);
     if (this._foodBuff && this._foodBuff.kind === 'atkSpeed') m *= (1 / (1 + this._foodBuff.value));
+    if (this._itemAtkSpeedMult && this._itemAtkSpeedMult > 1) m *= (1 / this._itemAtkSpeedMult);
     return m;
   }
 
@@ -1735,6 +1737,10 @@ export class Player {
       console.warn('[ability cast]', this.ability, err);
       return false;
     }
+    // Notify on-cast item hooks (Sheen-style empower-next-hit buffs).
+    // Runs after the cast resolves so the cast can't be aborted mid-way
+    // and leave a dangling buff.
+    runItemHook(this, 'onCast', { ability: this.ability, partner: ctx?.partner });
     // Per-character ability cd multiplier (Mage = 0.5, everyone
     // else = 1.0). The HUD reads `def.cd * abilityCdMult` for cdMax
     // so the cooldown ring still starts full and ticks to empty
@@ -1746,19 +1752,19 @@ export class Player {
   applyUpgrade(kind) {
     const lvl = this.upgradeLevels[kind] || 0;
     this.upgradeLevels[kind] = lvl + 1;
-    if (kind === 'damage') this.stats.damage = Math.round((12 + (lvl + 1) * 6) * 100) / 100;
+    if (kind === 'damage') this.stats.damage = Math.round((12 + (lvl + 1) * 2) * 100) / 100;
     if (kind === 'hp') {
       const before = this.maxHP;
-      this.maxHP = 100 + (lvl + 1) * 30;
+      this.maxHP = 100 + (lvl + 1) * 10;
       this.hp += (this.maxHP - before);
     }
-    if (kind === 'speed') this.stats.speed = 6.0 + (lvl + 1) * 0.6;
+    if (kind === 'speed') this.stats.speed = 6.0 + (lvl + 1) * 0.1;
     if (kind === 'attackSpeed') {
       // Cooldown lives on the weapon profile; we apply attack-speed upgrades
       // as a multiplier so they stack with whatever weapon is held. Floor at
       // 0.27 so even a maxed-out fast weapon doesn't outrun the swing
       // animation it triggers.
-      this.stats.attackSpeedMult = Math.max(0.27, 1.0 - (lvl + 1) * 0.13);
+      this.stats.attackSpeedMult = Math.max(0.27, 1.0 - (lvl + 1) * 0.04);
     }
   }
 }

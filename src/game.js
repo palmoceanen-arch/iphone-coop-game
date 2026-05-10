@@ -2241,6 +2241,13 @@ export class Game {
       ctx.crit = true;
       ctx.dmgMult *= 2;
     }
+    // Infinity Edge — upgrades the stock ×2 crit multiplier to ×2.5/×3/×3.5.
+    // Applied after all crit-roll sources (item, forceCrit, IE's own chance)
+    // resolve so any crit gets the boost regardless of which one fired it.
+    const ieN = player.items?.infinity_edge || 0;
+    if (ieN > 0 && ctx.crit) {
+      ctx.dmgMult *= ieN >= 5 ? 1.75 : ieN >= 3 ? 1.5 : 1.25;
+    }
     // Mage weapon enchant — every connecting attack while the enchant
     // is active gets a flat damage bonus (read from the enchant state
     // so all the tuning lives in player.js) on top of any element-

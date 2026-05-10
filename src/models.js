@@ -1225,7 +1225,7 @@ export const WEAPONS = {
       speed: 18,
       life: 0.65,            // ~11.7m max range
       radius: 0.18,          // smaller than icebolt's 0.25
-      damageMult: 1.0,
+      damageMult: 0.5,
       knockback: 4,
     },
   },
@@ -1251,7 +1251,7 @@ export const WEAPONS = {
       speed: 22,
       life: 0.55,            // ~12.1m max range
       radius: 0.14,          // smallest projectile in the game
-      damageMult: 0.75,
+      damageMult: 0.38,
       knockback: 3,
     },
   },
