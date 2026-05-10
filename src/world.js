@@ -2048,7 +2048,7 @@ export class World {
     if (this._waterMaterial && this._waterMaterial.userData.waterUniforms) {
       this._waterMaterial.userData.waterUniforms.uTime.value += dt;
     }
-    this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
+    this.dayTime = 0.6; // TEMP: frozen for shadow testing
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
     //   13:30 peak    (dayTime 0.5625) → sunY = +1, sunX =  0 (zenith)
