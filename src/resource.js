@@ -193,7 +193,7 @@ export class Resource {
     ensureStumpAssets();
     const stump = new THREE.Mesh(STUMP_GEOMETRY, STUMP_MATERIAL);
     stump.castShadow = true;
-    stump.receiveShadow = false;
+    stump.receiveShadow = true;
     // Cylinder is centred on its midpoint, so y = half-height to sit flush
     // on the ground. Matches the small pentagonal stump geometry above
     // (height ≈ 0.105 → y = 0.0525).

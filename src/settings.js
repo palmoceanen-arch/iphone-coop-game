@@ -11,12 +11,17 @@ import * as THREE from 'three';
 const STORAGE_KEY = 'twinhearts.settings.v1';
 
 // Shadow map size per quality bucket. 0 = shadows disabled.
+// The shadow frustum (world.js) covers ~100m so texel densities are:
+//   low  512  → 0.195 m/texel   medium 1024 → 0.098 m/texel
+//   high 2048 → 0.049 m/texel   ultra  4096 → 0.024 m/texel
+// Ultra is on par with the old 8192² / 160m setup (0.020 m/texel)
+// at ¼ the GPU cost thanks to the tighter frustum.
 const SHADOW_SIZE = {
   off: 0,
-  low: 1024,
-  medium: 2048,
-  high: 4096,
-  ultra: 8192,
+  low: 512,
+  medium: 1024,
+  high: 2048,
+  ultra: 4096,
 };
 
 const SHADOW_TYPE_MAP = {
