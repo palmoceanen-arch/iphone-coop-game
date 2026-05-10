@@ -15,6 +15,100 @@
 
 import * as THREE from 'three';
 
+// ---------------------------------------------------------------------------
+// Cel-shading shadow patches.
+//
+// Out of the box Three.js MeshToonMaterial handles shadow mapping like PBR:
+// the shadow factor (0-1, smooth from PCF) multiplies directLight.color
+// AFTER the toon gradient lookup. That has two problems for cel-shading:
+//
+//   1. Shadow edges are soft (PCF gradient), not the crisp step the rest
+//      of the toon banding uses.
+//   2. Shadow areas get only ambient light (very dark, ~18% brightness),
+//      instead of the toon gradient's shadow band (~22% + ambient), so
+//      the shadow colour doesn't match the rest of the cel palette.
+//
+// Fix: intercept the shadow factor, binarise it (step at 0.5 for a hard
+// edge), then feed it into the gradient-map lookup so shadow areas land
+// in the gradient's shadow band instead of being ambient-only.
+//
+// We patch the ShaderChunks at import-time — before any material compiles
+// — so every MeshToonMaterial in the game picks up the change.
+// ---------------------------------------------------------------------------
+
+// 1. lights_toon_pars_fragment — declare bridge variables + rewrite
+//    RE_Direct_Toon to use the cel-shading shadow path.
+THREE.ShaderChunk.lights_toon_pars_fragment = /* glsl */ `
+varying vec3 vViewPosition;
+
+// Bridge variables set by the directional-light loop in lights_fragment_begin
+// before RE_Direct_Toon is called. They carry the unshadowed light colour
+// and the binarised shadow factor so RE_Direct_Toon can route them through
+// the gradient map.
+vec3  celUnshadowedDirColor = vec3(0.0);
+float celDirShadow          = 1.0;
+
+struct ToonMaterial {
+	vec3 diffuseColor;
+};
+
+void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {
+
+	// Is this call from a directional light that populated the bridge vars?
+	bool hasCelShadow = dot(celUnshadowedDirColor, celUnshadowedDirColor) > 0.001;
+
+	if ( hasCelShadow ) {
+		// Cel-shading path: push dotNL into shadow band when in shadow.
+		float dotNL = dot( geometryNormal, directLight.direction );
+		float adjustedDotNL = mix( -1.0, dotNL, celDirShadow );
+		vec2 coord = vec2( adjustedDotNL * 0.5 + 0.5, 0.0 );
+		#ifdef USE_GRADIENTMAP
+			vec3 irradiance = vec3( texture2D( gradientMap, coord ).r );
+		#else
+			vec2 fw = fwidth( coord ) * 0.5;
+			vec3 irradiance = mix( vec3( 0.7 ), vec3( 1.0 ), smoothstep( 0.7 - fw.x, 0.7 + fw.x, coord.x ) );
+		#endif
+		irradiance *= celUnshadowedDirColor;
+		reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
+	} else {
+		// Standard toon path (point lights, spot lights, no-shadow cases).
+		vec3 irradiance = getGradientIrradiance( geometryNormal, directLight.direction ) * directLight.color;
+		reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
+	}
+}
+
+void RE_IndirectDiffuse_Toon( const in vec3 irradiance, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {
+
+	reflectedLight.indirectDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );
+
+}
+
+#define RE_Direct				RE_Direct_Toon
+#define RE_IndirectDiffuse		RE_IndirectDiffuse_Toon
+`;
+
+// 2. lights_fragment_begin — save the unshadowed colour before the shadow
+//    line, binarise the shadow factor, and still multiply it into
+//    directLight.color so the rest of the pipeline (debug, etc.) is
+//    consistent.
+{
+  const chunk = THREE.ShaderChunk.lights_fragment_begin;
+  THREE.ShaderChunk.lights_fragment_begin = chunk
+    // After getDirectionalLightInfo sets directLight.color, save it.
+    .replace(
+      'getDirectionalLightInfo( directionalLight, directLight );',
+      'getDirectionalLightInfo( directionalLight, directLight );\n' +
+      '\t\tcelUnshadowedDirColor = directLight.color;\n' +
+      '\t\tcelDirShadow = 1.0;'
+    )
+    // Binarise the shadow factor and store it in the bridge variable.
+    .replace(
+      'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;',
+      'celDirShadow = ( directLight.visible && receiveShadow ) ? step( 0.5, getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) ) : 1.0;\n' +
+      '\t\tdirectLight.color *= celDirShadow;'
+    );
+}
+
 function buildToonGradient() {
   // 16 pixels: 2 shadow + 5 midtone + 9 light  ≈ 12% / 31% / 56% — close to
   // the requested 10/30/60 split. Higher contrast between bands so the cel
