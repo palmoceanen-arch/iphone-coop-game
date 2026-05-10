@@ -28,9 +28,18 @@ import * as THREE from 'three';
 //      instead of the toon gradient's shadow band (~22% + ambient), so
 //      the shadow colour doesn't match the rest of the cel palette.
 //
-// Fix: intercept the shadow factor, binarise it (step at 0.5 for a hard
-// edge), then feed it into the gradient-map lookup so shadow areas land
-// in the gradient's shadow band instead of being ambient-only.
+// Fix: intercept the shadow factor, quantise it with a tight smoothstep
+// (nearly binary but with a narrow anti-jitter band), then feed it into
+// the gradient-map lookup so shadow areas land in the gradient's shadow
+// band instead of being ambient-only.
+//
+// Why smoothstep instead of step?  The sun arc advances every frame and
+// the shadow camera is texel-snapped, so shadow boundaries shift by one
+// texel at each snap crossing.  A hard step(0.5) makes these discrete
+// jumps visible as pixel-level flickering.  smoothstep(0.3, 0.7) adds a
+// ~2-3 texel transition zone that absorbs micro-shifts while still
+// looking crisp — the NearestFilter gradient map quantises any
+// intermediate value to the nearest toon band anyway.
 //
 // We patch the ShaderChunks at import-time — before any material compiles
 // — so every MeshToonMaterial in the game picks up the change.
@@ -88,9 +97,8 @@ void RE_IndirectDiffuse_Toon( const in vec3 irradiance, const in vec3 geometryPo
 `;
 
 // 2. lights_fragment_begin — save the unshadowed colour before the shadow
-//    line, binarise the shadow factor, and still multiply it into
-//    directLight.color so the rest of the pipeline (debug, etc.) is
-//    consistent.
+//    line, quantise the shadow factor with smoothstep, and still multiply
+//    it into directLight.color so the rest of the pipeline is consistent.
 {
   const chunk = THREE.ShaderChunk.lights_fragment_begin;
   THREE.ShaderChunk.lights_fragment_begin = chunk
@@ -101,10 +109,12 @@ void RE_IndirectDiffuse_Toon( const in vec3 irradiance, const in vec3 geometryPo
       '\t\tcelUnshadowedDirColor = directLight.color;\n' +
       '\t\tcelDirShadow = 1.0;'
     )
-    // Binarise the shadow factor and store it in the bridge variable.
+    // Quantise the shadow factor with a tight smoothstep and store it in
+    // the bridge variable.  smoothstep(0.3, 0.7) is nearly binary but the
+    // narrow ramp absorbs sub-texel jitter from the moving sun.
     .replace(
       'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;',
-      'celDirShadow = ( directLight.visible && receiveShadow ) ? step( 0.5, getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) ) : 1.0;\n' +
+      'celDirShadow = ( directLight.visible && receiveShadow ) ? smoothstep( 0.3, 0.7, getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) ) : 1.0;\n' +
       '\t\tdirectLight.color *= celDirShadow;'
     );
 }
