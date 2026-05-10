@@ -32,8 +32,8 @@ import { TOON_GRADIENT } from './shading.js';
 // swings and breaks a rock in 6-8. Higher-damage / late-game weapons should
 // tear through them faster, which is fine — the gathering loop scales with
 // the rest of the player's combat power.
-export const TREE_HP = 40;
-export const ROCK_HP = 60;
+export const TREE_HP = 100;
+export const ROCK_HP = 150;
 
 // Yield ranges (inclusive, integer) per harvest. Axe-equipped players get a
 // +25% wood multiplier — see the resolver in `harvestYield()`.
