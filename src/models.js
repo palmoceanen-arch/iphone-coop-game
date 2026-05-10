@@ -486,7 +486,7 @@ export function preloadModels(onProgress) {
         gltf.scene.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
-            obj.receiveShadow = true;
+            obj.receiveShadow = false;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const replaced = mats.map((m) => {
               if (!m) return m;
@@ -533,7 +533,7 @@ export function preloadModels(onProgress) {
         root.traverse((obj) => {
           if (obj.isMesh) {
             obj.castShadow = true;
-            obj.receiveShadow = true;
+            obj.receiveShadow = false;
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             const replaced = mats.map((m) => m ? toToonMaterial(m) : m);
             obj.material = Array.isArray(obj.material) ? replaced : replaced[0];
