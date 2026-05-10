@@ -2241,12 +2241,14 @@ export class Game {
       ctx.crit = true;
       ctx.dmgMult *= 2;
     }
-    // Infinity Edge — upgrades the stock ×2 crit multiplier to ×2.5/×3/×3.5.
+    // Infinity Edge — upgrades the stock ×2 crit multiplier to ×2.10/×2.20/×2.30.
     // Applied after all crit-roll sources (item, forceCrit, IE's own chance)
     // resolve so any crit gets the boost regardless of which one fired it.
+    // Multiplier deliberately gentle (max +15% on top of ×2 = ×2.30) so a
+    // fully stacked legendary doesn't blow past the +30% damage soft-cap.
     const ieN = player.items?.infinity_edge || 0;
     if (ieN > 0 && ctx.crit) {
-      ctx.dmgMult *= ieN >= 5 ? 1.75 : ieN >= 3 ? 1.5 : 1.25;
+      ctx.dmgMult *= ieN >= 5 ? 1.15 : ieN >= 3 ? 1.10 : 1.05;
     }
     // Mage weapon enchant — every connecting attack while the enchant
     // is active gets a flat damage bonus (read from the enchant state

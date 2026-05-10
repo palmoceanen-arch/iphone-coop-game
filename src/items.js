@@ -106,7 +106,7 @@ export const ITEMS = [
   {
     id: 'pyromancer', name: 'Уголёк феникса', icon: 'flame', rarity: 'common', maxStacks: MAX_STACKS,
     element: 'fire',
-    desc: 'Огненные способности (Фаербол) сильнее. 1 стак: +15% урона. 3: +35%. 5: +60%.',
+    desc: 'Огненные способности (Фаербол) сильнее. 1 стак: +6% урона. 3: +12%. 5: +20%.',
     // No combat hooks — applied at ability cast time via elementDamageMult().
     hooks: {},
   },
@@ -114,14 +114,14 @@ export const ITEMS = [
   // ---- uncommon -------------------------------------------------------
   {
     id: 'echo', name: 'Лук эхо', icon: 'bow', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'Удар иногда повторяется по другому врагу. 1 стак: 20% шанс / 50% урона. 3: 35% / 50%. 5: 55% / 65%.',
+    desc: 'Удар иногда повторяется по другому врагу. 1 стак: 15% шанс / 30% урона. 3: 25% / 30%. 5: 35% / 40%.',
     hooks: {
       onHit(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || ctx.echo) return;
         const t = tierOf(n);
-        const p = t === 2 ? 0.55 : t === 1 ? 0.35 : 0.20;
-        const mult = t === 2 ? 0.65 : 0.50;
+        const p = t === 2 ? 0.35 : t === 1 ? 0.25 : 0.15;
+        const mult = t === 2 ? 0.40 : 0.30;
         if (!chance(p)) return;
         const list = ctx.enemyList || [];
         let best = null, bestD = 5;
@@ -138,24 +138,24 @@ export const ITEMS = [
   },
   {
     id: 'rage', name: 'Ярость берсерка', icon: 'flame', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'Бьёшь сильнее, когда тебя мало HP (меньше половины). 1 стак: +15% урона. 3: +30%. 5: +60%.',
+    desc: 'Бьёшь сильнее, когда тебя мало HP (меньше половины). 1 стак: +6% урона. 3: +12%. 5: +20%.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         if (player.hp >= player.maxHP * 0.5) return;
-        ctx.dmgMult *= 1 + pick(n, [0.15, 0.30, 0.60]);
+        ctx.dmgMult *= 1 + pick(n, [0.06, 0.12, 0.20]);
       },
     },
   },
   {
     id: 'crit', name: 'Молот разлома', icon: 'hammer', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'Шанс крита (×2 урон). 1 стак: 10%. 3: 20%. 5: 35%.',
+    desc: 'Шанс крита (×2 урон). 1 стак: 6%. 3: 12%. 5: 20%.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const p = pick(n, [0.10, 0.20, 0.35]);
+        const p = pick(n, [0.06, 0.12, 0.20]);
         if (chance(p)) { ctx.crit = true; ctx.dmgMult *= 2; }
       },
     },
@@ -175,14 +175,14 @@ export const ITEMS = [
   },
   {
     id: 'doubleStrike', name: 'Мерцающий клинок', icon: 'bolt', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'Шанс ударить повторно за 40% урона. 1 стак: 20%. 3: 35%. 5: 55%.',
+    desc: 'Шанс ударить повторно за 30% урона. 1 стак: 15%. 3: 25%. 5: 35%.',
     hooks: {
       onHit(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || ctx.echo) return;
-        const p = pick(n, [0.20, 0.35, 0.55]);
+        const p = pick(n, [0.15, 0.25, 0.35]);
         if (chance(p)) {
-          ctx.enemy.takeDamage(ctx.dmg * 0.4, player.pos.x, player.pos.z, 3);
+          ctx.enemy.takeDamage(ctx.dmg * 0.3, player.pos.x, player.pos.z, 3);
         }
       },
     },
@@ -213,7 +213,7 @@ export const ITEMS = [
   {
     id: 'cryomancer', name: 'Сердце морозов', icon: 'snowflake', rarity: 'uncommon', maxStacks: MAX_STACKS,
     element: 'ice',
-    desc: 'Ледяные способности (Ледяная стрела, Замедление) сильнее и дольше. 1 стак: +15% урона, +0.4с заморозки. 3: +35%, +0.8с. 5: +60%, +1.2с.',
+    desc: 'Ледяные способности (Ледяная стрела, Замедление) сильнее и дольше. 1 стак: +8% урона, +0.3с заморозки. 3: +14%, +0.6с. 5: +22%, +1.0с.',
     hooks: {},
   },
 
@@ -245,13 +245,13 @@ export const ITEMS = [
   },
   {
     id: 'companion', name: 'Дружеский амулет', icon: 'handshake', rarity: 'rare', maxStacks: MAX_STACKS,
-    desc: 'Бьёшь сильнее, когда напарник в 5м. 1 стак: +15%. 3: +35%. 5: +70% урона.',
+    desc: 'Бьёшь сильнее, когда напарник в 5м. 1 стак: +8%. 3: +16%. 5: +25% урона.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         if (partnerDist(player, ctx) <= 5) {
-          ctx.dmgMult *= 1 + pick(n, [0.15, 0.35, 0.70]);
+          ctx.dmgMult *= 1 + pick(n, [0.08, 0.16, 0.25]);
         }
       },
     },
@@ -259,20 +259,20 @@ export const ITEMS = [
   {
     id: 'stormcaller', name: 'Жезл бури', icon: 'bolt', rarity: 'rare', maxStacks: MAX_STACKS,
     element: 'lightning',
-    desc: 'Молнии (Цепная молния) сильнее, цепная молния прыгает на больше целей. 1 стак: +20% урона. 3: +40%, +1 цель. 5: +70%, +2 цели.',
+    desc: 'Молнии (Цепная молния) сильнее, цепная молния прыгает на больше целей. 1 стак: +10% урона. 3: +20%, +1 цель. 5: +30%, +2 цели.',
     hooks: {},
   },
 
   // ---- legendary -----------------------------------------------------
   {
     id: 'thunder', name: 'Молот Тора', icon: 'trident', rarity: 'legendary', maxStacks: MAX_STACKS,
-    desc: 'Каждый N-й удар — молния по площади. 1 стак: каждый 8-й, 20 урона, 2.5м. 3: каждый 5-й, 40, 3м. 5: каждый 3-й, 65, 3.5м.',
+    desc: 'Каждый N-й удар — молния по площади. 1 стак: каждый 10-й, 15 урона, 2.5м. 3: каждый 7-й, 25, 3м. 5: каждый 5-й, 35, 3.5м.',
     hooks: {
       onHit(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const need = pick(n, [8, 5, 3]);
-        const dmg = pick(n, [20, 40, 65]);
+        const need = pick(n, [10, 7, 5]);
+        const dmg = pick(n, [15, 25, 35]);
         const r = pick(n, [2.5, 3.0, 3.5]);
         player._thunderCount = (player._thunderCount || 0) + 1;
         if (player._thunderCount < need) return;
@@ -295,14 +295,14 @@ export const ITEMS = [
   },
   {
     id: 'bond', name: 'Резонатор бонда', icon: 'heart', rarity: 'legendary', maxStacks: MAX_STACKS,
-    desc: 'Бьёшь сильнее, пока поводок натянут (далеко от напарника). 1 стак: +25%. 3: +50%. 5: +90% урона.',
+    desc: 'Бьёшь сильнее, пока поводок натянут (далеко от напарника). 1 стак: +12%. 3: +22%. 5: +30% урона.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         const d = partnerDist(player, ctx);
         if (d > 12) {
-          ctx.dmgMult *= 1 + pick(n, [0.25, 0.50, 0.90]);
+          ctx.dmgMult *= 1 + pick(n, [0.12, 0.22, 0.30]);
         }
       },
     },
@@ -318,7 +318,7 @@ export const ITEMS = [
   // Distance-conditional damage — rewards staying out of melee range.
   {
     id: 'headshot', name: 'Прицел снайпера', icon: 'bow', rarity: 'common', maxStacks: MAX_STACKS,
-    desc: 'По цели дальше 5м удар сильнее. 1 стак: +10%. 3: +20%. 5: +35%.',
+    desc: 'По цели дальше 5м удар сильнее. 1 стак: +4%. 3: +8%. 5: +15%.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
@@ -326,7 +326,7 @@ export const ITEMS = [
         const dx = ctx.enemy.pos.x - player.pos.x;
         const dz = ctx.enemy.pos.z - player.pos.z;
         if (Math.hypot(dx, dz) <= 5) return;
-        ctx.dmgMult *= 1 + pick(n, [0.10, 0.20, 0.35]);
+        ctx.dmgMult *= 1 + pick(n, [0.04, 0.08, 0.15]);
       },
     },
   },
@@ -366,12 +366,12 @@ export const ITEMS = [
   // Charge expires after 5s so it can't be banked indefinitely.
   {
     id: 'sheen', name: 'Шин', icon: 'sparkle', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'После каста следующий удар сильнее (1 заряд, 5с). 1 стак: +50%. 3: +90%. 5: +140%.',
+    desc: 'После каста следующий удар сильнее (1 заряд, 5с). 1 стак: +12%. 3: +20%. 5: +30%.',
     hooks: {
       onCast(player) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const bonus = pick(n, [0.50, 0.90, 1.40]);
+        const bonus = pick(n, [0.12, 0.20, 0.30]);
         player._sheenCharge = { mult: 1 + bonus, ttl: 5 };
       },
       onAttack(player, ctx) {
@@ -408,7 +408,7 @@ export const ITEMS = [
   // requiring a separate ability cast.
   {
     id: 'standstill', name: 'Активная перезарядка', icon: 'bolt', rarity: 'uncommon', maxStacks: MAX_STACKS,
-    desc: 'После 1с без движения следующий удар сильнее. 1 стак: +30%. 3: +60%. 5: +100%.',
+    desc: 'После 1с без движения следующий удар сильнее. 1 стак: +10%. 3: +18%. 5: +28%.',
     hooks: {
       onTick(player, ctx) {
         const n = player.items[this.id] || 0;
@@ -428,7 +428,7 @@ export const ITEMS = [
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || !player._standstillReady) return;
-        ctx.dmgMult *= 1 + pick(n, [0.30, 0.60, 1.00]);
+        ctx.dmgMult *= 1 + pick(n, [0.10, 0.18, 0.28]);
         player._standstillReady = false;
         player._standstillT = 0;
       },
@@ -469,15 +469,15 @@ export const ITEMS = [
   // animation can still keep up at the floor of `attackSpeedMult`.
   {
     id: 'tempestbeast', name: 'Лютый барс', icon: 'flame', rarity: 'rare', maxStacks: MAX_STACKS,
-    desc: 'Каждое попадание +1% скорости атаки на 6с (стэкается). 1 стак: макс +18%. 3: +32%. 5: +50%.',
+    desc: 'Каждое попадание +0.5% скорости атаки на 6с (стэкается). 1 стак: макс +10%. 3: +20%. 5: +30%.',
     hooks: {
       onHit(player) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
-        const max = pick(n, [0.18, 0.32, 0.50]);
+        const max = pick(n, [0.10, 0.20, 0.30]);
         const now = performance.now() / 1000;
         const cur = player._tempestStacks || 0;
-        player._tempestStacks = Math.min(max, cur + 0.01);
+        player._tempestStacks = Math.min(max, cur + 0.005);
         player._tempestUntil = now + 6;
       },
       onTick(player) {
@@ -505,13 +505,13 @@ export const ITEMS = [
   // ordering doesn't matter (see comment there).
   {
     id: 'infinity_edge', name: 'Бесконечное лезвие', icon: 'bolt', rarity: 'legendary', maxStacks: MAX_STACKS,
-    desc: 'Криты сильнее и шанс крита выше. 1 стак: ×2.5 / +5% шанс. 3: ×3 / +8%. 5: ×3.5 / +12%.',
+    desc: 'Криты чуть сильнее и шанс крита выше. 1 стак: ×2.10 / +4% шанс. 3: ×2.20 / +7%. 5: ×2.30 / +10%.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0) return;
         if (ctx.crit) return;
-        const p = pick(n, [0.05, 0.08, 0.12]);
+        const p = pick(n, [0.04, 0.07, 0.10]);
         if (chance(p)) { ctx.crit = true; ctx.dmgMult *= 2; }
       },
     },
@@ -540,16 +540,17 @@ export function elementDamageMult(player, element) {
   const id = ELEMENT_TO_ITEM[element];
   if (!id) return 1;
   const n = player.items?.[id] || 0;
-  if (element === 'lightning') return 1 + pick(n, [0.20, 0.40, 0.70]);
-  // fire and ice share the same +15/+35/+60 ramp.
-  if (element === 'fire' || element === 'ice') return 1 + pick(n, [0.15, 0.35, 0.60]);
+  if (element === 'lightning') return 1 + pick(n, [0.10, 0.20, 0.30]);
+  // fire (pyromancer) ramps +6/12/20; ice (cryomancer) ramps +8/14/22.
+  if (element === 'fire') return 1 + pick(n, [0.06, 0.12, 0.20]);
+  if (element === 'ice') return 1 + pick(n, [0.08, 0.14, 0.22]);
   return 1;
 }
 
 // Extra freeze duration in seconds (cryomancer).
 export function freezeDurationBonus(player) {
   const n = player?.items?.cryomancer || 0;
-  return pick(n, [0.4, 0.8, 1.2]);
+  return pick(n, [0.3, 0.6, 1.0]);
 }
 
 // Extra chain jumps (stormcaller).
