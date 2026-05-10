@@ -219,7 +219,7 @@ export class StartMenu {
         }))
         : null;
       this.close();
-      this.onStart && this.onStart({ mode: 'load', seed, players });
+      this.onStart && this.onStart({ mode: 'load', seed, players, solo: !!blob.solo });
     });
 
     window.addEventListener('resize', () => this._resizePreviews());

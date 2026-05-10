@@ -54,6 +54,7 @@ export const CROPS = {
     seedReturn: [0, 2],          // 0..2 inclusive; expectation ≈ 1.0
     mature: 0xe8c25a,
     food: ['mushroom'],
+    rawHeal: 15,                 // HP when eaten raw (no cooking)
   },
   carrot: {
     name: 'Морковь',
@@ -62,6 +63,7 @@ export const CROPS = {
     seedReturn: [0, 1],          // expectation ≈ 0.5 — fastest crop, cheapest yield
     mature: 0xff8a3a,
     food: ['apple', 'mushroom'],
+    rawHeal: 10,
   },
   pumpkin: {
     name: 'Тыква',
@@ -70,6 +72,7 @@ export const CROPS = {
     seedReturn: [0, 2],          // expectation ≈ 1.0 — slowest but best food return
     mature: 0xe46b1f,
     food: ['meat', 'mushroom'],
+    rawHeal: 25,
   },
   cabbage: {
     name: 'Капуста',
@@ -78,6 +81,7 @@ export const CROPS = {
     seedReturn: [0, 1],          // expectation ≈ 0.5 — middling crop
     mature: 0x6db94e,
     food: ['apple', 'berry'],
+    rawHeal: 18,
   },
 };
 

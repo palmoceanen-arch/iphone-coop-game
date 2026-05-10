@@ -11,6 +11,8 @@ import {
 } from './models.js';
 import { runItemHook, ITEM_BY_ID, MAX_STACKS, healMultiplier } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
+import { RECIPES, RECIPE_ORDER, RAW_HEAL } from './cooking.js';
+import { CROP_ORDER } from './farming.js';
 
 // Default starter loadout per player slot. The framework supports any weapon
 // in `WEAPONS`; an upgrade tree can call `Player.setWeapon(kind)` later to
@@ -299,6 +301,23 @@ export class Player {
     // — this is purely a display-side selection.
     this.selectedCropKind = (index === 0) ? 'wheat' : 'carrot';
 
+    // Cooking system — raw crop inventory + cooked dish inventory.
+    // `foods` holds raw harvested crops: { wheat: N, carrot: N, ... }
+    // `cookedFoods` holds cooked dishes: { bread: N, roasted_carrot: N, ... }
+    this.foods = {};
+    this.cookedFoods = {};
+    // Currently selected food item for eating (raw crop kind or cooked
+    // recipe id). Cycled with Q when not near a planter or campfire.
+    this.selectedFood = null;
+    // Currently selected recipe for cooking at a campfire.
+    // Cycled with Q when near a campfire.
+    this.selectedRecipe = RECIPE_ORDER[0];
+    // Active food buff — at most one at a time, newer overwrites older.
+    // Shape: { kind: 'atkSpeed'|'speed'|'damage'|'armor', value, ttl }
+    this._foodBuff = null;
+    // Cook progress (0..COOK_HOLD_S). Filled while holding E near campfire.
+    this.cookProgress = 0;
+
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
   }
@@ -423,6 +442,10 @@ export class Player {
     if (this._blockReductionT > 0) {
       amt *= BLOCK_DAMAGE_REDUCTION;
     }
+    // Food buff: armor — reduce incoming damage.
+    if (this._foodBuff && this._foodBuff.kind === 'armor') {
+      amt *= (1 - this._foodBuff.value);
+    }
 
     // Active shield orb absorbs damage before HP is touched.
     if (this._shield && this._shield.hp > 0) {
@@ -453,6 +476,14 @@ export class Player {
     return true;
   }
 
+  // Combined attack-cooldown multiplier: berserk + food buff + stats.
+  _attackCdMult() {
+    let m = this.stats.attackSpeedMult;
+    if (this._berserk) m *= (1 / this._berserk.atk);
+    if (this._foodBuff && this._foodBuff.kind === 'atkSpeed') m *= (1 / (1 + this._foodBuff.value));
+    return m;
+  }
+
   heal(amount) {
     if (!this.alive) return;
     // Lifebloom (legendary heal-synergy item) scales every heal source so
@@ -462,6 +493,65 @@ export class Player {
     const before = this.hp;
     this.hp = Math.min(this.maxHP, this.hp + amount);
     if (this.hp - before > 0.5) this.effects.damageNumber(new THREE.Vector3(this.pos.x, 2.0, this.pos.z), this.hp - before, '#7aff8a');
+  }
+
+  // Build an ordered list of all edible items the player has (raw crops
+  // + cooked dishes). Each entry: { id, kind: 'raw'|'cooked', count }.
+  edibleList() {
+    const list = [];
+    for (const kind of CROP_ORDER) {
+      if ((this.foods[kind] || 0) > 0) list.push({ id: kind, kind: 'raw', count: this.foods[kind] });
+    }
+    for (const id of RECIPE_ORDER) {
+      if ((this.cookedFoods[id] || 0) > 0) list.push({ id, kind: 'cooked', count: this.cookedFoods[id] });
+    }
+    return list;
+  }
+
+  // Eat the currently selected food. Returns { id, kind } if something
+  // was consumed, or null if nothing was eaten.
+  eatSelectedFood() {
+    if (!this.alive || !this.selectedFood) return null;
+    const sf = this.selectedFood;
+    // Try cooked first
+    if ((this.cookedFoods[sf] || 0) > 0) {
+      const recipe = RECIPES[sf];
+      if (!recipe) return null;
+      this.cookedFoods[sf]--;
+      if (this.cookedFoods[sf] <= 0) delete this.cookedFoods[sf];
+      this.heal(recipe.heal);
+      if (recipe.buff) {
+        this._foodBuff = { kind: recipe.buff.kind, value: recipe.buff.value, ttl: recipe.buff.ttl };
+      }
+      this._revalidateSelectedFood();
+      return { id: sf, kind: 'cooked' };
+    }
+    // Try raw crop
+    if ((this.foods[sf] || 0) > 0) {
+      const rawHp = RAW_HEAL[sf] || 10;
+      this.foods[sf]--;
+      if (this.foods[sf] <= 0) delete this.foods[sf];
+      this.heal(rawHp);
+      this._revalidateSelectedFood();
+      return { id: sf, kind: 'raw' };
+    }
+    return null;
+  }
+
+  // Ensure selectedFood still points to something the player owns.
+  _revalidateSelectedFood() {
+    const list = this.edibleList();
+    if (list.length === 0) { this.selectedFood = null; return; }
+    if (list.some(e => e.id === this.selectedFood)) return;
+    this.selectedFood = list[0].id;
+  }
+
+  // Cycle selectedFood to the next edible item.
+  cycleSelectedFood() {
+    const list = this.edibleList();
+    if (list.length === 0) { this.selectedFood = null; return; }
+    const idx = list.findIndex(e => e.id === this.selectedFood);
+    this.selectedFood = list[(idx + 1) % list.length].id;
   }
 
   die() {
@@ -552,10 +642,20 @@ export class Player {
         this.effects.ring(this.pos.x, 0.05, this.pos.z, 0x7aff8a, 1.0, 0.2);
       }
     }
+    // Food buff countdown + VFX pulse.
+    if (this._foodBuff) {
+      this._foodBuff.ttl -= dt;
+      if (this._foodBuff.ttl <= 0) this._foodBuff = null;
+      else if (this._buffVfxT % 0.9 < dt) {
+        this.effects.ring(this.pos.x, 0.05, this.pos.z, 0xffd166, 1.0, 0.2);
+      }
+    }
 
     // Movement
     const dashing = this.dashTimer > 0;
     let speed = this.stats.speed * (this._itemSpeedMult || 1);
+    // Food buff: +speed
+    if (this._foodBuff && this._foodBuff.kind === 'speed') speed += this._foodBuff.value;
     if (dashing) speed *= 2.6;
 
     // Cooldowns
@@ -666,7 +766,7 @@ export class Player {
     // instant tap can still resolve as a tap. Recomputed every frame
     // because both inputs (`attackSpeedMult`, `_berserk`) can change
     // mid-charge.
-    const chargeMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const chargeMult = this._attackCdMult();
     const chargeThreshold = Math.max(CHARGE_THRESHOLD_MIN, CHARGE_THRESHOLD_BASE * chargeMult);
 
     // Decay the tap-input buffer set on the previous frame. Done here
@@ -1034,7 +1134,7 @@ export class Player {
     // squeezed past the point where it reads as a stutter; cooldown
     // keeps shrinking unchecked so swings-per-second still climbs
     // past that floor.
-    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const attackCdMult = this._attackCdMult();
     const swingMult = Math.max(SWING_SCALE_MIN, attackCdMult);
     const swing = baseSwing * swingMult;
 
@@ -1089,7 +1189,7 @@ export class Player {
   // so per-character charge attacks can pick clip + reach + damage
   // independently of the weapon's stock numbers.
   _startSwingFromSpec(spec) {
-    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const attackCdMult = this._attackCdMult();
     const swingMult = Math.max(SWING_SCALE_MIN, attackCdMult);
     const swing = (spec.swing ?? 0.6) * swingMult;
     this.attackTimer = (spec.cooldown ?? 0.8) * attackCdMult;
@@ -1273,7 +1373,7 @@ export class Player {
     // Cast animation only — no damage swing. Cooldown is short so the
     // cast doesn't stall the player out of combat for a beat after
     // committing to charge; the empowered shots are the payoff.
-    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const attackCdMult = this._attackCdMult();
     this.attackTimer = 0.45 * attackCdMult;
     const animKey = 'attack_spell_raise';
     const action = this._character?.actions?.[animKey];
@@ -1395,7 +1495,7 @@ export class Player {
     // Same attack-speed scaling the melee swing uses, so the
     // attack-speed upgrade and the berserk-on-low-HP item still affect
     // the spell's effective DPS.
-    const attackCdMult = (this._berserk ? (1 / this._berserk.atk) : 1) * this.stats.attackSpeedMult;
+    const attackCdMult = this._attackCdMult();
     this.attackTimer = (ra.cooldown ?? wp.cooldown) * attackCdMult;
 
     // Auto-aim. Default to the player's facing; if there's a real
