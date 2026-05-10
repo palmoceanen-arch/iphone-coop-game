@@ -59,6 +59,13 @@ export class Enemy {
     this.chunkKey = opts.chunkKey ?? this.world.chunkKeyOf(x, z);
     this.asleep = false;
     this.elite = !!opts.elite;
+    // Night-walker enemies spawn far from the player at night and
+    // wander with a soft bias toward the nearest player instead of
+    // staying tied to their `home` point. The wander code in
+    // `update()` consults this flag for the bias logic. The aggro
+    // range bump happens after `config()` runs (below) — otherwise
+    // it'd be overwritten when the per-kind defaults are applied.
+    this._nightWalker = !!opts.nightWalker;
     this._frozen = 0;
     // _stunned is the immobilize-only counterpart to _frozen — it
     // also prevents movement and resets the attack windup, but it
@@ -70,6 +77,11 @@ export class Enemy {
     this._poison = null;
     this.config(level);
     if (this.elite) this._applyEliteScaling();
+    if (this._nightWalker) {
+      this.aggroRange = Math.max(this.aggroRange || 0, 14);
+      this.disengageRange = Math.max(this.disengageRange || 0, 22);
+      this.leashRange = Math.max(this.leashRange || 0, 30);
+    }
     this.mesh = this._buildMesh();
     this.world.scene.add(this.mesh);
   }
@@ -588,6 +600,21 @@ export class Enemy {
             this.state = 'idle';
             this.stateTimer = 0;
           }
+        } else if (this._nightWalker && target) {
+          // Night walker: drift around the current position, biased
+          // toward the nearest player. 60% of picks point roughly at
+          // the player (±60° spread) so the herd slowly closes in
+          // without ever guaranteeing a chase line. 40% are fully
+          // random so the movement still reads as wandering.
+          const baseAng = Math.atan2(target.pos.x - this.pos.x, target.pos.z - this.pos.z);
+          const biased = defaultRandom() < 0.6;
+          const ang = biased
+            ? baseAng + (defaultRandom() - 0.5) * (Math.PI / 1.5)
+            : defaultRandom() * Math.PI * 2;
+          const rad = 3 + defaultRandom() * 5;
+          this.wanderTarget.x = this.pos.x + Math.sin(ang) * rad;
+          this.wanderTarget.z = this.pos.z + Math.cos(ang) * rad;
+          this.wanderTimer = 2 + defaultRandom() * 2;
         } else {
           const ang = defaultRandom() * Math.PI * 2;
           const rad = 1.5 + defaultRandom() * 3.5;

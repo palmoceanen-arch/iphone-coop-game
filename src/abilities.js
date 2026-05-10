@@ -30,6 +30,7 @@ import {
   freezeDurationBonus,
   chainBonusJumps,
   healMultiplier,
+  windKnockbackBonus,
 } from './items.js';
 
 function vdist2(a, b) {
@@ -397,11 +398,16 @@ export const ABILITIES = [
     element: 'wind',
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
-      // Wind push has no element-tied damage scaling — it's a raw
-      // displacement spell, so the cast damage is flat.
+      // Aeromancer item scales BOTH the damage and the knockback impulse.
+      // Damage runs through the standard element multiplier path so
+      // rabadon / prismatic also apply; knockback adds windKnockbackBonus
+      // on top of the baseline 14 the ability authored.
+      const windMult = elementDamageMult(player, 'wind');
+      const kb = 14 + windKnockbackBonus(player);
+      const dmg = 20 * windMult;
       const list = enemiesInRadius(player, livingEnemiesFromCtx(ctx), 4);
       for (const { e } of list) {
-        e.takeDamage(20, player.pos.x, player.pos.z, 14);
+        e.takeDamage(dmg, player.pos.x, player.pos.z, kb);
         if (!e.alive) e._deathCredit = player;
       }
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xffffff, 4, 0.35);

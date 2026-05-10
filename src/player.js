@@ -9,7 +9,14 @@ import {
   CHARACTER_BY_ID,
   CHARACTERS,
 } from './models.js';
-import { runItemHook, ITEM_BY_ID, MAX_STACKS, healMultiplier } from './items.js';
+import {
+  runItemHook,
+  ITEM_BY_ID,
+  MAX_STACKS,
+  healMultiplier,
+  abilityCdMultiplier,
+  rollDoubleCast,
+} from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
 import { RECIPES, RECIPE_ORDER, RAW_HEAL } from './cooking.js';
 import { CROP_ORDER } from './farming.js';
@@ -1371,7 +1378,7 @@ export class Player {
     // Scaled by `abilityCdMult` so the Mage's halved cd stat applies
     // to bind-cost too — they get the enchant *and* their next cast
     // back twice as fast as other characters would.
-    this.abilityCd = ability.cd * (this.stats.abilityCdMult ?? 1);
+    this.abilityCd = ability.cd * (this.stats.abilityCdMult ?? 1) * abilityCdMultiplier(this);
     // Cast animation only — no damage swing. Cooldown is short so the
     // cast doesn't stall the player out of combat for a beat after
     // committing to charge; the empowered shots are the payoff.
@@ -1737,15 +1744,39 @@ export class Player {
       console.warn('[ability cast]', this.ability, err);
       return false;
     }
-    // Notify on-cast item hooks (Sheen-style empower-next-hit buffs).
-    // Runs after the cast resolves so the cast can't be aborted mid-way
-    // and leave a dangling buff.
-    runItemHook(this, 'onCast', { ability: this.ability, partner: ctx?.partner });
+    // Notify on-cast item hooks (Sheen-style empower-next-hit buffs,
+    // Tal Rasha cycle, etc.). Runs after the cast resolves so the cast
+    // can't be aborted mid-way and leave a dangling buff. `element` is
+    // surfaced explicitly so prismatic / element-aware hooks don't have
+    // to round-trip through ABILITY_BY_ID and re-introduce the circular
+    // import that items.js → abilities.js would create.
+    runItemHook(this, 'onCast', {
+      ability: this.ability,
+      element: def.element || 'arcane',
+      partner: ctx?.partner,
+    });
+    // Double-cast: small chance via item to fire the cast a second time
+    // without paying CD again. Element gets re-bound, but the SAME ctx
+    // is reused so the second cast lands in the same world frame.
+    if (rollDoubleCast(this)) {
+      try {
+        def.cast(this, ctx);
+        runItemHook(this, 'onCast', {
+          ability: this.ability,
+          element: def.element || 'arcane',
+          partner: ctx?.partner,
+          doublecast: true,
+        });
+      } catch (err) {
+        console.warn('[ability double-cast]', this.ability, err);
+      }
+    }
     // Per-character ability cd multiplier (Mage = 0.5, everyone
     // else = 1.0). The HUD reads `def.cd * abilityCdMult` for cdMax
     // so the cooldown ring still starts full and ticks to empty
-    // even though the absolute time is halved for the Mage.
-    this.abilityCd = def.cd * (this.stats.abilityCdMult ?? 1);
+    // even though the absolute time is halved for the Mage. Item
+    // abilityhaste stacks multiplicatively on top.
+    this.abilityCd = def.cd * (this.stats.abilityCdMult ?? 1) * abilityCdMultiplier(this);
     return true;
   }
 

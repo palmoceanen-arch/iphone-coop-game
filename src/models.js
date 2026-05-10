@@ -1226,7 +1226,7 @@ export const WEAPONS = {
       life: 0.65,            // ~11.7m max range
       radius: 0.18,          // smaller than icebolt's 0.25
       damageMult: 0.5,
-      knockback: 4,
+      knockback: 0,
     },
   },
   // Wand — Mage / Rogue's spell-jab one-hander. Tap fires a fast, tiny
@@ -1252,7 +1252,7 @@ export const WEAPONS = {
       life: 0.55,            // ~12.1m max range
       radius: 0.14,          // smallest projectile in the game
       damageMult: 0.38,
-      knockback: 3,
+      knockback: 0,
     },
   },
 };

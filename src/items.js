@@ -348,6 +348,26 @@ export const ITEMS = [
       },
     },
   },
+  // Wind synergy — boosts the windpush ability and the on-hit kb the
+  // wind enchant applies. Damage multiplier is small (capped +20%); the
+  // primary identity is bigger displacement so the item enables crowd-
+  // control builds rather than DPS spikes. Read by elementDamageMult()
+  // for the spell itself and by windKnockbackBonus() in game.js for the
+  // enchant impulse.
+  {
+    id: 'aeromancer', name: 'Бриз аэроманта', icon: 'wind', rarity: 'common', maxStacks: MAX_STACKS,
+    element: 'wind',
+    desc: 'Способности воздуха и ветреные удары сильнее и сильнее отбрасывают. 1 стак: +6% урона, +6 отталкивания. 3: +12% / +14. 5: +20% / +24.',
+    hooks: {},
+  },
+  // Ability cooldown reduction — reads as a baseline build-enabler for
+  // any ability-heavy character. -4/-8/-15% so a stacked common still
+  // sits under a tier-1 attribute roll.
+  {
+    id: 'abilityhaste', name: 'Кулон Мудреца', icon: 'sparkle', rarity: 'common', maxStacks: MAX_STACKS,
+    desc: 'Кулдаун способностей короче. 1 стак: −4%. 3: −8%. 5: −15%.',
+    hooks: {},
+  },
   // Flat heal on kill — pairs with rage / dash-blast clear builds.
   {
     id: 'soulthief', name: 'Лайфстрайк', icon: 'drop', rarity: 'common', maxStacks: MAX_STACKS,
@@ -400,6 +420,21 @@ export const ITEMS = [
         const p = pick(n, [0.08, 0.14, 0.22]);
         if (!chance(p)) return;
         ctx.enemy._stunned = Math.max(ctx.enemy._stunned || 0, 0.4);
+      },
+    },
+  },
+  // Shield Strike — while the Orb shield (or barrier item shield) is
+  // active, basic attacks gain a flat % damage. Synergy with the shield
+  // ability and barrier item, so build identity is "keep shield up".
+  {
+    id: 'shieldstrike', name: 'Щит равновесия', icon: 'shield', rarity: 'uncommon', maxStacks: MAX_STACKS,
+    desc: 'Пока активен щит — атаки сильнее. 1 стак: +8%. 3: +15%. 5: +25%.',
+    hooks: {
+      onAttack(player, ctx) {
+        const n = player.items[this.id] || 0;
+        if (n <= 0) return;
+        if (!player._shield || (player._shield.hp || 0) <= 0) return;
+        ctx.dmgMult *= 1 + pick(n, [0.08, 0.15, 0.25]);
       },
     },
   },
@@ -465,6 +500,15 @@ export const ITEMS = [
       },
     },
   },
+  // Double-cast — small chance to fire the equipped ability twice on
+  // the same trigger without paying CD again. Plumbed inside
+  // player.tryCastAbility so it composes with onCast hooks (Sheen
+  // gets two windows of empowered next hit if both casts roll).
+  {
+    id: 'doublecast', name: 'Двойной аркан', icon: 'sparkle', rarity: 'rare', maxStacks: MAX_STACKS,
+    desc: 'Шанс каст сработает дважды. 1 стак: 5%. 3: 10%. 5: 15%.',
+    hooks: {},
+  },
   // Per-hit attack-speed stacking — caps at +18/32/50% so the swing
   // animation can still keep up at the floor of `attackSpeedMult`.
   {
@@ -499,6 +543,45 @@ export const ITEMS = [
   },
 
   // ---- legendary (new) ------------------------------------------------
+  // Rabadon's Deathcap — universal ability damage multiplier on top of
+  // element-specific bonuses (pyromancer / cryomancer / stormcaller /
+  // aeromancer). Stacks multiplicatively with those, so an aero+rabadon
+  // build is bigger than aero alone.
+  {
+    id: 'rabadon', name: 'Шапка-Гриб', icon: 'sparkle', rarity: 'legendary', maxStacks: MAX_STACKS,
+    desc: 'Урон всех способностей выше. 1 стак: +10%. 3: +20%. 5: +30%.',
+    hooks: {},
+  },
+  // Tal Rasha's Wrappings — cycle elements through ability casts. After
+  // a cast in any element, the OTHER 3 elements (fire/ice/lightning/wind)
+  // gain a damage bonus for 5s. Stacks of the *same* element refresh the
+  // window but do not reset the cycle.
+  {
+    id: 'prismatic', name: 'Талисман Тал-Раши', icon: 'sparkle', rarity: 'legendary', maxStacks: MAX_STACKS,
+    desc: 'После каста стихии другие стихии усилены 5с. 1 стак: +15%. 3: +22%. 5: +30%.',
+    hooks: {
+      onCast(player, ctx) {
+        const n = player.items[this.id] || 0;
+        if (n <= 0 || !ctx?.element) return;
+        // Only meaningful for elemental abilities — wind/fire/ice/lightning.
+        // 'heal' or 'arcane' casts don't enter the rotation.
+        const el = ctx.element;
+        if (el === 'arcane' || el === 'heal' || el === 'timeslow') return;
+        const bonus = pick(n, [0.15, 0.22, 0.30]);
+        player._talRasha = {
+          lastElement: el,
+          mult: 1 + bonus,
+          ttl: 5,
+        };
+      },
+      onTick(player, ctx) {
+        const t = player._talRasha;
+        if (!t || !ctx?.dt) return;
+        t.ttl -= ctx.dt;
+        if (t.ttl <= 0) player._talRasha = null;
+      },
+    },
+  },
   // Crit multiplier upgrade — replaces the stock ×2 with ×2.5/3/3.5
   // and adds flat crit chance on top. The multiplier is applied in
   // game._onPlayerHitsEnemy after all onAttack hooks resolve so hook
@@ -531,20 +614,35 @@ const ELEMENT_TO_ITEM = {
   fire:      'pyromancer',
   ice:       'cryomancer',
   lightning: 'stormcaller',
+  wind:      'aeromancer',
   heal:      'lifebloom',
 };
 
-// Multiplier on outgoing ability damage for the given element.
+// Multiplier on outgoing ability damage for the given element. Includes
+// the element-specific item (pyromancer/cryomancer/...), the universal
+// Rabadon multiplier (rabadon), and the Tal Rasha cycle (prismatic) when
+// the *previous* cast was of a different element.
 export function elementDamageMult(player, element) {
   if (!player || !element) return 1;
+  let mult = 1;
   const id = ELEMENT_TO_ITEM[element];
-  if (!id) return 1;
-  const n = player.items?.[id] || 0;
-  if (element === 'lightning') return 1 + pick(n, [0.10, 0.20, 0.30]);
-  // fire (pyromancer) ramps +6/12/20; ice (cryomancer) ramps +8/14/22.
-  if (element === 'fire') return 1 + pick(n, [0.06, 0.12, 0.20]);
-  if (element === 'ice') return 1 + pick(n, [0.08, 0.14, 0.22]);
-  return 1;
+  if (id) {
+    const n = player.items?.[id] || 0;
+    if (element === 'lightning') mult *= 1 + pick(n, [0.10, 0.20, 0.30]);
+    else if (element === 'fire') mult *= 1 + pick(n, [0.06, 0.12, 0.20]);
+    else if (element === 'ice') mult *= 1 + pick(n, [0.08, 0.14, 0.22]);
+    else if (element === 'wind') mult *= 1 + pick(n, [0.06, 0.12, 0.20]);
+  }
+  // Rabadon: global ability damage multiplier (legendary).
+  const rab = player.items?.rabadon || 0;
+  if (rab > 0) mult *= 1 + pick(rab, [0.10, 0.20, 0.30]);
+  // Tal Rasha cycle: bonus when the *current* element differs from the
+  // last element that triggered the buff. Buff expires after 5s.
+  const tr = player._talRasha;
+  if (tr && tr.ttl > 0 && tr.lastElement && tr.lastElement !== element) {
+    mult *= tr.mult;
+  }
+  return mult;
 }
 
 // Extra freeze duration in seconds (cryomancer).
@@ -564,6 +662,31 @@ export function chainBonusJumps(player) {
 export function healMultiplier(player) {
   const n = player?.items?.lifebloom || 0;
   return 1 + pick(n, [0.20, 0.45, 0.80]);
+}
+
+// Extra knockback impulse applied by the wind enchant (game.js) and the
+// windpush ability (abilities.js). Returns the *additional* kb to stack
+// on the spell's baseline value.
+export function windKnockbackBonus(player) {
+  const n = player?.items?.aeromancer || 0;
+  return pick(n, [6, 14, 24]);
+}
+
+// Multiplier on the equipped ability's cooldown. Stacks multiplicatively
+// with per-character abilityCdMult (mage's 0.5) so an ability-haste +
+// mage build can chain casts quickly.
+export function abilityCdMultiplier(player) {
+  const n = player?.items?.abilityhaste || 0;
+  if (n <= 0) return 1;
+  return 1 - pick(n, [0.04, 0.08, 0.15]);
+}
+
+// Roll for double-cast: returns true with the item's stacked probability.
+// Returns false if the player doesn't own the item.
+export function rollDoubleCast(player) {
+  const n = player?.items?.doublecast || 0;
+  if (n <= 0) return false;
+  return chance(pick(n, [0.05, 0.10, 0.15]));
 }
 
 // ----------------------------------------------------------------------

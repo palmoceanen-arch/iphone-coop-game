@@ -19,6 +19,7 @@ import {
   pickRandomItemIdInRarityExcept,
   rarityAbove,
   RARITY,
+  windKnockbackBonus,
 } from './items.js';
 import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
@@ -881,6 +882,53 @@ export class Game {
   _isSpawnLive(s) {
     const ck = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
     return this.world.chunks.has(ck);
+  }
+
+  // Night walker spawner — every few seconds during the world's night
+  // phase, attempt to spawn a roaming skeleton ~2 chunks from one of
+  // the players. Caps total night walkers per active player so the
+  // night doesn't snowball into an unwinnable horde.
+  _tickNightWalkers(dt) {
+    if (!this.world?.isNight?.()) {
+      this._nightSpawnCd = 0;
+      return;
+    }
+    this._nightSpawnCd = (this._nightSpawnCd || 0) - dt;
+    if (this._nightSpawnCd > 0) return;
+    // Roughly every 5s — fast enough to keep pressure up over a 7-min
+    // night, slow enough that a tight cluster doesn't spawn all at once.
+    this._nightSpawnCd = 5;
+
+    const alivePlayers = this.players.filter(p => p && p.alive);
+    if (alivePlayers.length === 0) return;
+    const targetMax = alivePlayers.length * 4;
+    const current = this.enemies.reduce((n, e) => n + (e?._nightWalker ? 1 : 0), 0);
+    if (current >= targetMax) return;
+
+    const player = alivePlayers[Math.floor(defaultRandom() * alivePlayers.length)];
+    // 2-3 chunks away: 50-70m from the player. Inside the loaded chunk
+    // ring (ACTIVE_RADIUS * 32m ≈ 80m) but outside their immediate FOV.
+    const angle = defaultRandom() * Math.PI * 2;
+    const dist = 50 + defaultRandom() * 20;
+    const x = player.pos.x + Math.cos(angle) * dist;
+    const z = player.pos.z + Math.sin(angle) * dist;
+    if (this.world.isWaterAt(x, z)) return;
+    const chunkKey = this.world.chunkKeyOf(x, z);
+    if (!this.world.chunks.has(chunkKey)) return;
+    if (!this.world._spotClear(x, z, 0.9, this.world.colliders)) return;
+    // Skeleton kinds. Each maps to a distinct Skeleton_* GLB via
+    // ENEMY_VISUALS in enemy.js, so picking randomly gives the herd
+    // a visible silhouette mix (rogue + mage + warrior + minion).
+    const KINDS = ['slime', 'archer', 'bomber', 'wisp', 'ogre'];
+    const kind = KINDS[Math.floor(defaultRandom() * KINDS.length)];
+    // Level scales with in-game day count so later nights ramp up.
+    const day = Math.floor((this.world.dayTime + (this.elapsed / this.world.dayLength)) | 0) + 1;
+    const level = 1 + Math.min(4, Math.floor(day / 2));
+    const e = new Enemy(this.world, this.effects, this.sound, kind, x, z, level, {
+      chunkKey,
+      nightWalker: true,
+    });
+    this.enemies.push(e);
   }
 
   _drainPendingEnemySpawns() {
@@ -2368,10 +2416,12 @@ export class Game {
       // Wind enchant — punch the enemy back along the player→enemy
       // axis with an extra knockback impulse, on top of the swing's
       // baseline kb that already landed via takeDamage(... , 10).
+      // Aeromancer item adds to the base 18 impulse (no item: 18,
+      // 5 stacks: 42) so wind builds escalate the displacement.
       const dx = enemy.pos.x - player.pos.x;
       const dz = enemy.pos.z - player.pos.z;
       const len = Math.hypot(dx, dz) || 1;
-      const extraKb = 18;
+      const extraKb = 18 + windKnockbackBonus(player);
       enemy.knockback.x += (dx / len) * extraKb;
       enemy.knockback.z += (dz / len) * extraKb;
     } else if (element === 'timeslow') {
@@ -2861,6 +2911,11 @@ export class Game {
     // only when the planter is out of range.
     this._showGatePrompts();
     this._showCookPrompts();
+
+    // Night roamers: spawn extra skeleton enemies a couple chunks from
+    // the players when the world is in its night phase. Adds a threat
+    // budget to the otherwise-safe base-building / farming loop.
+    this._tickNightWalkers(dt);
 
     // Update enemies
     const ctx = {
