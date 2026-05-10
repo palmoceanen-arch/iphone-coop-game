@@ -508,23 +508,23 @@ export class Player {
     return list;
   }
 
-  // Eat the currently selected food. Returns true if something was consumed.
+  // Eat the currently selected food. Returns { id, kind } if something
+  // was consumed, or null if nothing was eaten.
   eatSelectedFood() {
-    if (!this.alive || !this.selectedFood) return false;
+    if (!this.alive || !this.selectedFood) return null;
     const sf = this.selectedFood;
     // Try cooked first
     if ((this.cookedFoods[sf] || 0) > 0) {
       const recipe = RECIPES[sf];
-      if (!recipe) return false;
+      if (!recipe) return null;
       this.cookedFoods[sf]--;
       if (this.cookedFoods[sf] <= 0) delete this.cookedFoods[sf];
       this.heal(recipe.heal);
       if (recipe.buff) {
         this._foodBuff = { kind: recipe.buff.kind, value: recipe.buff.value, ttl: recipe.buff.ttl };
       }
-      // Re-validate selectedFood
       this._revalidateSelectedFood();
-      return true;
+      return { id: sf, kind: 'cooked' };
     }
     // Try raw crop
     if ((this.foods[sf] || 0) > 0) {
@@ -533,9 +533,9 @@ export class Player {
       if (this.foods[sf] <= 0) delete this.foods[sf];
       this.heal(rawHp);
       this._revalidateSelectedFood();
-      return true;
+      return { id: sf, kind: 'raw' };
     }
-    return false;
+    return null;
   }
 
   // Ensure selectedFood still points to something the player owns.

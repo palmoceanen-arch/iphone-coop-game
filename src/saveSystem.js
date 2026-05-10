@@ -383,6 +383,7 @@ export class SaveSystem {
       savedAt: Date.now(),
       seed: g.seedDisplay || null,
       seedHash: w.seed >>> 0,
+      solo: !!g.solo,
       world: {
         dayTime: typeof w.dayTime === 'number' ? w.dayTime : 0,
         resources: w.resources ? { ...w.resources } : { wood: 0, stone: 0, seeds: 0 },

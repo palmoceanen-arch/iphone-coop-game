@@ -2737,10 +2737,12 @@ export class Game {
           p._eatHoldT = (p._eatHoldT || 0) + dt;
           if (p._eatHoldT >= EAT_HOLD_S && !p._eatFired) {
             p._eatFired = true;
-            if (p.eatSelectedFood()) {
+            const eaten = p.eatSelectedFood();
+            if (eaten) {
               this.sound.pickupFood?.();
-              const buffStr = p._foodBuff ? ` (${buffLabel(p._foodBuff)}, ${Math.round(p._foodBuff.ttl)}с)` : '';
-              this.effects.toast?.(`Съедено${buffStr}`, '#7aff8a');
+              const label = this._foodItemLabel(eaten.id);
+              const buffStr = p._foodBuff ? ` · ${buffLabel(p._foodBuff)} ${Math.round(p._foodBuff.ttl)}с` : '';
+              this.effects.toast?.(`Съедено: ${label}${buffStr}`, '#7aff8a');
               this.saveSystem?.markDirty();
             } else {
               this.effects.toast?.('Нечего есть', '#ff7a7a');
