@@ -509,7 +509,7 @@ export class World {
     this._buildCampfire();
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
-    this.dayLength = 1920;
+    this.dayLength = 480;
     this.update(0);
   }
 
@@ -528,16 +528,16 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff4d8, 1.4);
     this.sun.position.set(30, 50, 20);
     this.sun.castShadow = true;
-    // Default 4096² over the ~100m frustum = ~0.024 m/texel (on par with
-    // the old 8192²/160m at ¼ GPU cost). Settings can override via
-    // SHADOW_SIZE[quality] in settings.js.
-    this.sun.shadow.mapSize.set(4096, 4096);
-    // Shadow camera covers a tighter area around the players than the full
-    // active-chunk ring. The camera sees ~50-70m at max zoom; d=50 gives
-    // ~15m margin for off-screen trees that still cast shadows onto the
-    // visible ground. With 4096² over 100m this gives ~0.024 m/texel — on
-    // par with the old 8192² over 160m (0.020 m/texel) at ¼ the GPU cost.
-    const d = 50;
+    // 8192² over the ~224 m active area = ~0.027 m / texel. Combined with the
+    // texel-snap logic below this gives crisp tree-shadow edges at typical
+    // camera distances. ~64 MB GPU shadow texture — fine for desktop and iOS
+    // (4096² is the spec minimum, 8192² is supported by every WebGL2 device
+    // in practice).
+    this.sun.shadow.mapSize.set(8192, 8192);
+    // Shadow camera covers the active 7×7 chunk area (~224m). The light + its
+    // shadow camera follow the centroid of the players each frame so shadows
+    // are always sharp around the action.
+    const d = (ACTIVE_RADIUS + 0.5) * CHUNK_SIZE;
     this.sun.shadow.camera.left = -d;
     this.sun.shadow.camera.right = d;
     this.sun.shadow.camera.top = d;
@@ -545,21 +545,11 @@ export class World {
     this.sun.shadow.camera.near = 1;
     this.sun.shadow.camera.far = 250;
     this.sun.shadow.bias = -0.0008;
-    // normalBias pushes the shadow lookup along the surface normal, which
-    // eliminates self-shadow artifacts (shadow acne) on tree canopies and
-    // rocks without disabling receiveShadow entirely. 0.12 is aggressive
-    // enough to fix the acne while the cel-shading gradient hides any
-    // minor shadow leaking at contact edges.
-    this.sun.shadow.normalBias = 0.12;
+    this.sun.shadow.normalBias = 0.04;
     // Hard-ish shadows: a 1-texel PCF radius gives a crisp edge that still
     // anti-aliases (no jagged staircase), and stays stable frame-to-frame
     // (PCFShadowMap kernel, see game.js).
     this.sun.shadow.radius = 1;
-    // Throttle shadow map updates — re-render the depth pass every other
-    // frame instead of every frame. At 60fps the shadows update at 30fps
-    // which is invisible to the eye, but halves the shadow rendering cost.
-    this.sun.shadow.autoUpdate = false;
-    this._shadowFrameCounter = 0;
     this.sun.target = new THREE.Object3D();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
@@ -2058,7 +2048,7 @@ export class World {
     if (this._waterMaterial && this._waterMaterial.userData.waterUniforms) {
       this._waterMaterial.userData.waterUniforms.uTime.value += dt;
     }
-    this.dayTime = 0.8; // TEMP: frozen for shadow testing
+    this.dayTime = (this.dayTime + dt / this.dayLength) % 1;
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
     //   13:30 peak    (dayTime 0.5625) → sunY = +1, sunX =  0 (zenith)
@@ -2134,21 +2124,13 @@ export class World {
     // bias: the resulting peak direction is closer to (12, 80, 55)
     // → ~33° from vertical, so a 2m wall casts roughly a 1.3m shadow
     // at noon instead of the previous ~0.55m sliver.
-    const SUN_TILT_X = -55;
-    const SUN_TILT_Z = 12;
+    const SUN_TILT_X = 12;
+    const SUN_TILT_Z = 55;
     const sunHeight = Math.max(15, Math.abs(sunY) * 60 + 20);
     const offsetX = snap(sunX * 60 + SUN_TILT_X);
     const offsetY = snap(sunHeight);
     const offsetZ = snap(SUN_TILT_Z);
     this.sun.position.set(cx + offsetX, offsetY, cz + offsetZ);
-
-    // Throttle shadow map re-render: only update every other frame.
-    // At 60fps this gives 30fps shadow updates — imperceptible — while
-    // halving the depth-pass cost (the single largest shadow expense).
-    this._shadowFrameCounter = (this._shadowFrameCounter + 1) % 2;
-    if (this._shadowFrameCounter === 0) {
-      this.sun.shadow.needsUpdate = true;
-    }
 
     // Cosine-bell sunset/sunrise tint window centred on the actual horizon
     // crossings. Half-width 1h so the orange glow swells from ~05:00→07:00
