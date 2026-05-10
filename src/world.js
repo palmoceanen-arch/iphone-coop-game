@@ -2048,7 +2048,7 @@ export class World {
     if (this._waterMaterial && this._waterMaterial.userData.waterUniforms) {
       this._waterMaterial.userData.waterUniforms.uTime.value += dt;
     }
-    this.dayTime = 0.6; // TEMP: frozen for shadow testing
+    this.dayTime = 0.8; // TEMP: frozen for shadow testing
     // Asymmetric day cycle:
     //   06:00 sunrise (dayTime 0.25)   → sunY = 0,  sunX = +1 (east horizon)
     //   13:30 peak    (dayTime 0.5625) → sunY = +1, sunX =  0 (zenith)
@@ -2124,8 +2124,8 @@ export class World {
     // bias: the resulting peak direction is closer to (12, 80, 55)
     // → ~33° from vertical, so a 2m wall casts roughly a 1.3m shadow
     // at noon instead of the previous ~0.55m sliver.
-    const SUN_TILT_X = 12;
-    const SUN_TILT_Z = 55;
+    const SUN_TILT_X = -55;
+    const SUN_TILT_Z = 12;
     const sunHeight = Math.max(15, Math.abs(sunY) * 60 + 20);
     const offsetX = snap(sunX * 60 + SUN_TILT_X);
     const offsetY = snap(sunHeight);
