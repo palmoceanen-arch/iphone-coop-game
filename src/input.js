@@ -49,7 +49,7 @@ const GAMEPAD_BUTTON = {
 
 function nintendoLike(pad) {
   const id = (pad?.id || '').toLowerCase();
-  return id.includes('8bitdo') || id.includes('nintendo') || id.includes('switch') ||
+  return id.includes('nintendo') || id.includes('switch') ||
     id.includes('pro controller') || id.includes('joy-con');
 }
 
