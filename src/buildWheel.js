@@ -66,6 +66,7 @@ export class BuildWheel {
     this.isOpen = false;
     this.world = null;            // set on open(), used to grey-out unaffordable
     this._slices = [];            // {kind, el, idx}
+    this._selectedIdx = 0;
   }
 
   open(world, hooks) {
@@ -73,11 +74,40 @@ export class BuildWheel {
     this.hooks = hooks || {};
     this.isOpen = true;
     this._rebuildSlices();
+    this._selectedIdx = 0;
     this.root.classList.add('open');
     // First refresh paints affordability now; subsequent refresh() calls
     // (driven by Game._refreshHUD's per-frame loop) keep it live as the
     // shared resource pool fluctuates.
     this.refresh();
+  }
+
+  handleGamepadNav(nav) {
+    if (!this.isOpen || this._slices.length === 0) return false;
+    if (nav.back) {
+      this.close();
+      return true;
+    }
+    if (nav.confirm) {
+      this._pick(this._selectedIdx);
+      return true;
+    }
+    if (nav.left || nav.up || nav.shoulderLeft) {
+      this._select(this._selectedIdx - 1);
+      return true;
+    }
+    if (nav.right || nav.down || nav.shoulderRight || nav.tab) {
+      this._select(this._selectedIdx + 1);
+      return true;
+    }
+    if (Math.hypot(nav.lookX, nav.lookZ) > 0.45) {
+      const ang = Math.atan2(nav.lookZ, nav.lookX);
+      const N = this._slices.length;
+      const idx = Math.round((((ang + Math.PI / 2) / (Math.PI * 2)) * N + N)) % N;
+      this._select(idx);
+      return true;
+    }
+    return false;
   }
 
   close() {
@@ -122,6 +152,7 @@ export class BuildWheel {
       this.ring.appendChild(el);
       this._slices.push({ kind, el, idx: i });
     }
+    this._refreshSelection();
   }
 
   // Live affordability refresh. Cheap: just toggles a class per slice.
@@ -143,5 +174,18 @@ export class BuildWheel {
     const cb = this.hooks?.onPick;
     this.close();
     cb?.(idx);
+  }
+
+  _select(idx) {
+    const N = this._slices.length;
+    if (N === 0) return;
+    this._selectedIdx = ((idx % N) + N) % N;
+    this._refreshSelection();
+  }
+
+  _refreshSelection() {
+    for (const s of this._slices) {
+      s.el.classList.toggle('gp-focus', s.idx === this._selectedIdx);
+    }
   }
 }

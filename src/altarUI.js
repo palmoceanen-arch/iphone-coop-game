@@ -66,6 +66,7 @@ export class AltarUI {
     this.altar = null;
     this.hooks = null;
     this.isOpen = false;
+    this._focus = { row: 0, action: 0 };
     this.root.querySelector('[data-altar-close]')?.addEventListener('click', () => {
       this.close();
     });
@@ -76,6 +77,7 @@ export class AltarUI {
     this.altar = altar;
     this.hooks = hooks || {};
     this.isOpen = true;
+    this._focus = { row: 0, action: 0 };
     this.root.classList.add('open');
     this.refresh();
   }
@@ -119,7 +121,11 @@ export class AltarUI {
       return;
     }
 
-    for (const { id, n, def } of entries) {
+    this._focus.row = Math.max(0, Math.min(this._focus.row, entries.length - 1));
+    this._focus.action = Math.max(0, Math.min(this._focus.action, 2));
+
+    for (let rowIdx = 0; rowIdx < entries.length; rowIdx++) {
+      const { id, n, def } = entries[rowIdx];
       const row = document.createElement('div');
       row.className = `altar-row rar-${def.rarity}`;
 
@@ -151,6 +157,39 @@ export class AltarUI {
       });
       itemsEl.appendChild(row);
     }
+    this._refreshFocus();
+  }
+
+  handleGamepadNav(nav) {
+    if (!this.isOpen) return false;
+    if (nav.back) {
+      this.close();
+      return true;
+    }
+    const rows = [...this.root.querySelectorAll('.altar-row')];
+    if (rows.length === 0) return true;
+    if (nav.up) this._focus.row = Math.max(0, this._focus.row - 1);
+    if (nav.down) this._focus.row = Math.min(rows.length - 1, this._focus.row + 1);
+    if (nav.left) this._focus.action = Math.max(0, this._focus.action - 1);
+    if (nav.right) this._focus.action = Math.min(2, this._focus.action + 1);
+    if (nav.confirm) {
+      const btn = rows[this._focus.row]?.querySelectorAll('.altar-actions button')[this._focus.action];
+      if (btn && !btn.disabled) btn.click();
+      return true;
+    }
+    this._refreshFocus();
+    return nav.any;
+  }
+
+  _refreshFocus() {
+    const rows = [...this.root.querySelectorAll('.altar-row')];
+    rows.forEach((row, rIdx) => {
+      row.classList.toggle('gp-focus-row', rIdx === this._focus.row);
+      row.querySelectorAll('.altar-actions button').forEach((btn, aIdx) => {
+        btn.classList.toggle('gp-focus', rIdx === this._focus.row && aIdx === this._focus.action);
+      });
+    });
+    rows[this._focus.row]?.scrollIntoView({ block: 'nearest' });
   }
 }
 

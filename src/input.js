@@ -57,6 +57,8 @@ function blankGamepadSlot() {
     id: '',
     moveX: 0,
     moveZ: 0,
+    lookX: 0,
+    lookZ: 0,
     attackHeld: false,
     dashHeld: false,
     interactHeld: false,
@@ -71,6 +73,10 @@ function blankGamepadSlot() {
     pauseEdge: false,
     buildLayerUpEdge: false,
     buildLayerDownEdge: false,
+    navUpEdge: false,
+    navDownEdge: false,
+    navLeftEdge: false,
+    navRightEdge: false,
     buttonsDown: new Set(),
   };
 }
@@ -83,6 +89,10 @@ function buttonDown(pad, idx) {
 function stickAxis(value) {
   const v = Number(value) || 0;
   return Math.abs(v) < GAMEPAD_DEAD_ZONE ? 0 : Math.max(-1, Math.min(1, v));
+}
+
+function axisDir(v) {
+  return v < -0.55 ? -1 : (v > 0.55 ? 1 : 0);
 }
 
 export class Input {
@@ -184,6 +194,8 @@ export class Input {
 
     const sx = stickAxis(pad.axes[0]);
     const sz = stickAxis(pad.axes[1]);
+    gp.lookX = stickAxis(pad.axes[2]);
+    gp.lookZ = stickAxis(pad.axes[3]);
     const dx = (buttonDown(pad, GAMEPAD_BUTTON.dpadRight) ? 1 : 0) -
       (buttonDown(pad, GAMEPAD_BUTTON.dpadLeft) ? 1 : 0);
     const dz = (buttonDown(pad, GAMEPAD_BUTTON.dpadDown) ? 1 : 0) -
@@ -206,6 +218,18 @@ export class Input {
     if (edge(GAMEPAD_BUTTON.pause)) gp.pauseEdge = true;
     if (edge(GAMEPAD_BUTTON.buildLayerUp)) gp.buildLayerUpEdge = true;
     if (edge(GAMEPAD_BUTTON.buildLayerDown)) gp.buildLayerDownEdge = true;
+    const leftX = pad.axes[0] || 0;
+    const leftY = pad.axes[1] || 0;
+    const leftDirX = axisDir(leftX);
+    const leftDirY = axisDir(leftY);
+    const prevLeftDirX = axisDir(gp._lastLeftX);
+    const prevLeftDirY = axisDir(gp._lastLeftY);
+    if (edge(GAMEPAD_BUTTON.dpadUp) || (leftDirY < 0 && prevLeftDirY >= 0)) gp.navUpEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadDown) || (leftDirY > 0 && prevLeftDirY <= 0)) gp.navDownEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadLeft) || (leftDirX < 0 && prevLeftDirX >= 0)) gp.navLeftEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadRight) || (leftDirX > 0 && prevLeftDirX <= 0)) gp.navRightEdge = true;
+    gp._lastLeftX = leftX;
+    gp._lastLeftY = leftY;
 
     gp.buttonsDown = buttonsNow;
   }
@@ -249,6 +273,27 @@ export class Input {
       if (this._consumeGamepadEdge(slot, edges[i])) return i;
     }
     return -1;
+  }
+
+  consumeGamepadNav(slot) {
+    const gp = this.gamepads[slot];
+    const nav = {
+      up: this._consumeGamepadEdge(slot, 'navUpEdge'),
+      down: this._consumeGamepadEdge(slot, 'navDownEdge'),
+      left: this._consumeGamepadEdge(slot, 'navLeftEdge'),
+      right: this._consumeGamepadEdge(slot, 'navRightEdge'),
+      confirm: this._consumeGamepadEdge(slot, 'attackEdge'),
+      back: this._consumeGamepadEdge(slot, 'dashEdge'),
+      tab: this._consumeGamepadEdge(slot, 'buildMenuEdge'),
+      shoulderLeft: this._consumeGamepadEdge(slot, 'seedCycleEdge'),
+      shoulderRight: this._consumeGamepadEdge(slot, 'abilityEdge'),
+      lookX: gp.lookX,
+      lookZ: gp.lookZ,
+      connected: gp.index !== null,
+    };
+    nav.any = nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.back || nav.tab ||
+      nav.shoulderLeft || nav.shoulderRight || Math.hypot(nav.lookX, nav.lookZ) > 0.45;
+    return nav;
   }
 
   intent(playerIndex) {
@@ -319,6 +364,8 @@ export class Input {
         connected: g.index !== null,
         moveX: g.moveX,
         moveZ: g.moveZ,
+        lookX: g.lookX,
+        lookZ: g.lookZ,
         attack: gamepadAttackEdge,
         dash: gamepadDashEdge,
         buildMenu: gamepadBuildMenuEdge,
@@ -344,6 +391,10 @@ export class Input {
       gp.pauseEdge = false;
       gp.buildLayerUpEdge = false;
       gp.buildLayerDownEdge = false;
+      gp.navUpEdge = false;
+      gp.navDownEdge = false;
+      gp.navLeftEdge = false;
+      gp.navRightEdge = false;
     }
   }
 }

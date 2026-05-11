@@ -297,6 +297,7 @@ export class Game {
     this._fpsMaxDt = 0;
     // Per-slot phone shop state (independent from desktop Tab-shop):
     this.phoneShopOpen = [false, false];
+    this._gamepadShopFocus = [{ idx: 0 }, { idx: 0 }];
     this.lobby = null; // injected from main.js
     this._stateSyncT = 0;
     this.dead = false;
@@ -484,6 +485,7 @@ export class Game {
   _toggleGamepadShop(slot) {
     this.phoneShopOpen[slot] = !this.phoneShopOpen[slot];
     this._refreshShopState();
+    this._refreshGamepadShopFocus();
     this._pushPlayerState(slot);
   }
 
@@ -531,8 +533,9 @@ export class Game {
       const idx = UPGRADES.findIndex(u => u.id === event.id);
       if (idx >= 0) {
         const ok = buy(this.players[slot], UPGRADES[idx], this.sound);
-        if (ok && this._keyboardShop) {
+        if (ok && (this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1])) {
           renderShop(this.players[0], this.players[1], (s, i) => this._tryBuy(s, i));
+          this._refreshGamepadShopFocus();
         }
         this._pushPlayerState(slot);
       }
@@ -562,6 +565,7 @@ export class Game {
     document.getElementById('shop')?.classList.toggle('open', showPc);
     if (showPc) {
       renderShop(this.players[0], this.players[1], (slot, idx) => this._tryBuy(slot, idx));
+      this._refreshGamepadShopFocus();
     }
   }
 
@@ -571,10 +575,35 @@ export class Game {
     const player = this.players[slot];
     if (!player) return;
     if (buy(player, upg, this.sound)) {
-      if (this._keyboardShop) {
+      if (this._keyboardShop || this.phoneShopOpen[0] || this.phoneShopOpen[1]) {
         renderShop(this.players[0], this.players[1], (s, i) => this._tryBuy(s, i));
+        this._refreshGamepadShopFocus();
       }
       this._pushPlayerState(slot);
+    }
+  }
+
+  _handleGamepadShopNav(slot, nav) {
+    if (!this.phoneShopOpen[slot]) return false;
+    const focus = this._gamepadShopFocus[slot];
+    if (nav.back) {
+      this._toggleGamepadShop(slot);
+      return true;
+    }
+    if (nav.up || nav.left || nav.shoulderLeft) focus.idx = Math.max(0, focus.idx - 1);
+    if (nav.down || nav.right || nav.shoulderRight || nav.tab) focus.idx = Math.min(UPGRADES.length - 1, focus.idx + 1);
+    if (nav.confirm) {
+      this._tryBuy(slot, focus.idx);
+      return true;
+    }
+    this._refreshGamepadShopFocus();
+    return nav.any;
+  }
+
+  _refreshGamepadShopFocus() {
+    for (let slot = 0; slot < this._gamepadShopFocus.length; slot++) {
+      const rows = document.querySelectorAll(`#shop-upgs-${slot + 1} .upg`);
+      rows.forEach((row, idx) => row.classList.toggle('gp-focus', this.phoneShopOpen[slot] && idx === this._gamepadShopFocus[slot].idx));
     }
   }
 
@@ -2575,6 +2604,7 @@ export class Game {
 
   update(dt, dt0) {
     this.input.pollGamepads();
+    const gamepadNav = [this.input.consumeGamepadNav(0), this.input.consumeGamepadNav(1)];
     if (this.input.consumeGamepadPause()) {
       if (this._waitingForStart) {
         this.lobby?.startGame?.();
@@ -2590,6 +2620,11 @@ export class Game {
       }
     }
     for (let slot = 0; slot < this.players.length; slot++) {
+      const nav = gamepadNav[slot];
+      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) continue;
+      const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
+      if (openWheel && openWheel.handleGamepadNav(nav)) continue;
+      if (this._handleGamepadShopNav(slot, nav)) continue;
       if (this.input.consumeGamepadAbility(slot)) this._tryCastAbility(slot);
       if (this.input.consumeGamepadShop(slot)) this._toggleGamepadShop(slot);
     }
@@ -2629,7 +2664,10 @@ export class Game {
     for (let slot = 0; slot < this.players.length; slot++) {
       if (!this.phoneShopOpen[slot]) continue;
       const idx = this.input.consumeGamepadUpgrade(slot);
-      if (idx >= 0) this._tryBuy(slot, idx);
+      if (idx >= 0) {
+        this._gamepadShopFocus[slot].idx = idx;
+        this._tryBuy(slot, idx);
+      }
     }
 
     if (dt <= 0) { this._updateUI(); this.input.endFrame(); return; }
