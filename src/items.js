@@ -316,9 +316,13 @@ export const ITEMS = [
 
   // ---- common (new) ---------------------------------------------------
   // Distance-conditional damage — rewards staying out of melee range.
+  // Values are noticeably stronger than the bare-melee tier because the
+  // ">5m" trigger is non-trivial to keep up: melee characters never
+  // benefit, and even wand/staff users have to commit to spacing.
+  // Stays under the +30% legendary cap by sitting at +28% at 5 stacks.
   {
     id: 'headshot', name: 'Прицел снайпера', icon: 'bow', rarity: 'common', maxStacks: MAX_STACKS,
-    desc: 'По цели дальше 5м удар сильнее. 1 стак: +4%. 3: +8%. 5: +15%.',
+    desc: 'По цели дальше 5м удар сильнее. 1 стак: +10%. 3: +18%. 5: +28%.',
     hooks: {
       onAttack(player, ctx) {
         const n = player.items[this.id] || 0;
@@ -326,7 +330,7 @@ export const ITEMS = [
         const dx = ctx.enemy.pos.x - player.pos.x;
         const dz = ctx.enemy.pos.z - player.pos.z;
         if (Math.hypot(dx, dz) <= 5) return;
-        ctx.dmgMult *= 1 + pick(n, [0.04, 0.08, 0.15]);
+        ctx.dmgMult *= 1 + pick(n, [0.10, 0.18, 0.28]);
       },
     },
   },
@@ -348,16 +352,17 @@ export const ITEMS = [
       },
     },
   },
-  // Wind synergy — boosts the windpush ability and the on-hit kb the
-  // wind enchant applies. Damage multiplier is small (capped +20%); the
-  // primary identity is bigger displacement so the item enables crowd-
-  // control builds rather than DPS spikes. Read by elementDamageMult()
-  // for the spell itself and by windKnockbackBonus() in game.js for the
-  // enchant impulse.
+  // Aeromancer — dedicated to wand/staff ranged combat. The knockback
+  // bonus applies to *any* wand/staff ranged projectile hit regardless
+  // of which ability the player has equipped (read in _onPlayerHitsEnemy
+  // through windKnockbackBonus when player._activeRanged is set). The
+  // damage bonus only applies to actual wind-element abilities (read by
+  // elementDamageMult), so equipping a non-wind ability still gives you
+  // the crowd-control identity without the elemental DPS bonus.
   {
     id: 'aeromancer', name: 'Бриз аэроманта', icon: 'wind', rarity: 'common', maxStacks: MAX_STACKS,
     element: 'wind',
-    desc: 'Способности воздуха и ветреные удары сильнее и сильнее отбрасывают. 1 стак: +6% урона, +6 отталкивания. 3: +12% / +14. 5: +20% / +24.',
+    desc: 'Проектили жезла/посоха отбрасывают врагов; воздушные способности сильнее. 1 стак: +6 отталкивания / +6% урона воздуха. 3: +14 / +12%. 5: +24 / +20%.',
     hooks: {},
   },
   // Ability cooldown reduction — reads as a baseline build-enabler for
@@ -552,33 +557,31 @@ export const ITEMS = [
     desc: 'Урон всех способностей выше. 1 стак: +10%. 3: +20%. 5: +30%.',
     hooks: {},
   },
-  // Tal Rasha's Wrappings — cycle elements through ability casts. After
-  // a cast in any element, the OTHER 3 elements (fire/ice/lightning/wind)
-  // gain a damage bonus for 5s. Stacks of the *same* element refresh the
-  // window but do not reset the cycle.
+  // Tal Rasha's Wrappings — redesigned as a "combo caster" buff.
+  // Original cycle ("other elements stronger") was a dead effect for
+  // anyone running a single-element build, which is the default in
+  // this game. The replacement instead empowers any *subsequent* casts
+  // for a 5s window after a cast, refreshing on every cast — so
+  // chaining casts within the window scales them up regardless of
+  // which element they are. The first cast doesn't benefit (priming
+  // cost); every cast within 5s of the previous one does.
   {
     id: 'prismatic', name: 'Талисман Тал-Раши', icon: 'sparkle', rarity: 'legendary', maxStacks: MAX_STACKS,
-    desc: 'После каста стихии другие стихии усилены 5с. 1 стак: +15%. 3: +22%. 5: +30%.',
+    desc: 'После каста следующие способности усилены (5с, обновляется). 1 стак: +12%. 3: +20%. 5: +30%.',
     hooks: {
       onCast(player, ctx) {
         const n = player.items[this.id] || 0;
         if (n <= 0 || !ctx?.element) return;
-        // Only meaningful for elemental abilities — wind/fire/ice/lightning.
-        // 'heal' or 'arcane' casts don't enter the rotation.
         const el = ctx.element;
-        if (el === 'arcane' || el === 'heal' || el === 'timeslow') return;
-        const bonus = pick(n, [0.15, 0.22, 0.30]);
-        player._talRasha = {
-          lastElement: el,
-          mult: 1 + bonus,
-          ttl: 5,
-        };
+        if (el === 'arcane' || el === 'heal') return;
+        const bonus = pick(n, [0.12, 0.20, 0.30]);
+        player._prismaticBuff = { mult: 1 + bonus, ttl: 5 };
       },
       onTick(player, ctx) {
-        const t = player._talRasha;
+        const t = player._prismaticBuff;
         if (!t || !ctx?.dt) return;
         t.ttl -= ctx.dt;
-        if (t.ttl <= 0) player._talRasha = null;
+        if (t.ttl <= 0) player._prismaticBuff = null;
       },
     },
   },
@@ -636,12 +639,11 @@ export function elementDamageMult(player, element) {
   // Rabadon: global ability damage multiplier (legendary).
   const rab = player.items?.rabadon || 0;
   if (rab > 0) mult *= 1 + pick(rab, [0.10, 0.20, 0.30]);
-  // Tal Rasha cycle: bonus when the *current* element differs from the
-  // last element that triggered the buff. Buff expires after 5s.
-  const tr = player._talRasha;
-  if (tr && tr.ttl > 0 && tr.lastElement && tr.lastElement !== element) {
-    mult *= tr.mult;
-  }
+  // Prismatic buff: empowers the cast *after* any prior cast within 5s.
+  // The buff is set in the prismatic onCast hook (post-cast), so the
+  // very next cast that fires while the buff is alive picks it up here.
+  const pb = player._prismaticBuff;
+  if (pb && pb.ttl > 0) mult *= pb.mult;
   return mult;
 }
 

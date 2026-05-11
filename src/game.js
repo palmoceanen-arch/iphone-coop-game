@@ -2171,16 +2171,14 @@ export class Game {
     return false;
   }
 
-  // Check if a player is near a campfire or altar bonfire (for cooking).
+  // Check if a player is near a player-built campfire (for cooking).
+  // Altars are item-management stations and explicitly do NOT cook —
+  // cooking is a separate progression that requires building a real
+  // campfire structure.
   _isNearCampfire(player) {
-    // Player-built campfires
     for (const s of this.structures) {
       if (!s.alive || s.kind !== 'campfire') continue;
       if (Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
-    }
-    // Altar bonfires
-    for (const a of this.altars) {
-      if (Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
     }
     return false;
   }
@@ -2329,9 +2327,17 @@ export class Game {
     // staff/wand basic ranged attack is meant to be a pure damage poke
     // and explicitly opts out by setting `knockback: 0` on its
     // rangedAttack profile, which we honour here via `_activeRanged`.
-    const hitKb = player._activeRanged
+    //
+    // Aeromancer adds knockback to *any* wand/staff projectile hit
+    // regardless of which ability is equipped — the item's identity is
+    // crowd-control via ranged magic. Melee swings don't get this bonus
+    // (they already have kb=10 baked in).
+    let hitKb = player._activeRanged
       ? (player._activeRanged.knockback ?? 10)
       : 10;
+    if (player._activeRanged) {
+      hitKb += windKnockbackBonus(player);
+    }
     if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, hitKb)) {
       runItemHook(player, 'onHit', ctx);
       const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
