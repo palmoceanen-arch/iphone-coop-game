@@ -26,6 +26,7 @@ import {
   weaponAffinityFor,
 } from './models.js';
 import { SaveSystem } from './saveSystem.js';
+import { createGamepadNavState, readFirstGamepadNav } from './gamepadNav.js';
 
 // Default picks per slot — closest equivalents to the historical
 // P1 cyan-sword / P2 coral-axe loadout in the new wheel palette so a
@@ -112,6 +113,8 @@ export class StartMenu {
     this._weaponRows = [];
     this._rafId = null;
     this._lastT = 0;
+    this._gpNavState = createGamepadNavState();
+    this._gpFocus = { index: 0 };
 
     this._renderSlots();
     this._bind();
@@ -135,6 +138,7 @@ export class StartMenu {
   _showView(name) {
     const views = this.root.querySelectorAll('.start-view');
     views.forEach((v) => v.classList.toggle('active', v.dataset.view === name));
+    this._gpFocus.index = 0;
     if (name === 'newgame') {
       const seedInp = this.root.querySelector('#start-seed');
       if (seedInp && !seedInp.value) seedInp.value = this.seed;
@@ -143,6 +147,7 @@ export class StartMenu {
       // initial render appear blank.
       this._resizePreviews();
     }
+    this._refreshGamepadFocus();
   }
 
   // ---- Bindings ---------------------------------------------------------
@@ -569,6 +574,7 @@ export class StartMenu {
     const t0 = this._lastT;
     const tick = (now) => {
       this._rafId = requestAnimationFrame(tick);
+      this._handleGamepadNav();
       const dt = Math.min(0.05, (now - this._lastT) / 1000);
       this._lastT = now;
       // Slow side-to-side swivel (~±40°) so the cape is visible on the
@@ -583,6 +589,48 @@ export class StartMenu {
       }
     };
     this._rafId = requestAnimationFrame(tick);
+  }
+
+  _handleGamepadNav() {
+    if (!this.root?.classList.contains('open')) return;
+    const nav = readFirstGamepadNav(this._gpNavState);
+    if (!nav?.any) return;
+    const targets = this._gamepadTargets();
+    if (targets.length === 0) return;
+    if (nav.back) {
+      const active = this.root.querySelector('.start-view.active');
+      if (active?.dataset.view !== 'main') {
+        this._showView('main');
+        return;
+      }
+    }
+    if (nav.up || nav.left || nav.shoulderLeft) this._gpFocus.index = Math.max(0, this._gpFocus.index - 1);
+    if (nav.down || nav.right || nav.shoulderRight || nav.tab) this._gpFocus.index = Math.min(targets.length - 1, this._gpFocus.index + 1);
+    this._refreshGamepadFocus(targets);
+    if (nav.confirm) {
+      const el = targets[this._gpFocus.index];
+      if (el && !el.disabled) el.click();
+    }
+  }
+
+  _gamepadTargets() {
+    if (!this.root) return [];
+    const active = this.root.querySelector('.start-view.active');
+    if (!active) return [];
+    const selector = 'button:not(:disabled), input[type=text]';
+    return [...active.querySelectorAll(selector)].filter((el) => {
+      const style = window.getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+  }
+
+  _refreshGamepadFocus(targets = this._gamepadTargets()) {
+    this.root?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+    if (!targets.length) return;
+    this._gpFocus.index = Math.max(0, Math.min(this._gpFocus.index, targets.length - 1));
+    const el = targets[this._gpFocus.index];
+    el.classList.add('gp-focus');
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   _stopPreviewLoop() {

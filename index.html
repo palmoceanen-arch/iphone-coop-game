@@ -126,6 +126,7 @@
       .shop-col.p1 h3 .who { color: #6ad0ff; }
       .shop-col.p2 h3 .who { color: #ff8a8a; }
       .upg { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin: 6px 0; background: #1a2029; border-radius: 8px; font-size: 13px; }
+      .upg.gp-focus { outline: 2px solid #ffd166; background: #253044; box-shadow: 0 0 0 3px rgba(255,209,102,0.18); }
       .upg .lvl { font-size: 11px; opacity: 0.7; }
       .upg .price { color: #ffd166; font-weight: 700; }
       .upg.locked { opacity: 0.4; }
@@ -152,6 +153,7 @@
       .altar-help b { color: #ffd166; }
       .altar-items { display: flex; flex-direction: column; gap: 8px; }
       .altar-row { display: grid; grid-template-columns: 36px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; background: #1a2029; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+      .altar-row.gp-focus-row { background: #20283a; }
       .altar-row.rar-uncommon  { border-color: rgba(102,217,122,0.4); }
       .altar-row.rar-rare      { border-color: rgba(106,166,255,0.5); }
       .altar-row.rar-legendary { border-color: rgba(255,184,77,0.6); box-shadow: 0 0 14px rgba(255,184,77,0.15); }
@@ -163,6 +165,7 @@
       .altar-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
       .altar-actions button { background: #20262e; color: #fff; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-family: inherit; display: inline-flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1.2; min-width: 76px; }
       .altar-actions button:hover:not(:disabled) { background: #2a313b; border-color: rgba(255,209,102,0.5); }
+      .altar-actions button.gp-focus:not(:disabled) { border-color: #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.18); }
       .altar-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
       .altar-actions button .cost { font-size: 10px; opacity: 0.75; color: #ffd166; }
       .altar-empty { padding: 14px 12px; text-align: center; opacity: 0.6; font-size: 13px; font-style: italic; }
@@ -181,6 +184,7 @@
       .build-wheel .ring-title .dim { font-size: 10px; opacity: 0.55; margin-top: 4px; font-style: italic; }
       .build-wheel .slice { position: absolute; left: 50%; top: 50%; width: 78px; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 7px 6px; background: #1a2029; border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; cursor: pointer; user-select: none; transition: transform 90ms ease, border-color 90ms ease, background 90ms ease; }
       .build-wheel .slice:hover { background: #232b35; border-color: rgba(255,209,102,0.6); transform: translate(-50%, -50%) scale(1.06); }
+      .build-wheel .slice.gp-focus { background: #26324a; border-color: #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.18); }
       .build-wheel .slice.unaffordable { opacity: 0.55; border-color: rgba(255,91,91,0.45); }
       .build-wheel .slice .ic { font-size: 20px; line-height: 1; }
       .build-wheel .slice .nm { font-size: 10.5px; font-weight: 600; letter-spacing: 0.2px; text-align: center; }
@@ -353,6 +357,7 @@
         background: #2a313b; border: 1px solid rgba(255,255,255,0.1);
       }
       .start-main-actions button:hover:not(:disabled) { filter: brightness(1.1); }
+      #start-menu .gp-focus { outline: 2px solid #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.2), 0 0 18px rgba(255,209,102,0.18); }
       .start-main-actions button:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
       .start-seed-row {
         display: flex; gap: 10px; align-items: center;
@@ -775,11 +780,11 @@
                   </div>
                 </div>
               </div>
-              <div class="lobby-or">или играй на одной клавиатуре</div>
+              <div class="lobby-or">или играй на клавиатуре / геймпаде</div>
             </div>
             <div class="lobby-buttons">
               <button id="lobby-start" disabled>Ждём игроков… (0/2)</button>
-              <button id="start-keyboard">Начать на клавиатуре</button>
+              <button id="start-keyboard">Начать локально</button>
             </div>
           </div>
         </div>

@@ -38,16 +38,20 @@ the danger after dark.
 - **No external assets required** — all geometry is procedural, all sounds are
   WebAudio-synthesized so the game runs offline and starts in milliseconds.
 
-## Controls (one keyboard, two players)
+## Controls
 
-| | Player 1 (Cyan) | Player 2 (Coral) |
-|---|---|---|
-| Move | `W` `A` `S` `D` | `↑` `←` `↓` `→` |
-| Attack | `F` | `L` |
-| Dash | `R` | `K` |
-| Interact (chest / altar / planter) | `E` | `J` |
-| Build mode (recipes 1–4) | `1` `2` `3` `4` | `7` `8` `9` `0` |
-| Cycle planter crop (M3 farming) | `Q` | `U` |
+| Action | Keyboard P1 (Cyan) | Keyboard P2 (Coral) | Standard gamepad |
+|---|---|---|---|
+| Move | `W` `A` `S` `D` | `↑` `←` `↓` `→` | Left stick / D-pad |
+| Attack / place build | `F` | `L` | `A` / Cross |
+| Dash / cancel build | `R` | `K` | `B` / Circle |
+| Interact / rotate build | `E` | `J` | `X` / Square |
+| Open build wheel | `B` | `N` | `Y` / Triangle |
+| Cycle planter crop / food | `Q` | `U` | `LB` / `L1` |
+| Cast ability | `G` | `H` | `RB` / `R1` |
+| Build layer | `Shift` / `Ctrl` | `Shift` / `Ctrl` | `RT` / `R2` up, `LT` / `L2` down |
+| Upgrade shop | `Tab` | `Tab` | Back / View / Select |
+| Pause / start from lobby | `P` / `Esc` | `P` / `Esc` | Start / Menu |
 
 | Global | |
 |---|---|
@@ -55,6 +59,10 @@ the danger after dark.
 | P1 buy upgrades 1–4 | `1` `2` `3` `4` |
 | P2 buy upgrades 1–4 | `7` `8` `9` `0` |
 | Pause | `P` |
+
+Physical controllers use the browser Web Gamepad API. The first connected gamepad
+controls P1 and the second controls P2; 8BitDo pads work best in a standard /
+XInput-compatible mode.
 
 ### Farming (M3)
 
