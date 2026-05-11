@@ -52,6 +52,7 @@ const LEASH_DRAIN = 14;
 const REVIVE_RANGE = 2.5;        // metres
 const REVIVE_HOLD = 2.0;         // seconds of dashHeld required
 const REVIVE_HP = 0.5;           // fraction of maxHP after revive
+const NIGHT_WALKER_PLAYER_SCALE = 0.5;
 
 // Fixed simulation timestep used by Game._loop. 1/60s mirrors the
 // historical RAF cadence so balance / feel doesn't shift, while still
@@ -921,14 +922,17 @@ export class Game {
     // a visible silhouette mix (rogue + mage + warrior + minion).
     const KINDS = ['slime', 'archer', 'bomber', 'wisp', 'ogre'];
     const kind = KINDS[Math.floor(defaultRandom() * KINDS.length)];
-    // Level scales with in-game day count so later nights ramp up.
-    const day = Math.floor((this.world.dayTime + (this.elapsed / this.world.dayLength)) | 0) + 1;
-    const level = 1 + Math.min(4, Math.floor(day / 2));
+    const level = this._nightWalkerLevelForPlayer(player);
     const e = new Enemy(this.world, this.effects, this.sound, kind, x, z, level, {
       chunkKey,
       nightWalker: true,
     });
     this.enemies.push(e);
+  }
+
+  _nightWalkerLevelForPlayer(player) {
+    const playerLevel = Math.max(1, player?.level || 1);
+    return 1 + Math.floor((playerLevel - 1) * NIGHT_WALKER_PLAYER_SCALE);
   }
 
   _drainPendingEnemySpawns() {

@@ -181,10 +181,22 @@ const ENCHANT_DURATION = 5.0;
 // Flat damage bonus applied on every enchanted hit (on top of any
 // element-specific status effect). Multiplicative with crit/affinity.
 const ENCHANT_DAMAGE_BONUS = 1.30;
+const ENCHANT_REACH_MULT_1H = 1.45;
+const ENCHANT_REACH_MULT_2H = 2.0;
+const ENCHANT_VFX_SCALE_1H = 2.2;
+const ENCHANT_VFX_SCALE_2H = 3.0;
 // Mage's identity: their ability cooldowns are halved relative to the
 // other characters, since the enchant charge spends an ability cd
 // every time it binds. Other characters keep `abilityCdMult = 1.0`.
 const MAGE_ABILITY_CD_MULT = 0.5;
+
+function enchantTuningForWeapon(weaponKind) {
+  const twoHanded = typeof weaponKind === 'string' && weaponKind.includes('_2h');
+  return {
+    reachMult: twoHanded ? ENCHANT_REACH_MULT_2H : ENCHANT_REACH_MULT_1H,
+    vfxScale: twoHanded ? ENCHANT_VFX_SCALE_2H : ENCHANT_VFX_SCALE_1H,
+  };
+}
 
 export class Player {
   constructor(index, world, effects, sound, opts = {}) {
@@ -298,8 +310,7 @@ export class Player {
     //    movement is overridden to a forward dash in `_dashStrikeDir`
     //    and the player gets brief i-frames.
     //  - `_weaponEnchant` (Mage) holds the active weapon enchant
-    //    `{ element, color, hits, ttl }`. Each connecting attack
-    //    consumes one `hits`; expires when hits <= 0 or ttl <= 0.
+    //    `{ element, color, ttl, reachMult, vfxScale }`.
     this._blockReductionT = 0;
     this._dashStrikeT = 0;
     this._dashStrikeDir = { x: 0, z: 1 };
@@ -700,14 +711,10 @@ export class Player {
         this._weaponEnchant = null;
       }
     }
-    // Mage enchant VFX sync — keeps the painted weapon (tinted +
-    // 4× scale) in lockstep with the `_weaponEnchant` state. The
-    // state can clear from any of three places (TTL expiry above,
-    // `die()`, or game.js when `hits` drops to 0 on a connecting
-    // hit), so handling the transition here in the tick keeps every
-    // call site free of bookkeeping. Apply transitions whenever the
-    // attachment is present — if the weapon was just swapped, the
-    // new attachment may not have loaded yet; we re-check next frame.
+    // Mage enchant VFX sync — keeps the painted weapon in lockstep
+    // with the `_weaponEnchant` state. Apply transitions whenever the
+    // attachment is present — if the weapon was just swapped, the new
+    // attachment may not have loaded yet; we re-check next frame.
     if (this._weaponEnchant && !this._enchantVfx) {
       this._applyEnchantVfx();
     } else if (!this._weaponEnchant && this._enchantVfx) {
@@ -1130,20 +1137,11 @@ export class Player {
     const ringColor  = sp?.ringColor  ?? null;
 
     // Mage enchant reach boost — while a charge is bound, the next
-    // melee swing has its collision *radius* doubled. The angular
-    // arc is intentionally left untouched: stock weapon arcs are
-    // already wide (~0.85π for swords/axes), so doubling them used
-    // to wrap the slashArc strip into an almost-full circle around
-    // the player, which read as a 360° spin rather than an
-    // empowered slash. Keeping arc at the weapon's stock value
-    // means the slashArc paints the normal wedge shape, just
-    // farther out — pairs with the 3× weapon-mesh scale in
-    // `_applyEnchantVfx` (the visible blade looks like it has the
-    // reach to back the bigger hitbox). Enchant only ever binds on
-    // melee weapons (sword/axe slots in CHARACTERS.charSuper), so
-    // staff / wand don't get boosted.
+    // melee swing has its collision radius extended. The angular arc
+    // is intentionally left untouched so the slashArc paints the
+    // normal wedge shape, just farther out.
     if (this._weaponEnchant) {
-      range *= 2;
+      range *= this._weaponEnchant.reachMult ?? ENCHANT_REACH_MULT_1H;
     }
 
     // The full multiplier — same one cooldown uses — speeds the
@@ -1379,6 +1377,7 @@ export class Player {
       element,
       color,
       ttl:  ENCHANT_DURATION,
+      ...enchantTuningForWeapon(this._weaponKind),
       // Flat damage bonus applied on every enchanted hit on top of
       // any element-specific status effect. Read by game.js's
       // _onPlayerHitsEnemy so the multiplier lives on the enchant
@@ -1419,7 +1418,7 @@ export class Player {
 
   // Paint the Mage's bound enchant onto the equipped weapon mesh:
   // colour every Mesh's material(s) toward the enchant colour and
-  // scale the attachment by 4× so the next swing visibly carries
+  // scale the attachment so the next swing visibly carries
   // the element. The original materials and scales are stashed on
   // `_enchantVfx` so `_restoreEnchantVfx()` can put them back when
   // the enchant is consumed, expires or the player swaps weapons.
@@ -1444,13 +1443,10 @@ export class Player {
     const tintColor = new THREE.Color(enchant.color);
     for (const root of targets) {
       // Stash and apply scale at the attachment root so children
-      // (blade, hilt, guard …) all grow uniformly. 3× per the spec
-      // — keep this in sync with `ENCHANT_REACH_MULT` below: the
-      // bigger the visible weapon, the more the player expects its
-      // strike radius to extend, and the two numbers are tuned
-      // together (3× scale + 2× reach feels readable in playtest).
+      // (blade, hilt, guard …) all grow uniformly.
       const origScale = root.scale.clone();
-      root.scale.set(origScale.x * 3, origScale.y * 3, origScale.z * 3);
+      const vfxScale = enchant.vfxScale ?? ENCHANT_VFX_SCALE_1H;
+      root.scale.set(origScale.x * vfxScale, origScale.y * vfxScale, origScale.z * vfxScale);
       scaleSwaps.push({ root, origScale });
       root.traverse((obj) => {
         if (!obj.isMesh || !obj.material) return;
