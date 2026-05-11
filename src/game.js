@@ -2681,6 +2681,20 @@ export class Game {
         this.input.consumeGamepadNavEdges(1);
       }
     }
+    // Death screen has a single Restart button. Show a focus ring on it
+    // while #death is open and fire it on A/Start so a downed pair can
+    // recover without reaching for the keyboard. Edges from both slots
+    // count because either player can pick the gamepad up.
+    if (this.dead) {
+      const deathNav = gamepadNav[0]?.confirm || gamepadNav[1]?.confirm;
+      const restartBtn = document.getElementById('restart');
+      if (restartBtn) restartBtn.classList.add('gp-focus');
+      if (deathNav && restartBtn && !restartBtn.disabled) {
+        restartBtn.click();
+        this.input.consumeGamepadNavEdges(0);
+        this.input.consumeGamepadNavEdges(1);
+      }
+    }
     for (let slot = 0; slot < this.players.length; slot++) {
       const nav = gamepadNav[slot];
       let consumed = false;
