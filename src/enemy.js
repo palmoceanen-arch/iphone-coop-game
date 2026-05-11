@@ -353,7 +353,7 @@ export class Enemy {
     this.knockback.z += (dz / len) * knockback;
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xfff7a0, 6, 4, 0.3);
     this.effects.damageNumber(new THREE.Vector3(this.pos.x, 1.8 + this.radius, this.pos.z), amount, '#fff7a0');
-    this.sound.enemyHit();
+    this.sound.enemyHit({ kind: this.kind, elite: this.elite });
     if (this.hp <= 0) this.die();
     return true;
   }

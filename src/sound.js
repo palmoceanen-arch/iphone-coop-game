@@ -37,14 +37,24 @@ const SAMPLES = {
   hitFlesh:     ['hit_flesh_a.ogg', 'hit_flesh_b.ogg', 'hit_flesh_c.ogg'],
   hitHeavy:     ['hit_heavy_a.ogg', 'hit_heavy_b.ogg'],
   // Short monster vocalisations layered on top of the hit_flesh impact
-  // when the player damages an enemy. Mixed for variety so repeated
-  // combat hits don't sound identical: a guttural monster grumble, two
-  // short grunts, and one pained hurt — all from OpenGameArt's CC0
-  // "80 creature SFX" pack (rubberduck). Plays at a lower gain than the
-  // impact itself so the weapon-flesh punch still leads, with the voice
-  // as a sweetener.
-  enemyVoice:   ['enemy_voice_a.ogg', 'enemy_voice_b.ogg', 'enemy_voice_c.ogg', 'enemy_voice_d.ogg'],
+  // when the player damages an enemy. Two clips so repeated combat hits
+  // don't sound identical: a guttural monster grumble (monster_05) and
+  // a pitched-up pained 'hurt' (hurt_05 +10% rate). Plays at a lower
+  // gain than the impact itself so the weapon-flesh punch still leads,
+  // with the voice as a sweetener. All clips are CC0 from OpenGameArt's
+  // "80 creature SFX" pack (rubberduck).
+  enemyVoice:   ['enemy_voice_a.ogg', 'enemy_voice_d.ogg'],
+  // Bigger, slower roar reserved for the suicide-bomber kind on hit —
+  // hooked up via enemyHit({ kind: 'bomber' }). Probabilistic, so most
+  // bomber hits still use the regular enemyVoice pool.
+  enemyVoiceBomber: ['enemy_voice_bomber_a.ogg'],
+  // Two odd, otherworldly vocalisations reserved for elite (legendary)
+  // enemies — hooked up via enemyHit({ elite: true }). Plays rarely so
+  // it stays special.
+  enemyVoiceLegendary: ['enemy_voice_legendary_a.ogg', 'enemy_voice_legendary_b.ogg'],
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
+  // Death cry on enemy.die() — short creature grunts so a kill reads
+  // as a vocal end-of-life rather than a generic impact splat.
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
   // Heavy plank-snap impacts (Kenney impactWood_heavy) — meatier
   // splintering crack than the previous medium variants. `treeFall()`
@@ -75,6 +85,8 @@ const RATE_LIMIT = {
   // smear into a roar on AoE / multi-hit abilities. 90 ms gives a clear
   // gap between vocalisations even when 6 enemies eat the same fireball.
   enemyVoice: 0.09,
+  enemyVoiceBomber: 0.20,
+  enemyVoiceLegendary: 0.20,
   enemyDie: 0.05,
   woodBreak: 0.05,
   potBreak: 0.05,
@@ -95,6 +107,8 @@ const VOICE_CAP = {
   hitHeavy: 3,
   hurt: 2,
   enemyVoice: 3,
+  enemyVoiceBomber: 2,
+  enemyVoiceLegendary: 2,
   enemyDie: 4,
   woodBreak: 3,
   potBreak: 3,
@@ -223,7 +237,7 @@ export class Sound {
     // Kick off background prefetch of the most-common combat samples on
     // first user gesture so the first swing isn't silent. Less-common
     // samples still load on demand; the loader is idempotent.
-    this._prefetch(['swing', 'hitFlesh', 'enemyVoice', 'hurt', 'enemyDie']);
+    this._prefetch(['swing', 'hitFlesh', 'enemyVoice', 'enemyVoiceBomber', 'enemyVoiceLegendary', 'hurt', 'enemyDie']);
   }
 
   setWorld(world) { this._world = world; }
@@ -333,6 +347,10 @@ export class Sound {
       // triangle that sweeps up then down, so even with the buffer
       // missing the player still hears "something vocal" under each hit.
       case 'enemyVoice':this.tone({ freq: 520, type: 'triangle', dur: 0.10, gain: 0.18, slide: 220 }); this.tone({ freq: 740, type: 'triangle', dur: 0.10, gain: 0.14, slide: -260 }); break;
+      // Bomber stand-in: lower, longer grumble.
+      case 'enemyVoiceBomber': this.tone({ freq: 260, type: 'sawtooth', dur: 0.20, gain: 0.22, slide: -120 }); this.noise({ dur: 0.12, gain: 0.18, lp: 900 }); break;
+      // Legendary stand-in: dissonant chirp that sounds 'wrong'.
+      case 'enemyVoiceLegendary': this.tone({ freq: 380, type: 'square', dur: 0.18, gain: 0.18, slide: 540 }); this.tone({ freq: 920, type: 'triangle', dur: 0.18, gain: 0.12, slide: -480 }); break;
       case 'woodBreak': this.noise({ dur: 0.18, gain: 0.5, lp: 1100, hp: 200 }); break;
       case 'hitWood':   this.noise({ dur: 0.10, gain: 0.42, lp: 1300, hp: 240 }); this.tone({ freq: 240, type: 'sawtooth', dur: 0.06, gain: 0.14, slide: -90 }); break;
       case 'hitStone':  this.noise({ dur: 0.10, gain: 0.45, lp: 2200, hp: 500 }); this.tone({ freq: 360, type: 'square',   dur: 0.05, gain: 0.10, slide: -160 }); break;
@@ -353,11 +371,25 @@ export class Sound {
   swing(opts)      { this._play('swing', { gain: 0.45, ...(opts || {}) }); }
   hit(opts)        { this._play('hitFlesh', opts); }            // sword hits flesh
   enemyHit(opts)   {
-    this._play('hitFlesh', { ...(opts || {}), gain: 0.7 });
-    // Layer a short cute / grunty monster yelp under the impact — only
-    // adds a voice, never replaces the punch. Lower gain so combat
-    // doesn't pivot from "swing-and-thump" to "swing-and-yelp".
-    this._play('enemyVoice', { gain: 0.55 });
+    const o = opts || {};
+    this._play('hitFlesh', { ...o, gain: 0.7 });
+    // Layer a short monster yelp under the impact. The voice pool is
+    // picked based on the enemy's `kind` / `elite` flags passed in:
+    //   • elite → 15% chance to play a rarer "legendary" vocalisation
+    //     (otherworldly weird_01/02). Falls through to normal pool on
+    //     the other 85% of hits so elite enemies still sound consistent
+    //     with their non-elite cousins.
+    //   • kind === 'bomber' → 33% chance to play the bigger monster_03
+    //     roar so the suicide-bomber occasionally announces itself.
+    //   • otherwise → regular enemyVoice pool (monster_05 / pitched
+    //     hurt_05).
+    // Voice never replaces the punch; the lower 0.55 gain keeps combat
+    // reading as "swing-and-thump-with-grunt" rather than "swing-and-
+    // yelp".
+    let pool = 'enemyVoice';
+    if (o.elite && Math.random() < 0.15) pool = 'enemyVoiceLegendary';
+    else if (o.kind === 'bomber' && Math.random() < 0.33) pool = 'enemyVoiceBomber';
+    this._play(pool, { gain: 0.55 });
   }
   enemyDie(opts)   { this._play('enemyDie', opts); }
   hurt(opts)       { this._play('hurt', opts); }
