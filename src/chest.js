@@ -23,7 +23,7 @@ const SEED_DROP_CHANCE = 0.6;
 const SEED_DROP_RANGE = [1, 3];
 
 const PROMPT_RADIUS = 2.2;
-const OPEN_RADIUS = 1.2;
+const OPEN_RADIUS = 1.6;
 
 export class Chest {
   constructor(scene, x, z) {
@@ -73,24 +73,24 @@ export class Chest {
       if (this._fade > 1.8) this._destroy();
       return;
     }
-    let near = null, nd = Infinity;
+    let promptPlayer = null, promptD = Infinity;
+    let opener = null, openD = OPEN_RADIUS;
     for (const p of players) {
       if (!p.alive) continue;
       const d = vdist(this.pos, p.pos);
-      if (d < nd) { nd = d; near = p; }
+      if (d < promptD) { promptD = d; promptPlayer = p; }
+      if (d < openD && p._lastIntent?.interact) { openD = d; opener = p; }
     }
-    if (!near) return;
-    if (nd < PROMPT_RADIUS && !this._promptShown) {
-      const key = near.index === 0 ? 'E' : 'J';
+    if (!promptPlayer) return;
+    if (promptD < PROMPT_RADIUS && !this._promptShown) {
+      const key = promptPlayer.index === 0 ? 'E' : 'J';
       effects.toast?.(`Нажми ${key} чтобы открыть сундук`, '#ffd166');
       this._promptShown = true;
     }
-    if (nd < OPEN_RADIUS) {
-      const intent = near._lastIntent;
-      if (intent && intent.interact) {
-        this._open(sound, effects, onSpawnRune, onSpawnPickup);
-        onOpened?.(this);
-      }
+    if (opener) {
+      opener._lastIntent.interact = false;
+      this._open(sound, effects, onSpawnRune, onSpawnPickup);
+      onOpened?.(this);
     }
   }
 
