@@ -3,6 +3,7 @@
 // `applyAudio` work happens inside Settings; this module only handles the
 // UI side: tabs, segmented controls, sliders, toggles, presets, and the
 // open/close state.
+import { createGamepadNavState, readFirstGamepadNav } from './gamepadNav.js';
 
 export class PauseMenu {
   constructor(settings) {
@@ -22,10 +23,20 @@ export class PauseMenu {
     this._bindFooter();
     this._unsubscribe = settings.onChange(() => this.refresh());
     this.refresh();
+
+    // Standalone gamepad nav state — independent of in-game `Input` so the
+    // overlay works whether it was opened from the start menu (no Game
+    // instance yet) or in-game via pause. The Game side already guards
+    // against double-firing because `update()` early-returns on dt<=0
+    // while paused.
+    this._gpNavState = createGamepadNavState();
+    this._gpFocus = 0;
+    this._gpRaf = null;
   }
 
   destroy() {
     if (this._unsubscribe) this._unsubscribe();
+    this._stopGamepadLoop();
   }
 
   open() {
@@ -33,16 +44,124 @@ export class PauseMenu {
     this.isOpen = true;
     this.root.classList.add('open');
     this.refresh();
+    this._gpFocus = 0;
+    this._startGamepadLoop();
   }
 
   close() {
     if (!this.root || !this.isOpen) return;
     this.isOpen = false;
     this.root.classList.remove('open');
+    this._stopGamepadLoop();
   }
 
   toggle() {
     if (this.isOpen) this.close(); else this.open();
+  }
+
+  // ---- Gamepad navigation ----------------------------------------------
+
+  _startGamepadLoop() {
+    if (this._gpRaf !== null) return;
+    const tick = () => {
+      if (!this.isOpen) {
+        this._gpRaf = null;
+        return;
+      }
+      this._handleGamepadNav();
+      this._gpRaf = requestAnimationFrame(tick);
+    };
+    this._gpRaf = requestAnimationFrame(tick);
+  }
+
+  _stopGamepadLoop() {
+    if (this._gpRaf !== null) {
+      cancelAnimationFrame(this._gpRaf);
+      this._gpRaf = null;
+    }
+    this.root?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+  }
+
+  // Visible, enabled interactive elements in the currently-active tab
+  // (Видео or Звук) plus the footer buttons. Order matches the DOM, so
+  // up/down walks the menu top-to-bottom and left/right cycles between
+  // siblings inside a segmented row.
+  _gamepadTargets() {
+    if (!this.root) return [];
+    const sel = 'button:not(:disabled), .toggle[data-key], input[type=range]:not(:disabled)';
+    return [...this.root.querySelectorAll(sel)].filter((el) => {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      // Hide elements that live in an inactive tab pane.
+      const pane = el.closest('.pause-tab');
+      if (pane && !pane.classList.contains('active')) return false;
+      return true;
+    });
+  }
+
+  _refreshGamepadFocus(targets = this._gamepadTargets()) {
+    this.root?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+    if (!targets.length) return;
+    this._gpFocus = Math.max(0, Math.min(this._gpFocus, targets.length - 1));
+    const el = targets[this._gpFocus];
+    el.classList.add('gp-focus');
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  _adjustSlider(input, dir) {
+    const step = Number(input.step) || 1;
+    const min = Number(input.min);
+    const max = Number(input.max);
+    const cur = Number(input.value);
+    const next = Math.max(
+      Number.isFinite(min) ? min : -Infinity,
+      Math.min(Number.isFinite(max) ? max : Infinity, cur + dir * step),
+    );
+    if (next === cur) return false;
+    input.value = String(next);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+
+  _handleGamepadNav() {
+    if (!this.isOpen) return;
+    const targets = this._gamepadTargets();
+    if (targets.length === 0) return;
+    const nav = readFirstGamepadNav(this._gpNavState);
+    if (!nav) {
+      this._refreshGamepadFocus(targets);
+      return;
+    }
+    if (nav.back) {
+      this.close();
+      this.onToggle?.(false);
+      return;
+    }
+    if (nav.tab) {
+      // Cycle the Видео / Звук tabs.
+      const videoBtn = document.getElementById('pause-tab-video');
+      const audioBtn = document.getElementById('pause-tab-audio');
+      if (videoBtn?.classList.contains('active')) audioBtn?.click();
+      else videoBtn?.click();
+      this._gpFocus = 0;
+      this._refreshGamepadFocus();
+      return;
+    }
+    const cur = targets[Math.min(this._gpFocus, targets.length - 1)];
+    const isSlider = cur && cur.tagName === 'INPUT' && cur.type === 'range';
+    if (isSlider && (nav.left || nav.right)) {
+      this._adjustSlider(cur, nav.left ? -1 : 1);
+    } else {
+      if (nav.up || nav.left || nav.shoulderLeft) this._gpFocus = Math.max(0, this._gpFocus - 1);
+      if (nav.down || nav.right || nav.shoulderRight) {
+        this._gpFocus = Math.min(targets.length - 1, this._gpFocus + 1);
+      }
+    }
+    this._refreshGamepadFocus(targets);
+    if (nav.confirm) {
+      const el = targets[Math.min(this._gpFocus, targets.length - 1)];
+      if (el && typeof el.click === 'function' && !el.disabled) el.click();
+    }
   }
 
   // ---- Wiring -----------------------------------------------------------

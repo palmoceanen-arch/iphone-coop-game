@@ -593,6 +593,10 @@ export class StartMenu {
 
   _handleGamepadNav() {
     if (!this.root?.classList.contains('open')) return;
+    // Pause menu opens as an overlay on top of the start menu (for the
+    // "Настройки" entry). When it's up it owns the gamepad, so skip our
+    // own nav handling to avoid both layers reacting to the same press.
+    if (this.pauseMenu?.isOpen) return;
     const nav = readFirstGamepadNav(this._gpNavState);
     if (!nav?.any) return;
     const targets = this._gamepadTargets();

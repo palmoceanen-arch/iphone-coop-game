@@ -290,6 +290,12 @@
       }
       .preset-row button:hover { background: #1a2029; }
       .preset-row button.active { border-color: #3b82f6; color: #fff; background: #1a2740; }
+      /* Gamepad focus ring inside the pause menu — applied to whichever
+         interactive child (tab, preset, segment button, toggle, slider,
+         or footer button) is currently focused by the gamepad. */
+      #pause .gp-focus:not(:disabled),
+      #pause .toggle.gp-focus { outline: 2px solid #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.2), 0 0 18px rgba(255,209,102,0.18); }
+      #pause input[type=range].gp-focus { outline: 2px solid #ffd166; outline-offset: 4px; }
       .pause-footer {
         display: flex; justify-content: space-between; align-items: center; gap: 10px;
         margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);

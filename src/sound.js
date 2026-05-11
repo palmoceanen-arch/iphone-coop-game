@@ -36,12 +36,13 @@ const SAMPLES = {
   swing:        ['swing_whoosh_a.ogg', 'swing_whoosh_b.ogg', 'swing_whoosh_c.ogg', 'swing_whoosh_d.ogg'],
   hitFlesh:     ['hit_flesh_a.ogg', 'hit_flesh_b.ogg', 'hit_flesh_c.ogg'],
   hitHeavy:     ['hit_heavy_a.ogg', 'hit_heavy_b.ogg'],
-  // Short, mostly-cute monster vocalisations layered on top of the
-  // hit_flesh impact when the player damages an enemy. Mixed source so
-  // repeated combat hits have variety: two playful 'cute' yelps, one
-  // grunt, and one short 'hurt' — from OpenGameArt's CC0 "80 creature
-  // SFX" pack. Plays at a lower gain than the impact itself so the
-  // weapon-flesh punch still leads, with the voice as a sweetener.
+  // Short monster vocalisations layered on top of the hit_flesh impact
+  // when the player damages an enemy. Mixed for variety so repeated
+  // combat hits don't sound identical: a guttural monster grumble, two
+  // short grunts, and one pained hurt — all from OpenGameArt's CC0
+  // "80 creature SFX" pack (rubberduck). Plays at a lower gain than the
+  // impact itself so the weapon-flesh punch still leads, with the voice
+  // as a sweetener.
   enemyVoice:   ['enemy_voice_a.ogg', 'enemy_voice_b.ogg', 'enemy_voice_c.ogg', 'enemy_voice_d.ogg'],
   hurt:         ['hurt_armor_a.ogg', 'hurt_armor_b.ogg'],
   enemyDie:     ['enemy_die_a.ogg', 'enemy_die_b.ogg'],
