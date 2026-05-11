@@ -325,18 +325,25 @@ export class Input {
     return -1;
   }
 
-  consumeGamepadNav(slot) {
+  // Build a nav-like view of the current edges WITHOUT consuming them.
+  // `intent()` reads the same face/shoulder edges for in-game actions
+  // (attack/dash/interact/build wheel/seed/ability), so we hand the caller
+  // a peek and let it commit the consume via `consumeGamepadNavEdges(slot)`
+  // only after a UI handler (altar / build wheel / phone shop / lobby)
+  // actually accepted the input. Otherwise the edges fall through to
+  // `intent()` for the gameplay handlers.
+  peekGamepadNav(slot) {
     const gp = this.gamepads[slot];
     const nav = {
-      up: this._consumeGamepadEdge(slot, 'navUpEdge'),
-      down: this._consumeGamepadEdge(slot, 'navDownEdge'),
-      left: this._consumeGamepadEdge(slot, 'navLeftEdge'),
-      right: this._consumeGamepadEdge(slot, 'navRightEdge'),
-      confirm: this._consumeGamepadEdge(slot, 'attackEdge'),
-      back: this._consumeGamepadEdge(slot, 'dashEdge'),
-      tab: this._consumeGamepadEdge(slot, 'buildMenuEdge'),
-      shoulderLeft: this._consumeGamepadEdge(slot, 'seedCycleEdge'),
-      shoulderRight: this._consumeGamepadEdge(slot, 'abilityEdge'),
+      up: !!gp.navUpEdge,
+      down: !!gp.navDownEdge,
+      left: !!gp.navLeftEdge,
+      right: !!gp.navRightEdge,
+      confirm: !!gp.attackEdge,
+      back: !!gp.dashEdge,
+      tab: !!gp.buildMenuEdge,
+      shoulderLeft: !!gp.seedCycleEdge,
+      shoulderRight: !!gp.abilityEdge,
       lookX: gp.lookX,
       lookZ: gp.lookZ,
       connected: gp.index !== null,
@@ -344,6 +351,20 @@ export class Input {
     nav.any = nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.back || nav.tab ||
       nav.shoulderLeft || nav.shoulderRight || Math.hypot(nav.lookX, nav.lookZ) > 0.45;
     return nav;
+  }
+
+  consumeGamepadNavEdges(slot) {
+    if (slot < 0 || slot >= this.gamepads.length) return;
+    const gp = this.gamepads[slot];
+    gp.navUpEdge = false;
+    gp.navDownEdge = false;
+    gp.navLeftEdge = false;
+    gp.navRightEdge = false;
+    gp.attackEdge = false;
+    gp.dashEdge = false;
+    gp.buildMenuEdge = false;
+    gp.seedCycleEdge = false;
+    gp.abilityEdge = false;
   }
 
   intent(playerIndex) {

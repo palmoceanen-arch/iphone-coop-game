@@ -411,6 +411,10 @@ export class Game {
 
     // start screen
     this._waitingForStart = true;
+    // Focus index for the lobby/QR screen's gamepad navigation. Reset to 0
+    // on every entry; _handleLobbyGamepadNav clamps it against the live set
+    // of enabled buttons so it stays valid as `lobby-start` enables.
+    this._lobbyGpFocus = 0;
     this._lastT = performance.now();
     // Fixed-timestep accumulator. Game logic always advances in slices of
     // exactly FIXED_DT seconds so simulation is reproducible from a seed
@@ -581,6 +585,51 @@ export class Game {
       }
       this._pushPlayerState(slot);
     }
+  }
+
+  _lobbyButtons() {
+    const root = document.getElementById('intro');
+    if (!root || root.style.display === 'none') return [];
+    return [...root.querySelectorAll('.lobby-buttons button:not(:disabled)')]
+      .filter((el) => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      });
+  }
+
+  _refreshLobbyGamepadFocus() {
+    const root = document.getElementById('intro');
+    if (!root) return;
+    root.querySelectorAll('.lobby-buttons button.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+    const targets = this._lobbyButtons();
+    if (targets.length === 0) return;
+    this._lobbyGpFocus = Math.max(0, Math.min(this._lobbyGpFocus, targets.length - 1));
+    targets[this._lobbyGpFocus].classList.add('gp-focus');
+  }
+
+  _handleLobbyGamepadNav(nav) {
+    // Always refresh the focus ring so it stays visible across frames as the
+    // enabled-button set changes (lobby-start unlocks when both players join).
+    this._refreshLobbyGamepadFocus();
+    if (!nav || !nav.any) return false;
+    const targets = this._lobbyButtons();
+    if (targets.length === 0) return false;
+    let moved = false;
+    if (nav.left || nav.up || nav.shoulderLeft) {
+      this._lobbyGpFocus = Math.max(0, this._lobbyGpFocus - 1);
+      moved = true;
+    }
+    if (nav.right || nav.down || nav.shoulderRight || nav.tab) {
+      this._lobbyGpFocus = Math.min(targets.length - 1, this._lobbyGpFocus + 1);
+      moved = true;
+    }
+    if (moved) this._refreshLobbyGamepadFocus();
+    if (nav.confirm) {
+      const el = targets[Math.min(this._lobbyGpFocus, targets.length - 1)];
+      if (el && !el.disabled) el.click();
+      return true;
+    }
+    return moved;
   }
 
   _handleGamepadShopNav(slot, nav) {
@@ -2604,7 +2653,11 @@ export class Game {
 
   update(dt, dt0) {
     this.input.pollGamepads();
-    const gamepadNav = [this.input.consumeGamepadNav(0), this.input.consumeGamepadNav(1)];
+    // Peek nav per slot: edges are NOT consumed here. Each UI handler below
+    // returns truthy when it actually used the nav, at which point we
+    // commit the consume so `intent()` doesn't see the same face-button
+    // edges as in-game actions on the same frame.
+    const gamepadNav = [this.input.peekGamepadNav(0), this.input.peekGamepadNav(1)];
     if (this.input.consumeGamepadPause()) {
       if (this._waitingForStart) {
         this.lobby?.startGame?.();
@@ -2619,12 +2672,28 @@ export class Game {
         if (!closedWheel) this._togglePauseMenu();
       }
     }
+    // Lobby/QR screen: drive button focus + click via gamepad while we're
+    // still waiting for any of the start buttons to be pressed.
+    if (this._waitingForStart) {
+      const lobbyNav = gamepadNav[0]?.any ? gamepadNav[0] : (gamepadNav[1]?.any ? gamepadNav[1] : null);
+      if (this._handleLobbyGamepadNav(lobbyNav)) {
+        this.input.consumeGamepadNavEdges(0);
+        this.input.consumeGamepadNavEdges(1);
+      }
+    }
     for (let slot = 0; slot < this.players.length; slot++) {
       const nav = gamepadNav[slot];
-      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) continue;
-      const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
-      if (openWheel && openWheel.handleGamepadNav(nav)) continue;
-      if (this._handleGamepadShopNav(slot, nav)) continue;
+      let consumed = false;
+      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) consumed = true;
+      else {
+        const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
+        if (openWheel && openWheel.handleGamepadNav(nav)) consumed = true;
+        else if (this._handleGamepadShopNav(slot, nav)) consumed = true;
+      }
+      if (consumed) {
+        this.input.consumeGamepadNavEdges(slot);
+        continue;
+      }
       if (this.input.consumeGamepadAbility(slot)) this._tryCastAbility(slot);
       if (this.input.consumeGamepadShop(slot)) this._toggleGamepadShop(slot);
     }
