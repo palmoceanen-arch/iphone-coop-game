@@ -46,41 +46,53 @@ const COLORS = [
 // so the picked colour shows up purely on the armour/cloth — white is
 // pure white, red is pure red, no atlas-grey muddying. Skin pixels
 // (face/hands) always keep their natural tone regardless of the pick.
+// Curated pastel palette derived from the world's anchor hues (warm
+// grass green, sand beige, teal water, sky blue, wood brown, stone
+// grey). Every entry sits in a distinct hue bucket — there is no
+// second yellow / second green / second blue — and includes proper
+// neutral tones (near-black `onyx` and mid-grey `stone`). The list is
+// index-aligned with CAPE_COLOR_PRESETS so the i-th body has a
+// deeper-saturation cape sibling in the same hue family (per the
+// "аналогичные цвета" requirement).
 export const PLAYER_COLOR_PRESETS = [
-  { id: 'white',   name: 'Белый',       body: 0xffffff },
-  { id: 'red',     name: 'Красный',     body: 0xf25a5a },
-  { id: 'orange',  name: 'Оранжевый',   body: 0xff8a3a },
-  { id: 'amber',   name: 'Янтарь',      body: 0xffb633 },
-  { id: 'yellow',  name: 'Жёлтый',      body: 0xffe066 },
-  { id: 'lime',    name: 'Лайм',        body: 0xb6e84d },
-  { id: 'green',   name: 'Зелёный',     body: 0x55cf6c },
-  { id: 'teal',    name: 'Бирюзовый',   body: 0x35bcd0 },
-  { id: 'sky',     name: 'Голубой',     body: 0x4ec1ff },
-  { id: 'blue',    name: 'Синий',       body: 0x6883ff },
-  { id: 'indigo',  name: 'Индиго',      body: 0x8474ff },
-  { id: 'purple',  name: 'Пурпурный',   body: 0xb56fec },
-  { id: 'pink',    name: 'Розовый',     body: 0xff77aa },
+  { id: 'ivory',      name: 'Слоновая кость', body: 0xf4ecd8 },
+  { id: 'coral',      name: 'Коралл',         body: 0xf4a89c },
+  { id: 'peach',      name: 'Персик',         body: 0xf6c39a },
+  { id: 'butter',     name: 'Сливочный',      body: 0xf5e2a3 },
+  { id: 'sage',       name: 'Шалфей',         body: 0xb8d4a8 },
+  { id: 'mint',       name: 'Мята',           body: 0xa8dac5 },
+  { id: 'sky',        name: 'Небо',           body: 0xb8d4ef },
+  { id: 'periwinkle', name: 'Барвинок',       body: 0xb6b9ee },
+  { id: 'lavender',   name: 'Лаванда',        body: 0xcfb9e6 },
+  { id: 'rose',       name: 'Роза',           body: 0xf3c0d1 },
+  { id: 'mocha',      name: 'Мокка',          body: 0xc9a98a },
+  { id: 'stone',      name: 'Камень',         body: 0xb5b6ba },
+  { id: 'onyx',       name: 'Оникс',          body: 0x2a2a2e },
 ];
 
-// Cape palette — same ring layout as the body, just deeper / more
-// saturated tones so the cape reads as a contrasting accent. The cape
-// material has its texture stripped (see models.js `_stripMapForFlatColor`),
-// so `material.color` paints the cape exactly as picked — no atlas
-// multiplication, no muddying.
+// Cape palette — index-aligned with PLAYER_COLOR_PRESETS. Each cape is
+// a deeper, more saturated cousin of the body colour at the same index
+// so the cape reads as a same-family accent rather than a clashing
+// pop. (You can still freely mix body + cape across indices; this just
+// makes the "matching set" default work and gives the picker a natural
+// row-by-row visual grouping.) The cape material has its texture
+// stripped (see models.js `_stripMapForFlatColor`), so `material.color`
+// paints the cape exactly as picked — no atlas multiplication, no
+// muddying.
 export const CAPE_COLOR_PRESETS = [
-  { id: 'white',    name: 'Белый',       body: 0xf0f0f0 },
-  { id: 'crimson',  name: 'Багровый',    body: 0xa83232 },
-  { id: 'rust',     name: 'Ржавчина',    body: 0xc66128 },
-  { id: 'gold',     name: 'Золотой',     body: 0xc69a26 },
-  { id: 'olive',    name: 'Оливковый',   body: 0x6b7a2a },
-  { id: 'forest',   name: 'Лесной',      body: 0x2e7d3a },
-  { id: 'teal',     name: 'Бирюзовый',   body: 0x256e7a },
-  { id: 'navy',     name: 'Морской',     body: 0x223066 },
-  { id: 'royal',    name: 'Королевский', body: 0x2c3a96 },
-  { id: 'plum',     name: 'Сливовый',    body: 0x6a2585 },
-  { id: 'wine',     name: 'Винный',      body: 0x7a1a44 },
-  { id: 'silver',   name: 'Серебро',     body: 0xa8a8b0 },
-  { id: 'charcoal', name: 'Уголь',       body: 0x2a2e34 },
+  { id: 'honey',    name: 'Мёд',           body: 0xb8a05a },
+  { id: 'crimson',  name: 'Багряный',      body: 0xc75a55 },
+  { id: 'amber',    name: 'Янтарь',        body: 0xd28b4a },
+  { id: 'mustard',  name: 'Горчица',       body: 0xb89742 },
+  { id: 'moss',     name: 'Мох',           body: 0x6a8a52 },
+  { id: 'jade',     name: 'Нефрит',        body: 0x4f9d7b },
+  { id: 'azure',    name: 'Лазурь',        body: 0x5a8db8 },
+  { id: 'royal',    name: 'Королевский',   body: 0x5a5fb4 },
+  { id: 'plum',     name: 'Слива',         body: 0x7c4a9c },
+  { id: 'wine',     name: 'Винный',        body: 0x9c4663 },
+  { id: 'chestnut', name: 'Каштан',        body: 0x7d5034 },
+  { id: 'slate',    name: 'Сланец',        body: 0x5e5f63 },
+  { id: 'obsidian', name: 'Обсидиан',      body: 0x14141a },
 ];
 
 // KayKit characters face +Z by default in the GLB; our atan2(facing.x,facing.z)

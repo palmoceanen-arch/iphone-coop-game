@@ -31,8 +31,13 @@ import { SaveSystem } from './saveSystem.js';
 // P1 cyan-sword / P2 coral-axe loadout in the new wheel palette so a
 // user who just clicks "Применить" without touching anything sees the
 // familiar characters.
-const DEFAULT_BODY_BY_INDEX = ['sky', 'red'];
-const DEFAULT_CAPE_BY_INDEX = ['royal', 'crimson'];
+// Defaults pick body + cape from the same hue family per slot so the
+// out-of-the-box pairing reads as a coherent set. Slot 1: pastel sky
+// blue with a deeper azure cape; slot 2: pastel coral with a crimson
+// cape. (See PLAYER_COLOR_PRESETS / CAPE_COLOR_PRESETS in player.js —
+// they're index-aligned, so any matching pair works as a default.)
+const DEFAULT_BODY_BY_INDEX = ['sky', 'coral'];
+const DEFAULT_CAPE_BY_INDEX = ['azure', 'crimson'];
 const DEFAULT_WEAPON_BY_INDEX = ['sword_1h', 'axe_1h'];
 // Default character per slot. Both default to Knight so the "click
 // Применить without touching anything" path matches the historical
