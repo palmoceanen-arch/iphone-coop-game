@@ -557,17 +557,17 @@ export const ITEMS = [
     desc: 'Урон всех способностей выше. 1 стак: +10%. 3: +20%. 5: +30%.',
     hooks: {},
   },
-  // Tal Rasha's Wrappings — redesigned as a "combo caster" buff.
-  // Original cycle ("other elements stronger") was a dead effect for
-  // anyone running a single-element build, which is the default in
-  // this game. The replacement instead empowers any *subsequent* casts
-  // for a 5s window after a cast, refreshing on every cast — so
-  // chaining casts within the window scales them up regardless of
-  // which element they are. The first cast doesn't benefit (priming
-  // cost); every cast within 5s of the previous one does.
+  // Tal Rasha's Wrappings — "cast-into-basic" bridge. Players only carry
+  // one ability slot in this game, so any "next cast stronger" effect
+  // gets blocked by the ability's own cooldown. Instead, this item
+  // buffs *basic attacks* (melee swings and wand/staff projectiles) for
+  // 5s after every cast. Refreshes on each cast. The cast itself is
+  // unaffected (cast damage doesn't route through onAttack), so the
+  // item rewards the cast → weave-autos pattern regardless of which
+  // single element you happen to be running.
   {
     id: 'prismatic', name: 'Талисман Тал-Раши', icon: 'sparkle', rarity: 'legendary', maxStacks: MAX_STACKS,
-    desc: 'После каста следующие способности усилены (5с, обновляется). 1 стак: +12%. 3: +20%. 5: +30%.',
+    desc: 'После каста базовые атаки усилены 5с (обновляется). 1 стак: +12%. 3: +20%. 5: +30%.',
     hooks: {
       onCast(player, ctx) {
         const n = player.items[this.id] || 0;
@@ -576,6 +576,11 @@ export const ITEMS = [
         if (el === 'arcane' || el === 'heal') return;
         const bonus = pick(n, [0.12, 0.20, 0.30]);
         player._prismaticBuff = { mult: 1 + bonus, ttl: 5 };
+      },
+      onAttack(player, ctx) {
+        const t = player._prismaticBuff;
+        if (!t || t.ttl <= 0) return;
+        ctx.dmgMult *= t.mult;
       },
       onTick(player, ctx) {
         const t = player._prismaticBuff;
@@ -622,9 +627,9 @@ const ELEMENT_TO_ITEM = {
 };
 
 // Multiplier on outgoing ability damage for the given element. Includes
-// the element-specific item (pyromancer/cryomancer/...), the universal
-// Rabadon multiplier (rabadon), and the Tal Rasha cycle (prismatic) when
-// the *previous* cast was of a different element.
+// the element-specific item (pyromancer/cryomancer/...) and the
+// universal Rabadon multiplier (rabadon). Prismatic is intentionally
+// excluded — it lives on basic-attack hits, not ability casts.
 export function elementDamageMult(player, element) {
   if (!player || !element) return 1;
   let mult = 1;
@@ -639,11 +644,10 @@ export function elementDamageMult(player, element) {
   // Rabadon: global ability damage multiplier (legendary).
   const rab = player.items?.rabadon || 0;
   if (rab > 0) mult *= 1 + pick(rab, [0.10, 0.20, 0.30]);
-  // Prismatic buff: empowers the cast *after* any prior cast within 5s.
-  // The buff is set in the prismatic onCast hook (post-cast), so the
-  // very next cast that fires while the buff is alive picks it up here.
-  const pb = player._prismaticBuff;
-  if (pb && pb.ttl > 0) mult *= pb.mult;
+  // Prismatic buff intentionally NOT applied here — it scales basic
+  // attacks (via onAttack), not ability damage, because the player has
+  // only one ability slot and the same-cast CD would gate any
+  // ability-side empower.
   return mult;
 }
 

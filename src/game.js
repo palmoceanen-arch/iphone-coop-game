@@ -3190,8 +3190,12 @@ export class Game {
       }
     }
 
-    // Death check (both fallen)
-    if (this.players.every(p => !p.alive)) {
+    // Death check (no real player still standing). The solo-mode phantom
+    // is pinned alive=true so partner-aware code keeps working, which
+    // would normally short-circuit this `every()` and leave the live
+    // player permanently down with no death screen and no respawn. Filter
+    // phantoms out so solo runs actually game-over.
+    if (this.players.every(p => !p.alive || p._phantom)) {
       this.dead = true;
       document.getElementById('death').classList.add('open');
     }
