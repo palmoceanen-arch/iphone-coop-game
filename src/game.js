@@ -19,6 +19,7 @@ import {
   pickRandomItemIdInRarityExcept,
   rarityAbove,
   RARITY,
+  windKnockbackBonus,
 } from './items.js';
 import { ABILITY_BY_ID, AbilityProjectile } from './abilities.js';
 import { Rune } from './runes.js';
@@ -881,6 +882,53 @@ export class Game {
   _isSpawnLive(s) {
     const ck = s.chunkKey || this.world.chunkKeyOf(s.x, s.z);
     return this.world.chunks.has(ck);
+  }
+
+  // Night walker spawner — every few seconds during the world's night
+  // phase, attempt to spawn a roaming skeleton ~2 chunks from one of
+  // the players. Caps total night walkers per active player so the
+  // night doesn't snowball into an unwinnable horde.
+  _tickNightWalkers(dt) {
+    if (!this.world?.isNight?.()) {
+      this._nightSpawnCd = 0;
+      return;
+    }
+    this._nightSpawnCd = (this._nightSpawnCd || 0) - dt;
+    if (this._nightSpawnCd > 0) return;
+    // Roughly every 5s — fast enough to keep pressure up over a 7-min
+    // night, slow enough that a tight cluster doesn't spawn all at once.
+    this._nightSpawnCd = 5;
+
+    const alivePlayers = this.players.filter(p => p && p.alive);
+    if (alivePlayers.length === 0) return;
+    const targetMax = alivePlayers.length * 4;
+    const current = this.enemies.reduce((n, e) => n + (e?._nightWalker ? 1 : 0), 0);
+    if (current >= targetMax) return;
+
+    const player = alivePlayers[Math.floor(defaultRandom() * alivePlayers.length)];
+    // 2-3 chunks away: 50-70m from the player. Inside the loaded chunk
+    // ring (ACTIVE_RADIUS * 32m ≈ 80m) but outside their immediate FOV.
+    const angle = defaultRandom() * Math.PI * 2;
+    const dist = 50 + defaultRandom() * 20;
+    const x = player.pos.x + Math.cos(angle) * dist;
+    const z = player.pos.z + Math.sin(angle) * dist;
+    if (this.world.isWaterAt(x, z)) return;
+    const chunkKey = this.world.chunkKeyOf(x, z);
+    if (!this.world.chunks.has(chunkKey)) return;
+    if (!this.world._spotClear(x, z, 0.9, this.world.colliders)) return;
+    // Skeleton kinds. Each maps to a distinct Skeleton_* GLB via
+    // ENEMY_VISUALS in enemy.js, so picking randomly gives the herd
+    // a visible silhouette mix (rogue + mage + warrior + minion).
+    const KINDS = ['slime', 'archer', 'bomber', 'wisp', 'ogre'];
+    const kind = KINDS[Math.floor(defaultRandom() * KINDS.length)];
+    // Level scales with in-game day count so later nights ramp up.
+    const day = Math.floor((this.world.dayTime + (this.elapsed / this.world.dayLength)) | 0) + 1;
+    const level = 1 + Math.min(4, Math.floor(day / 2));
+    const e = new Enemy(this.world, this.effects, this.sound, kind, x, z, level, {
+      chunkKey,
+      nightWalker: true,
+    });
+    this.enemies.push(e);
   }
 
   _drainPendingEnemySpawns() {
@@ -2123,16 +2171,14 @@ export class Game {
     return false;
   }
 
-  // Check if a player is near a campfire or altar bonfire (for cooking).
+  // Check if a player is near a player-built campfire (for cooking).
+  // Altars are item-management stations and explicitly do NOT cook —
+  // cooking is a separate progression that requires building a real
+  // campfire structure.
   _isNearCampfire(player) {
-    // Player-built campfires
     for (const s of this.structures) {
       if (!s.alive || s.kind !== 'campfire') continue;
       if (Math.hypot(s.pos.x - player.pos.x, s.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
-    }
-    // Altar bonfires
-    for (const a of this.altars) {
-      if (Math.hypot(a.pos.x - player.pos.x, a.pos.z - player.pos.z) <= COOK_INTERACT_RADIUS) return true;
     }
     return false;
   }
@@ -2241,6 +2287,15 @@ export class Game {
       ctx.crit = true;
       ctx.dmgMult *= 2;
     }
+    // Infinity Edge — upgrades the stock ×2 crit multiplier to ×2.10/×2.20/×2.30.
+    // Applied after all crit-roll sources (item, forceCrit, IE's own chance)
+    // resolve so any crit gets the boost regardless of which one fired it.
+    // Multiplier deliberately gentle (max +15% on top of ×2 = ×2.30) so a
+    // fully stacked legendary doesn't blow past the +30% damage soft-cap.
+    const ieN = player.items?.infinity_edge || 0;
+    if (ieN > 0 && ctx.crit) {
+      ctx.dmgMult *= ieN >= 5 ? 1.15 : ieN >= 3 ? 1.10 : 1.05;
+    }
     // Mage weapon enchant — every connecting attack while the enchant
     // is active gets a flat damage bonus (read from the enchant state
     // so all the tuning lives in player.js) on top of any element-
@@ -2268,7 +2323,22 @@ export class Game {
     if (player._berserk) dmg *= player._berserk.dmg;
     if (player._foodBuff && player._foodBuff.kind === 'damage') dmg *= (1 + player._foodBuff.value);
     ctx.dmg = dmg;
-    if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
+    // Per-hit knockback. Melee swings keep the historical kb=10; the
+    // staff/wand basic ranged attack is meant to be a pure damage poke
+    // and explicitly opts out by setting `knockback: 0` on its
+    // rangedAttack profile, which we honour here via `_activeRanged`.
+    //
+    // Aeromancer adds knockback to *any* wand/staff projectile hit
+    // regardless of which ability is equipped — the item's identity is
+    // crowd-control via ranged magic. Melee swings don't get this bonus
+    // (they already have kb=10 baked in).
+    let hitKb = player._activeRanged
+      ? (player._activeRanged.knockback ?? 10)
+      : 10;
+    if (player._activeRanged) {
+      hitKb += windKnockbackBonus(player);
+    }
+    if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, hitKb)) {
       runItemHook(player, 'onHit', ctx);
       const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
       this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, flashColor, ctx.crit ? 0.7 : 0.5, 0.12);
@@ -2359,10 +2429,12 @@ export class Game {
       // Wind enchant — punch the enemy back along the player→enemy
       // axis with an extra knockback impulse, on top of the swing's
       // baseline kb that already landed via takeDamage(... , 10).
+      // Aeromancer item adds to the base 18 impulse (no item: 18,
+      // 5 stacks: 42) so wind builds escalate the displacement.
       const dx = enemy.pos.x - player.pos.x;
       const dz = enemy.pos.z - player.pos.z;
       const len = Math.hypot(dx, dz) || 1;
-      const extraKb = 18;
+      const extraKb = 18 + windKnockbackBonus(player);
       enemy.knockback.x += (dx / len) * extraKb;
       enemy.knockback.z += (dz / len) * extraKb;
     } else if (element === 'timeslow') {
@@ -2853,6 +2925,11 @@ export class Game {
     this._showGatePrompts();
     this._showCookPrompts();
 
+    // Night roamers: spawn extra skeleton enemies a couple chunks from
+    // the players when the world is in its night phase. Adds a threat
+    // budget to the otherwise-safe base-building / farming loop.
+    this._tickNightWalkers(dt);
+
     // Update enemies
     const ctx = {
       spawnProjectile: (opts) => {
@@ -3113,8 +3190,12 @@ export class Game {
       }
     }
 
-    // Death check (both fallen)
-    if (this.players.every(p => !p.alive)) {
+    // Death check (no real player still standing). The solo-mode phantom
+    // is pinned alive=true so partner-aware code keeps working, which
+    // would normally short-circuit this `every()` and leave the live
+    // player permanently down with no death screen and no respawn. Filter
+    // phantoms out so solo runs actually game-over.
+    if (this.players.every(p => !p.alive || p._phantom)) {
       this.dead = true;
       document.getElementById('death').classList.add('open');
     }

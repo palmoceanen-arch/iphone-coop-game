@@ -3,10 +3,12 @@ import { makeRng } from './utils.js';
 import { spawnProp } from './models.js';
 import { TOON_GRADIENT } from './shading.js';
 
-// Day cycle anchors (dayTime units, 1.0 = 24h). Day window 06:00 → 21:00
-// (15h) and night window 21:00 → 06:00 (9h); deepest night sits at ~01:30.
+// Day cycle anchors (dayTime units, 1.0 = 24h). 50/50 split by design:
+// sunrise at 06:00 (dayTime 0.25), sunset at 18:00 (dayTime 0.75).
+// Real-time cycle length is 14 minutes (840s) so each phase lasts ~7 min.
+// Deepest night sits at midnight (dayTime 0.0).
 const SUNRISE = 6 / 24;
-const SUNSET  = 21 / 24;
+const SUNSET  = 18 / 24;
 
 // Sun intensity anchors (matches THREE.DirectionalLight.intensity). The
 // horizon value is the "golden hour" brightness; the floor is the deep-night
@@ -509,7 +511,7 @@ export class World {
     this._buildCampfire();
     this.ensureChunksAround(0, 0);
     this.dayTime = 0.25;
-    this.dayLength = 480;
+    this.dayLength = 840;
     this.update(0);
   }
 

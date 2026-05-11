@@ -30,6 +30,7 @@ import {
   freezeDurationBonus,
   chainBonusJumps,
   healMultiplier,
+  windKnockbackBonus,
 } from './items.js';
 
 function vdist2(a, b) {
@@ -84,10 +85,12 @@ export class AbilityProjectile {
     this.radius = opts.radius || 0.3;
     this.color = opts.color || 0xff8a30;
     this.damage = opts.damage || 0;
-    this.knockback = opts.knockback || 6;
+    // `?? 6` (not `|| 6`) so spawners can explicitly pass 0 to disable
+    // knockback on hit — the staff/wand basic ranged attack does this.
+    this.knockback = opts.knockback ?? 6;
     this.aoeRadius = opts.aoeRadius || 0;
     this.aoeDamage = opts.aoeDamage || 0;
-    this.aoeKnockback = opts.aoeKnockback || 6;
+    this.aoeKnockback = opts.aoeKnockback ?? 6;
     this.onHitEnemy = opts.onHitEnemy || null;
     this._customAoe = opts._customAoe || null;
     this.piercing = opts.piercing || false;
@@ -397,11 +400,16 @@ export const ABILITIES = [
     element: 'wind',
     desc: 'Кольцевой взрыв оттолкновения в 4м, 20 урона.',
     cast(player, ctx) {
-      // Wind push has no element-tied damage scaling — it's a raw
-      // displacement spell, so the cast damage is flat.
+      // Aeromancer item scales BOTH the damage and the knockback impulse.
+      // Damage runs through the standard element multiplier path so
+      // rabadon / prismatic also apply; knockback adds windKnockbackBonus
+      // on top of the baseline 14 the ability authored.
+      const windMult = elementDamageMult(player, 'wind');
+      const kb = 14 + windKnockbackBonus(player);
+      const dmg = 20 * windMult;
       const list = enemiesInRadius(player, livingEnemiesFromCtx(ctx), 4);
       for (const { e } of list) {
-        e.takeDamage(20, player.pos.x, player.pos.z, 14);
+        e.takeDamage(dmg, player.pos.x, player.pos.z, kb);
         if (!e.alive) e._deathCredit = player;
       }
       ctx.effects.ring(player.pos.x, 0.05, player.pos.z, 0xffffff, 4, 0.35);
