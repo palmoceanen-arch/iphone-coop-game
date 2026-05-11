@@ -35,10 +35,6 @@ const P2_KEYS = {
 
 const GAMEPAD_DEAD_ZONE = 0.18;
 const GAMEPAD_BUTTON = {
-  attack: 0,       // A / Cross
-  dash: 1,         // B / Circle
-  interact: 2,     // X / Square
-  buildMenu: 3,    // Y / Triangle
   seedCycle: 4,    // LB / L1
   ability: 5,      // RB / R1
   buildLayerDown: 6, // LT / L2
@@ -50,6 +46,18 @@ const GAMEPAD_BUTTON = {
   dpadLeft: 14,
   dpadRight: 15,
 };
+
+function nintendoLike(pad) {
+  const id = (pad?.id || '').toLowerCase();
+  return id.includes('8bitdo') || id.includes('nintendo') || id.includes('switch') ||
+    id.includes('pro controller') || id.includes('joy-con');
+}
+
+function faceButtons(pad) {
+  return nintendoLike(pad)
+    ? { attack: 1, dash: 0, interact: 3, buildMenu: 2 }
+    : { attack: 0, dash: 1, interact: 2, buildMenu: 3 };
+}
 
 function blankGamepadSlot() {
   return {
@@ -93,6 +101,42 @@ function stickAxis(value) {
 
 function axisDir(v) {
   return v < -0.55 ? -1 : (v > 0.55 ? 1 : 0);
+}
+
+function hatDir(value) {
+  const v = Number(value);
+  if (!Number.isFinite(v) || Math.abs(v) < 0.05) return { x: 0, y: 0 };
+  const states = [
+    { v: -1.000, x: 0, y: -1 },
+    { v: -0.714, x: 1, y: -1 },
+    { v: -0.428, x: 1, y: 0 },
+    { v: -0.143, x: 1, y: 1 },
+    { v: 0.143, x: 0, y: 1 },
+    { v: 0.429, x: -1, y: 1 },
+    { v: 0.714, x: -1, y: 0 },
+    { v: 1.000, x: -1, y: -1 },
+  ];
+  let best = states[0];
+  let bestD = Infinity;
+  for (const s of states) {
+    const d = Math.abs(v - s.v);
+    if (d < bestD) { best = s; bestD = d; }
+  }
+  return bestD <= 0.12 ? { x: best.x, y: best.y } : { x: 0, y: 0 };
+}
+
+function extraAxisDir(pad) {
+  let x = 0, y = 0;
+  for (let i = 2; i < pad.axes.length; i++) {
+    const h = hatDir(pad.axes[i]);
+    if (h.x || h.y) { x = h.x; y = h.y; break; }
+  }
+  for (let i = 2; i + 1 < pad.axes.length; i += 2) {
+    const dx = axisDir(pad.axes[i]);
+    const dy = axisDir(pad.axes[i + 1]);
+    if (dx || dy) { x = dx || x; y = dy || y; break; }
+  }
+  return { x, y };
 }
 
 export class Input {
@@ -191,6 +235,7 @@ export class Input {
       if (buttonDown(pad, i)) buttonsNow.add(i);
     }
     const edge = (idx) => buttonsNow.has(idx) && !gp.buttonsDown.has(idx);
+    const face = faceButtons(pad);
 
     const sx = stickAxis(pad.axes[0]);
     const sz = stickAxis(pad.axes[1]);
@@ -203,15 +248,15 @@ export class Input {
     gp.moveX = Math.abs(dx) > Math.abs(sx) ? dx : sx;
     gp.moveZ = Math.abs(dz) > Math.abs(sz) ? dz : sz;
 
-    gp.attackHeld = buttonDown(pad, GAMEPAD_BUTTON.attack);
-    gp.dashHeld = buttonDown(pad, GAMEPAD_BUTTON.dash);
-    gp.interactHeld = buttonDown(pad, GAMEPAD_BUTTON.interact);
+    gp.attackHeld = buttonDown(pad, face.attack);
+    gp.dashHeld = buttonDown(pad, face.dash);
+    gp.interactHeld = buttonDown(pad, face.interact);
     gp.seedCycleHeld = buttonDown(pad, GAMEPAD_BUTTON.seedCycle);
 
-    if (edge(GAMEPAD_BUTTON.attack)) gp.attackEdge = true;
-    if (edge(GAMEPAD_BUTTON.dash)) gp.dashEdge = true;
-    if (edge(GAMEPAD_BUTTON.interact)) gp.interactEdge = true;
-    if (edge(GAMEPAD_BUTTON.buildMenu)) gp.buildMenuEdge = true;
+    if (edge(face.attack)) gp.attackEdge = true;
+    if (edge(face.dash)) gp.dashEdge = true;
+    if (edge(face.interact)) gp.interactEdge = true;
+    if (edge(face.buildMenu)) gp.buildMenuEdge = true;
     if (edge(GAMEPAD_BUTTON.seedCycle)) gp.seedCycleEdge = true;
     if (edge(GAMEPAD_BUTTON.ability)) gp.abilityEdge = true;
     if (edge(GAMEPAD_BUTTON.shop)) gp.shopEdge = true;
@@ -220,16 +265,21 @@ export class Input {
     if (edge(GAMEPAD_BUTTON.buildLayerDown)) gp.buildLayerDownEdge = true;
     const leftX = pad.axes[0] || 0;
     const leftY = pad.axes[1] || 0;
+    const extra = extraAxisDir(pad);
     const leftDirX = axisDir(leftX);
     const leftDirY = axisDir(leftY);
     const prevLeftDirX = axisDir(gp._lastLeftX);
     const prevLeftDirY = axisDir(gp._lastLeftY);
-    if (edge(GAMEPAD_BUTTON.dpadUp) || (leftDirY < 0 && prevLeftDirY >= 0)) gp.navUpEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadDown) || (leftDirY > 0 && prevLeftDirY <= 0)) gp.navDownEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadLeft) || (leftDirX < 0 && prevLeftDirX >= 0)) gp.navLeftEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadRight) || (leftDirX > 0 && prevLeftDirX <= 0)) gp.navRightEdge = true;
+    const prevExtraX = axisDir(gp._lastExtraX);
+    const prevExtraY = axisDir(gp._lastExtraY);
+    if (edge(GAMEPAD_BUTTON.dpadUp) || (leftDirY < 0 && prevLeftDirY >= 0) || (extra.y < 0 && prevExtraY >= 0)) gp.navUpEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadDown) || (leftDirY > 0 && prevLeftDirY <= 0) || (extra.y > 0 && prevExtraY <= 0)) gp.navDownEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadLeft) || (leftDirX < 0 && prevLeftDirX >= 0) || (extra.x < 0 && prevExtraX >= 0)) gp.navLeftEdge = true;
+    if (edge(GAMEPAD_BUTTON.dpadRight) || (leftDirX > 0 && prevLeftDirX <= 0) || (extra.x > 0 && prevExtraX <= 0)) gp.navRightEdge = true;
     gp._lastLeftX = leftX;
     gp._lastLeftY = leftY;
+    gp._lastExtraX = extra.x;
+    gp._lastExtraY = extra.y;
 
     gp.buttonsDown = buttonsNow;
   }
