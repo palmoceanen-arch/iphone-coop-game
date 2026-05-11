@@ -77,7 +77,8 @@ export function readFirstGamepadNav(state) {
   for (let i = 0; i < pad.buttons.length; i++) {
     if (buttonDown(pad, i)) buttons.add(i);
   }
-  const edge = (idx) => buttons.has(idx) && !state.buttons.has(idx);
+  const prevButtons = state.buttons;
+  const edge = (idx) => buttons.has(idx) && !prevButtons.has(idx);
   const edgeAny = (idxs) => idxs.some((idx) => edge(idx));
   const x = pad.axes[0] || 0;
   const y = pad.axes[1] || 0;
@@ -89,11 +90,6 @@ export function readFirstGamepadNav(state) {
   const prevExtraX = axisDir(state.extraX);
   const prevExtraY = axisDir(state.extraY);
   const face = uiButtons(pad);
-  state.buttons = buttons;
-  state.axisX = x;
-  state.axisY = y;
-  state.extraX = extra.x;
-  state.extraY = extra.y;
   const nav = {
     up: edge(BUTTON.dpadUp) || (dirY < 0 && prevY >= 0) || (extra.y < 0 && prevExtraY >= 0),
     down: edge(BUTTON.dpadDown) || (dirY > 0 && prevY <= 0) || (extra.y > 0 && prevExtraY <= 0),
@@ -108,6 +104,11 @@ export function readFirstGamepadNav(state) {
   };
   nav.any = nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.back || nav.tab ||
     nav.shoulderLeft || nav.shoulderRight;
+  state.buttons = buttons;
+  state.axisX = x;
+  state.axisY = y;
+  state.extraX = extra.x;
+  state.extraY = extra.y;
   updateGamepadDebug(pad, buttons, nav);
   return nav;
 }
