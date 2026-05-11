@@ -481,6 +481,12 @@ export class Game {
     el.classList.toggle('open');
   }
 
+  _toggleGamepadShop(slot) {
+    this.phoneShopOpen[slot] = !this.phoneShopOpen[slot];
+    this._refreshShopState();
+    this._pushPlayerState(slot);
+  }
+
   _tryCastAbility(slot) {
     if (this._waitingForStart || this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this.dead) return;
     const player = this.players[slot];
@@ -518,9 +524,7 @@ export class Game {
   handleRemoteEvent(slot, event) {
     if (!event || typeof event.type !== 'string') return;
     if (event.type === 'shop') {
-      this.phoneShopOpen[slot] = !this.phoneShopOpen[slot];
-      this._refreshShopState();
-      this._pushPlayerState(slot);
+      this._toggleGamepadShop(slot);
       return;
     }
     if (event.type === 'buy' && this.phoneShopOpen[slot]) {
@@ -2570,6 +2574,26 @@ export class Game {
   }
 
   update(dt, dt0) {
+    this.input.pollGamepads();
+    if (this.input.consumeGamepadPause()) {
+      if (this._waitingForStart) {
+        this.lobby?.startGame?.();
+        this._startGame();
+      } else if (this.altarOpen) {
+        this.altarUI.close();
+      } else {
+        let closedWheel = false;
+        for (const w of this.buildWheels || []) {
+          if (w?.isOpen) { w.close(); closedWheel = true; }
+        }
+        if (!closedWheel) this._togglePauseMenu();
+      }
+    }
+    for (let slot = 0; slot < this.players.length; slot++) {
+      if (this.input.consumeGamepadAbility(slot)) this._tryCastAbility(slot);
+      if (this.input.consumeGamepadShop(slot)) this._toggleGamepadShop(slot);
+    }
+
     // Always update FX timing using real dt0 (so shake decays even paused)
     this.effects.update(dt > 0 ? dt : dt0 * 0);
     // Stream chunks around the players first so the world update reads a
@@ -2601,6 +2625,11 @@ export class Game {
       for (const code of Object.keys(map2)) {
         if (this.input.consumeGlobal(code)) this._tryBuy(1, map2[code]);
       }
+    }
+    for (let slot = 0; slot < this.players.length; slot++) {
+      if (!this.phoneShopOpen[slot]) continue;
+      const idx = this.input.consumeGamepadUpgrade(slot);
+      if (idx >= 0) this._tryBuy(slot, idx);
     }
 
     if (dt <= 0) { this._updateUI(); this.input.endFrame(); return; }
