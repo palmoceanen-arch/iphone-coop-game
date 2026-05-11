@@ -1630,7 +1630,13 @@ export class Player {
       onHitEnemy(target) {
         if (!swingHit || !target?.alive) return;
         const prev = player._activeRanged;
-        player._activeRanged = { damageMult: ra.damageMult };
+        // `knockback` is forwarded so game._onPlayerHitsEnemy can apply
+        // the rangedAttack profile's kb (e.g. 0 for staff/wand) instead
+        // of the melee kb=10 fallback.
+        player._activeRanged = {
+          damageMult: ra.damageMult,
+          knockback: ra.knockback ?? 10,
+        };
         try {
           swingHit(player, target);
         } finally {

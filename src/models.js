@@ -1219,9 +1219,12 @@ export const WEAPONS = {
     // melee swing uses, so onAttack/onHit items (crit, echo, leech,
     // berserk, …) still apply at the moment of impact.
     rangedAttack: {
+      // Staff ranged attack is ~1.5× slower than the prior tuning so
+      // the spell bolt reads as the heavy/strong-hit option and the
+      // wand keeps the rapid-poke niche.
       attackAnim: 'attack_spell',
-      swing: 0.55,
-      cooldown: 0.55,
+      swing: 0.83,
+      cooldown: 0.83,
       speed: 18,
       life: 0.65,            // ~11.7m max range
       radius: 0.18,          // smaller than icebolt's 0.25
@@ -1245,9 +1248,12 @@ export const WEAPONS = {
     cooldown: 0.45,
     damageMult: 0.9,
     rangedAttack: {
+      // Wand ranged attack is exactly 2× slower than the prior tuning
+      // — still the fastest projectile in the game, but no longer a
+      // free auto-cannon when stacked with attack-speed items.
       attackAnim: 'attack_spell',
-      swing: 0.45,
-      cooldown: 0.42,
+      swing: 0.90,
+      cooldown: 0.84,
       speed: 22,
       life: 0.55,            // ~12.1m max range
       radius: 0.14,          // smallest projectile in the game

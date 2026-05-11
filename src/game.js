@@ -2325,7 +2325,14 @@ export class Game {
     if (player._berserk) dmg *= player._berserk.dmg;
     if (player._foodBuff && player._foodBuff.kind === 'damage') dmg *= (1 + player._foodBuff.value);
     ctx.dmg = dmg;
-    if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, 10)) {
+    // Per-hit knockback. Melee swings keep the historical kb=10; the
+    // staff/wand basic ranged attack is meant to be a pure damage poke
+    // and explicitly opts out by setting `knockback: 0` on its
+    // rangedAttack profile, which we honour here via `_activeRanged`.
+    const hitKb = player._activeRanged
+      ? (player._activeRanged.knockback ?? 10)
+      : 10;
+    if (enemy.takeDamage(dmg, player.pos.x, player.pos.z, hitKb)) {
       runItemHook(player, 'onHit', ctx);
       const flashColor = ctx.crit ? 0xffd166 : 0xffffff;
       this.effects.flashSphere(enemy.pos.x, 1.0, enemy.pos.z, flashColor, ctx.crit ? 0.7 : 0.5, 0.12);

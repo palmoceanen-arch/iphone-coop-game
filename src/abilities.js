@@ -85,10 +85,12 @@ export class AbilityProjectile {
     this.radius = opts.radius || 0.3;
     this.color = opts.color || 0xff8a30;
     this.damage = opts.damage || 0;
-    this.knockback = opts.knockback || 6;
+    // `?? 6` (not `|| 6`) so spawners can explicitly pass 0 to disable
+    // knockback on hit — the staff/wand basic ranged attack does this.
+    this.knockback = opts.knockback ?? 6;
     this.aoeRadius = opts.aoeRadius || 0;
     this.aoeDamage = opts.aoeDamage || 0;
-    this.aoeKnockback = opts.aoeKnockback || 6;
+    this.aoeKnockback = opts.aoeKnockback ?? 6;
     this.onHitEnemy = opts.onHitEnemy || null;
     this._customAoe = opts._customAoe || null;
     this.piercing = opts.piercing || false;
