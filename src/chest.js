@@ -12,6 +12,7 @@ import { pickRandomItemId } from './items.js';
 import { pickRandomAbilityId } from './abilities.js';
 import { vdist, defaultRandom, rand } from './utils.js';
 import { spawnHarvestDrops } from './pickups.js';
+import { promptLabelFor } from './inputPrompts.js';
 
 // Probability a chest also drops a small seed pouch when opened. Chests
 // are the only renewable seed source until players have an established
@@ -81,11 +82,20 @@ export class Chest {
       if (d < promptD) { promptD = d; promptPlayer = p; }
       if (d < openD && p._lastIntent?.interact) { openD = d; opener = p; }
     }
-    if (!promptPlayer) return;
+    if (!promptPlayer) {
+      // Every player walked out of prompt range — reset the latch so the
+      // next approach re-emits a fresh toast. Without this the toast
+      // shows once per chest forever, even if the player wandered off
+      // and came back later. Mirrors the latch reset in altar.js.
+      this._promptShown = false;
+      return;
+    }
     if (promptD < PROMPT_RADIUS && !this._promptShown) {
-      const key = promptPlayer.index === 0 ? 'E' : 'J';
+      const key = promptLabelFor(promptPlayer.index, 'interact');
       effects.toast?.(`Нажми ${key} чтобы открыть сундук`, '#ffd166');
       this._promptShown = true;
+    } else if (promptD >= PROMPT_RADIUS) {
+      this._promptShown = false;
     }
     if (opener) {
       opener._lastIntent.interact = false;

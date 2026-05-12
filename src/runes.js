@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { ITEM_BY_ID, RARITY } from './items.js';
 import { ABILITY_BY_ID } from './abilities.js';
 import { vdist, defaultRandom } from './utils.js';
+import { promptLabelFor } from './inputPrompts.js';
 
 const ITEM_MAGNET_RADIUS = 2.4;
 const ITEM_PICKUP_RADIUS = 0.8;
@@ -140,7 +141,7 @@ export class Rune {
       if (nd < ABILITY_PROMPT_RADIUS) {
         // Show a small floating prompt above the rune.
         const def = ABILITY_BY_ID[this.payloadId];
-        const key = near.index === 0 ? 'E' : 'J';
+        const key = promptLabelFor(near.index, 'interact');
         if (!this._promptOnce) {
           effects.toast?.(`Нажми ${key} чтобы взять «${def?.name || this.payloadId}»`, '#' + this.color.toString(16).padStart(6, '0'));
           this._promptOnce = true;
@@ -156,6 +157,11 @@ export class Rune {
           onPickup?.(this, near);
           this._destroy();
         }
+      } else {
+        // Player walked back out — reset the latch so re-approach
+        // re-emits the toast. Without this the prompt only ever
+        // shows once per rune even across many approaches.
+        this._promptOnce = false;
       }
       void promptEl;
     }

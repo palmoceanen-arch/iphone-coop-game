@@ -3,7 +3,24 @@
 // `applyAudio` work happens inside Settings; this module only handles the
 // UI side: tabs, segmented controls, sliders, toggles, presets, and the
 // open/close state.
-import { createGamepadNavState, readFirstGamepadNav } from './gamepadNav.js';
+import { createGamepadNavState, readGamepadNavSlot, listConnectedGamepadSlots } from './gamepadNav.js';
+
+// Settings menu is one of the screens the user explicitly asked to be
+// fully driveable from any gamepad slot, including hold-to-repeat
+// scrolling through the long list of toggles / sliders / segmented
+// controls. We mirror the start menu's per-slot polling pattern (one
+// `gamepadNav.js` state per pad) so a player on pad 1 can adjust audio
+// while a player on pad 2 changes graphics, with no edge-stealing
+// between them. 2D row detection lets up/down jump between visually
+// stacked rows (e.g. masterVolume → sfxVolume) and left/right cycle
+// through siblings inside a segmented row.
+const GP_SLOT_COUNT = 4;
+// Visual rows are detected via getBoundingClientRect.top with this
+// pixel tolerance — anything within `ROW_Y_TOL` of another element's
+// top counts as the same row. 8px is enough to absorb sub-pixel
+// rounding between adjacent inline controls while still treating
+// stacked rows as distinct rows.
+const ROW_Y_TOL = 8;
 
 export class PauseMenu {
   constructor(settings) {
@@ -24,12 +41,12 @@ export class PauseMenu {
     this._unsubscribe = settings.onChange(() => this.refresh());
     this.refresh();
 
-    // Standalone gamepad nav state — independent of in-game `Input` so the
-    // overlay works whether it was opened from the start menu (no Game
-    // instance yet) or in-game via pause. The Game side already guards
-    // against double-firing because `update()` early-returns on dt<=0
-    // while paused.
-    this._gpNavState = createGamepadNavState();
+    // Standalone per-slot gamepad nav state — independent of in-game
+    // `Input` so the overlay works whether it was opened from the start
+    // menu (no Game instance yet) or in-game via pause. One state per
+    // pad so hold/edge timing for slot 0 and slot 1 don't bleed into
+    // each other.
+    this._gpNavStates = Array.from({ length: GP_SLOT_COUNT }, () => createGamepadNavState());
     this._gpFocus = 0;
     this._gpRaf = null;
   }
@@ -99,6 +116,64 @@ export class PauseMenu {
     });
   }
 
+  // Group `targets` into visual rows by clustering on their bounding-box
+  // top coordinate. Returns an array of arrays — outer is rows top-to-
+  // bottom, inner is elements left-to-right within the row. The flat
+  // `targets` order is preserved within a row. Used by the 2D nav so
+  // up/down jumps to the nearest control in an adjacent row (instead
+  // of stepping linearly through every inline button on the way).
+  _groupTargetsIntoRows(targets) {
+    if (targets.length === 0) return [];
+    const items = targets.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { el, top: r.top, left: r.left };
+    });
+    items.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+    const rows = [];
+    for (const it of items) {
+      const lastRow = rows[rows.length - 1];
+      if (lastRow && Math.abs(it.top - lastRow[0].top) <= ROW_Y_TOL) {
+        lastRow.push(it);
+      } else {
+        rows.push([it]);
+      }
+    }
+    for (const row of rows) row.sort((a, b) => a.left - b.left);
+    return rows.map((row) => row.map((it) => it.el));
+  }
+
+  // Find the focused element's (row, col) in the 2D grid built from
+  // `targets`. Falls back to (0, 0) if the focused element isn't
+  // present (e.g. tab switch reshuffled the pane).
+  _focusGridPos(targets) {
+    const rows = this._groupTargetsIntoRows(targets);
+    const cur = targets[this._gpFocus] || targets[0];
+    for (let r = 0; r < rows.length; r++) {
+      const col = rows[r].indexOf(cur);
+      if (col >= 0) return { rows, row: r, col };
+    }
+    return { rows, row: 0, col: 0 };
+  }
+
+  // Move focus by (dRow, dCol). Up/down keeps the column position (or
+  // clamps to the nearest left edge if the new row is shorter), left/
+  // right just steps inside the current row. Updates `this._gpFocus`
+  // to the new linear index inside `targets`.
+  _moveGridFocus(targets, dRow, dCol) {
+    if (!targets.length) return;
+    const pos = this._focusGridPos(targets);
+    let r = pos.row + dRow;
+    let c = pos.col + dCol;
+    r = Math.max(0, Math.min(pos.rows.length - 1, r));
+    const rowLen = pos.rows[r].length;
+    if (dCol !== 0) c = Math.max(0, Math.min(rowLen - 1, c));
+    else c = Math.min(c, rowLen - 1);
+    c = Math.max(0, c);
+    const nextEl = pos.rows[r][c];
+    const idx = targets.indexOf(nextEl);
+    if (idx >= 0) this._gpFocus = idx;
+  }
+
   _refreshGamepadFocus(targets = this._gamepadTargets()) {
     this.root?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
     if (!targets.length) return;
@@ -127,7 +202,22 @@ export class PauseMenu {
     if (!this.isOpen) return;
     const targets = this._gamepadTargets();
     if (targets.length === 0) return;
-    const nav = readFirstGamepadNav(this._gpNavState);
+    // Poll EVERY connected pad. Each pad gets its own hold-to-repeat
+    // state via `_gpNavStates[slot]` so a player holding D-pad down
+    // on pad 0 scrolls smoothly while pad 1 stays idle (and vice
+    // versa). The first pad to fire `nav.any` wins this frame — the
+    // settings overlay is single-cursor by design (unlike start menu
+    // which fans cursors out per slot), since two players adjusting
+    // settings simultaneously would fight over a single slider.
+    const slots = listConnectedGamepadSlots();
+    let nav = null;
+    for (const slot of slots) {
+      const state = this._gpNavStates[slot];
+      if (!state) continue;
+      const candidate = readGamepadNavSlot(state, slot, { repeat: true });
+      if (candidate?.any) { nav = candidate; break; }
+      if (!nav) nav = candidate;
+    }
     if (!nav) {
       this._refreshGamepadFocus(targets);
       return;
@@ -150,12 +240,19 @@ export class PauseMenu {
     const cur = targets[Math.min(this._gpFocus, targets.length - 1)];
     const isSlider = cur && cur.tagName === 'INPUT' && cur.type === 'range';
     if (isSlider && (nav.left || nav.right)) {
+      // L/R on a slider tweaks the value instead of moving focus —
+      // matches OS "hold-arrow-to-scrub" UX. Hold-to-repeat fires the
+      // edges fast enough that a player can drag from min to max
+      // without releasing the stick.
       this._adjustSlider(cur, nav.left ? -1 : 1);
     } else {
-      if (nav.up || nav.left || nav.shoulderLeft) this._gpFocus = Math.max(0, this._gpFocus - 1);
-      if (nav.down || nav.right || nav.shoulderRight) {
-        this._gpFocus = Math.min(targets.length - 1, this._gpFocus + 1);
-      }
+      // 2D nav for the rest: up/down jumps rows, left/right walks the
+      // current row. Shoulder buttons mirror left/right so a player on
+      // a controller without a working D-pad can still navigate.
+      if (nav.up) this._moveGridFocus(targets, -1, 0);
+      if (nav.down) this._moveGridFocus(targets, +1, 0);
+      if (nav.left || nav.shoulderLeft) this._moveGridFocus(targets, 0, -1);
+      if (nav.right || nav.shoulderRight) this._moveGridFocus(targets, 0, +1);
     }
     this._refreshGamepadFocus(targets);
     if (nav.confirm) {

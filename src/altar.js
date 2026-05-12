@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import { TOON_GRADIENT } from './shading.js';
 import { vdist, defaultRandom } from './utils.js';
+import { promptLabelFor } from './inputPrompts.js';
 
 export const ALTAR_PROMPT_RADIUS = 2.4;
 export const ALTAR_USE_RADIUS = 1.6;
@@ -153,7 +154,7 @@ export class Altar {
     }
     if (!near) return;
     if (nd < ALTAR_PROMPT_RADIUS && !this._promptShown) {
-      const key = near.index === 0 ? 'E' : 'J';
+      const key = promptLabelFor(near.index, 'interact');
       effects.toast?.(`Нажми ${key} чтобы открыть алтарь (${this.charges}/${MAX_CHARGES} зарядов)`, '#ffd166');
       this._promptShown = true;
     }
