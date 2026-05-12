@@ -437,6 +437,42 @@
         box-shadow: 0 0 0 2px rgba(59,130,246,0.7), 0 1px 3px rgba(0,0,0,0.45);
         z-index: 3;
       }
+      /* Per-gamepad focus rings. P1 gets a cyan ring (matches the
+         #6ad0ff slot accent), P2 gets coral (#ff8a8a). When solo, both
+         cursors share gamepad 0 so the rings overlap on the same
+         element — the box-shadow stack still reads as a single ring. */
+      #start-menu .gp-focus-p1 {
+        outline: 2px solid #6ad0ff !important;
+        box-shadow: 0 0 0 3px rgba(106,208,255,0.22), 0 0 14px rgba(106,208,255,0.18) !important;
+        z-index: 4;
+      }
+      #start-menu .gp-focus-p2 {
+        outline: 2px solid #ff8a8a !important;
+        box-shadow: 0 0 0 3px rgba(255,138,138,0.22), 0 0 14px rgba(255,138,138,0.18) !important;
+        z-index: 4;
+      }
+      /* Both cursors on the same element (solo mode, gamepads moving
+         together): stack outlines as a thicker dual-colour ring. */
+      #start-menu .gp-focus-p1.gp-focus-p2 {
+        outline: 2px solid #6ad0ff !important;
+        box-shadow: 0 0 0 3px rgba(106,208,255,0.22), 0 0 0 5px rgba(255,138,138,0.22), 0 0 14px rgba(255,138,138,0.18) !important;
+      }
+      /* Gamepad controls hint at the bottom of the picker. Stays out of
+         the way visually (small + low contrast) but always reachable for
+         a user picking up a pad for the first time. */
+      .start-gp-hint {
+        display: none; /* shown only while a gamepad is connected (JS toggles) */
+        margin-top: 10px; padding: 6px 10px;
+        font-size: 11px; opacity: 0.55; text-align: center; line-height: 1.6;
+        border-top: 1px solid rgba(255,255,255,0.05);
+        letter-spacing: 0.3px;
+      }
+      .start-gp-hint kbd {
+        background: #20262e; border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 4px; padding: 1px 5px; font-size: 10.5px; font-family: ui-monospace, monospace;
+        color: #cfd6e0;
+      }
+      #start-menu.gp-connected .start-gp-hint { display: block; }
       .start-weapon-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
       }
@@ -747,6 +783,13 @@
               <div class="start-footer">
                 <button data-back="main">Назад</button>
                 <button id="start-btn-confirm" class="primary">Применить и начать</button>
+              </div>
+              <div class="start-gp-hint">
+                <kbd>D-Pad</kbd>/<kbd>Stick</kbd> — перемещение ·
+                <kbd>A</kbd> — выбрать ·
+                <kbd>B</kbd> — назад ·
+                <kbd>LB</kbd>/<kbd>RB</kbd> — быстрая прокрутка ·
+                второй геймпад управляет панелью игрока 2
               </div>
             </div>
 
