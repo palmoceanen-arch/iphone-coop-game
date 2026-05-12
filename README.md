@@ -1,14 +1,14 @@
-# Twin Hearts — Two-Player Local-Coop Adventure
+# Twin Hearts — Couch Co-op Web Adventure
 
-A top-down action adventure for **two players on a single keyboard**, built with
-[Three.js](https://threejs.org/). Inspired by *The Legend of Zelda*, *Don't Starve*
-and *DotA*: a cozy open meadow, monsters with distinct attack patterns, food and
-gold drops, an upgrade shop at the campfire, and a day/night cycle that ramps up
-the danger after dark.
+A cozy-but-dangerous top-down adventure for **one or two local players**, built
+with [Three.js](https://threejs.org/). Play on one keyboard, with gamepads, or
+use iPhones as wireless QR controllers while the host screen runs the game.
+Explore an open meadow, fight monsters with distinct attack patterns, gather
+food and resources, build a camp, farm, cook, upgrade, and survive the night.
 
-> **Bond mechanic:** the heroes share a magical leash. Drift too far apart and
-> the world fades to grey and your hearts begin to drain — but if you can run
-> back together in time, you survive.
+> **Invisible bond mechanic:** the heroes are linked by distance, not by a
+> visible rope. Drift too far apart and the world fades to grey while your
+> hearts begin to drain — run back together in time to survive.
 
 ## Features
 
@@ -16,6 +16,8 @@ the danger after dark.
   and collision against trees, rocks, ponds and the outer fence.
 - **Dynamic split-aware camera** that smoothly zooms out as the players drift
   apart so both stay on screen.
+- **Phone-as-controller lobby** with a QR code / 4-digit room code so iPhones
+  can join as wireless couch-coop controllers over LAN.
 - **Five enemy types** with distinct AI:
   | # | Name | Attack |
   |---|------|--------|
