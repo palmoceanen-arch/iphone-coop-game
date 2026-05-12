@@ -270,6 +270,12 @@ const ANIM_MAP = {
   // 2H melee variants — bigger reach + impact
   attack_2h_chop:     '2H_Melee_Attack_Chop',
   attack_2h_slice:    '2H_Melee_Attack_Slice',
+  // Same source clip as `attack_2h_slice`, bound under a distinct slot so
+  // we can trim its wind-up + recovery via SLOT_TRIM without affecting
+  // the great-sword / staff that share `attack_2h_slice`. The 2H battle
+  // axe uses this variant so the swing reads as snappier without a
+  // separate baked animation.
+  attack_2h_slice_fast: '2H_Melee_Attack_Slice',
   attack_2h_spin:     '2H_Melee_Attack_Spin',
   attack_2h_spinning: '2H_Melee_Attack_Spinning',  // 0.67s clean continuous rotation
   attack_2h_stab:     '2H_Melee_Attack_Stab',
@@ -354,6 +360,17 @@ const FULL_BODY_SLOTS = new Set([
 // positions (0..1) within the source clip.
 const SLOT_TRIM = {
   attack_2h_spin: { start: 0.00, end: 0.65 },
+  // 2H battle axe variant of attack_2h_slice. Source has a long
+  // anticipation pose before the strike and a long arm-return tail
+  // after the followthrough; both read as the character spending most
+  // of the clip *not* hitting. Trim 25 % off the front so the swing
+  // starts already wound up, and 20 % off the back so the arm doesn't
+  // visibly drift back to the resting pose. Visible impact frame
+  // (originally at 0.55 of the source) lands at (0.55-0.25)/(0.80-0.25)
+  // ≈ 0.545 of the trimmed clip — so the axe_2h weapon profile can
+  // keep impactAt ≈ 0.55 and the gameplay damage tick still aligns
+  // with the visible blade pose.
+  attack_2h_slice_fast: { start: 0.25, end: 0.80 },
 };
 
 // Trim a clip to a sub-range by re-sampling each track's keyframes within
@@ -980,7 +997,8 @@ export function spawnCharacter(kind, {
   if (actions.walk) actions.walk.setLoop(THREE.LoopRepeat);
   for (const k of [
     'attack_1h_chop', 'attack_1h_slice', 'attack_1h_horiz', 'attack_1h_stab',
-    'attack_2h_chop', 'attack_2h_slice', 'attack_2h_spin', 'attack_2h_spinning', 'attack_2h_stab',
+    'attack_2h_chop', 'attack_2h_slice', 'attack_2h_slice_fast',
+    'attack_2h_spin', 'attack_2h_spinning', 'attack_2h_stab',
     'attack_dual_chop', 'attack_dual_slice', 'attack_dual_stab',
     'attack_ranged', 'attack_spell', 'attack_spell_long', 'attack_throw',
     'attack_unarmed', 'attack_melee', 'attack_melee_heavy',
@@ -1186,13 +1204,19 @@ export const WEAPONS = {
   },
   // 2H battle axe — wide horizontal sweep on tap. Same charge-to-spin
   // super as the great-sword but heavier numbers since the axe head is
-  // weightier (slower swing, higher damage, longer cooldown).
+  // weightier (higher damage, longer cooldown). Uses the trimmed
+  // `attack_2h_slice_fast` slot (see SLOT_TRIM): 25 % shaved off the
+  // wind-up and 20 % off the recovery, so the swing reads as a heavy
+  // *commit* rather than a slow telegraph. Swing length drops from
+  // 1.10s to 0.75s to match the trimmed clip's shorter useful range
+  // (post-trim duration is ~55 % of source) while staying inside
+  // KayKit's 0.85x natural-length floor.
   axe_2h: {
     label: 'Battle Axe',
     showNodes: [],
     attach: 'axe_2h',
-    attackAnim: 'attack_2h_slice',  // 2H horizontal sweep
-    swing: 1.10,
+    attackAnim: 'attack_2h_slice_fast',  // trimmed 2H horizontal sweep
+    swing: 0.75,
     impactAt: 0.55,
     range: 2.7,
     arc: Math.PI * 0.95,   // ~171°
