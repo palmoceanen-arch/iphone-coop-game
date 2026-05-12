@@ -8,6 +8,7 @@ import { Effects } from './effects.js';
 import { FollowCamera } from './camera.js';
 import { Sound } from './sound.js';
 import { Input } from './input.js';
+import { bindInput as bindPromptInput, promptLabelFor } from './inputPrompts.js';
 import { UPGRADES, buy, renderShop, priceFor } from './upgrades.js';
 import { vdist, clamp, hashString, setDefaultSeed, defaultRandom, compactInPlace } from './utils.js';
 import { getSettings } from './settings.js';
@@ -158,6 +159,10 @@ export class Game {
     // the world through every call.
     this.sound.setWorld(this.world);
     this.input = new Input();
+    // Hand the prompt helper a reference so world prompts (chest, altar,
+    // rune, planters, gates, campfires) can ask for the right glyph
+    // based on the player's active input device.
+    bindPromptInput(this.input);
     this.effects = new Effects(this.scene, this.followCam.cam);
 
     // Per-slot start-menu loadout (body / cape colours + starter weapon).
@@ -411,6 +416,10 @@ export class Game {
 
     // start screen
     this._waitingForStart = true;
+    // Focus index for the lobby/QR screen's gamepad navigation. Reset to 0
+    // on every entry; _handleLobbyGamepadNav clamps it against the live set
+    // of enabled buttons so it stays valid as `lobby-start` enables.
+    this._lobbyGpFocus = 0;
     this._lastT = performance.now();
     // Fixed-timestep accumulator. Game logic always advances in slices of
     // exactly FIXED_DT seconds so simulation is reproducible from a seed
@@ -583,6 +592,68 @@ export class Game {
     }
   }
 
+  _lobbyButtons() {
+    const root = document.getElementById('intro');
+    if (!root || root.style.display === 'none') return [];
+    return [...root.querySelectorAll('.lobby-buttons button:not(:disabled)')]
+      .filter((el) => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      });
+  }
+
+  _refreshLobbyGamepadFocus() {
+    const root = document.getElementById('intro');
+    if (!root) return;
+    root.querySelectorAll('.lobby-buttons button.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+    const targets = this._lobbyButtons();
+    if (targets.length === 0) return;
+    this._lobbyGpFocus = Math.max(0, Math.min(this._lobbyGpFocus, targets.length - 1));
+    targets[this._lobbyGpFocus].classList.add('gp-focus');
+  }
+
+  _handleLobbyGamepadNav(nav) {
+    // Always refresh the focus ring so it stays visible across frames as the
+    // enabled-button set changes (lobby-start unlocks when both players join).
+    this._refreshLobbyGamepadFocus();
+    if (!nav || !nav.any) return false;
+    const targets = this._lobbyButtons();
+    if (targets.length === 0) return false;
+    let moved = false;
+    if (nav.left || nav.up || nav.shoulderLeft) {
+      this._lobbyGpFocus = Math.max(0, this._lobbyGpFocus - 1);
+      moved = true;
+    }
+    if (nav.right || nav.down || nav.shoulderRight || nav.tab) {
+      this._lobbyGpFocus = Math.min(targets.length - 1, this._lobbyGpFocus + 1);
+      moved = true;
+    }
+    if (moved) this._refreshLobbyGamepadFocus();
+    if (nav.confirm) {
+      const el = targets[Math.min(this._lobbyGpFocus, targets.length - 1)];
+      if (el && !el.disabled) el.click();
+      return true;
+    }
+    return moved;
+  }
+
+  // Build the gamepad-navigable target list for the shop panel of
+  // player `slot`. Includes upgrade rows (purchaseable) and inventory
+  // rows (ability + items, click-to-expand) in a single linear list so
+  // up/down walks both sections without a tab-switch.
+  _shopNavTargets(slot) {
+    const root = document.getElementById(`shop-upgs-${slot + 1}`);
+    const inv = document.getElementById(`shop-inv-${slot + 1}`);
+    const targets = [];
+    if (root) for (const el of root.querySelectorAll('.upg')) targets.push({ el, kind: 'upg' });
+    if (inv) {
+      for (const el of inv.querySelectorAll('.inv-ability, .inv-item')) {
+        targets.push({ el, kind: 'inv' });
+      }
+    }
+    return targets;
+  }
+
   _handleGamepadShopNav(slot, nav) {
     if (!this.phoneShopOpen[slot]) return false;
     const focus = this._gamepadShopFocus[slot];
@@ -590,10 +661,26 @@ export class Game {
       this._toggleGamepadShop(slot);
       return true;
     }
-    if (nav.up || nav.left || nav.shoulderLeft) focus.idx = Math.max(0, focus.idx - 1);
-    if (nav.down || nav.right || nav.shoulderRight || nav.tab) focus.idx = Math.min(UPGRADES.length - 1, focus.idx + 1);
+    const targets = this._shopNavTargets(slot);
+    const maxIdx = Math.max(0, targets.length - 1);
+    if (nav.up || nav.shoulderLeft) focus.idx = Math.max(0, focus.idx - 1);
+    if (nav.down || nav.shoulderRight || nav.tab) focus.idx = Math.min(maxIdx, focus.idx + 1);
+    // Left/right inside an upgrade row is meaningless (no inline
+    // siblings), so we map them to up/down too — some pads only have
+    // a horizontal D-pad as a habit.
+    if (nav.left) focus.idx = Math.max(0, focus.idx - 1);
+    if (nav.right) focus.idx = Math.min(maxIdx, focus.idx + 1);
     if (nav.confirm) {
-      this._tryBuy(slot, focus.idx);
+      const target = targets[Math.min(focus.idx, maxIdx)];
+      if (target?.kind === 'upg') {
+        this._tryBuy(slot, focus.idx);
+      } else if (target?.kind === 'inv' && target.el) {
+        // Inventory rows toggle a `.open` class to reveal the
+        // description — same as a mouse click. Confirms feel natural
+        // because the gold-only state (gamepad) still benefits from
+        // reading item descriptions.
+        target.el.classList.toggle('open');
+      }
       return true;
     }
     this._refreshGamepadShopFocus();
@@ -602,8 +689,19 @@ export class Game {
 
   _refreshGamepadShopFocus() {
     for (let slot = 0; slot < this._gamepadShopFocus.length; slot++) {
-      const rows = document.querySelectorAll(`#shop-upgs-${slot + 1} .upg`);
-      rows.forEach((row, idx) => row.classList.toggle('gp-focus', this.phoneShopOpen[slot] && idx === this._gamepadShopFocus[slot].idx));
+      const targets = this._shopNavTargets(slot);
+      const focusIdx = this._gamepadShopFocus[slot].idx;
+      // Clear any stale focus class on both upgrade + inventory rows
+      // (re-renders shuffle DOM nodes so a row can lose 'gp-focus'
+      // and gain it back on the wrong element across frames).
+      const upgRoot = document.getElementById(`shop-upgs-${slot + 1}`);
+      const invRoot = document.getElementById(`shop-inv-${slot + 1}`);
+      upgRoot?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+      invRoot?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
+      if (!this.phoneShopOpen[slot]) continue;
+      targets.forEach((t, idx) => {
+        if (idx === focusIdx) t.el.classList.add('gp-focus');
+      });
     }
   }
 
@@ -1816,11 +1914,15 @@ export class Game {
       // "E: Посадить — <crop> (Q: сменить · N сем.)" prompt with the
       // freshly chosen crop.
       const cycleKey = (target.state === 'tilled') ? p.selectedCropKind : '';
-      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.state}|${cycleKey}`;
+      // Input kind is part of the dedup key so swapping from keyboard to
+      // gamepad mid-prompt re-emits the toast with the right glyph
+      // instead of leaving "E: Посадить" on screen.
+      const inputKind = this.input.lastInputKind(p.index);
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.state}|${cycleKey}|${inputKind}`;
       if (p._farmPromptKey === stateKey) continue;
       p._farmPromptKey = stateKey;
-      const key = (p.index === 0) ? 'E' : 'J';
-      const cycleHintKey = (p.index === 0) ? 'Q' : 'U';
+      const key = promptLabelFor(p.index, 'interact');
+      const cycleHintKey = promptLabelFor(p.index, 'seedCycle');
       const verb = target.promptLabel();
       if (!verb) continue;
       let text = `${key}: ${verb}`;
@@ -1918,10 +2020,11 @@ export class Game {
         continue;
       }
       const isOpen = (target.openDir | 0) !== 0;
-      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.kind}|${isOpen ? 'o' : 'c'}`;
+      const inputKind = this.input.lastInputKind(p.index);
+      const stateKey = `${target.pos.x.toFixed(2)},${target.pos.z.toFixed(2)}|${target.kind}|${isOpen ? 'o' : 'c'}|${inputKind}`;
       if (p._gatePromptKey === stateKey) continue;
       p._gatePromptKey = stateKey;
-      const key = (p.index === 0) ? 'E' : 'J';
+      const key = promptLabelFor(p.index, 'interact');
       const verb = isOpen ? 'закрыть' : 'открыть';
       const noun = target.kind === 'door_full' ? 'дверь' : 'калитку';
       this.effects.toast?.(`${key}: ${verb} ${noun}`, '#c8a060');
@@ -2268,14 +2371,15 @@ export class Game {
       const builder = this.builders[p.index];
       if (builder && builder.active) continue;
       const nearCampfire = this._isNearCampfire(p);
-      const qKey = (p.index === 0) ? 'Q' : 'U';
-      const eKey = (p.index === 0) ? 'E' : 'J';
+      const qKey = promptLabelFor(p.index, 'seedCycle');
+      const eKey = promptLabelFor(p.index, 'interact');
       if (nearCampfire) {
         const recipe = COOK_RECIPES[p.selectedRecipe];
         if (!recipe) continue;
         const affordable = canCook(p.foods, p.selectedRecipe);
         const color = affordable ? '#ffd166' : '#ff7a7a';
-        const promptKey = `cook|${p.selectedRecipe}|${affordable}`;
+        const inputKind = this.input.lastInputKind(p.index);
+        const promptKey = `cook|${p.selectedRecipe}|${affordable}|${inputKind}`;
         if (p._cookPromptKey === promptKey) continue;
         p._cookPromptKey = promptKey;
         const costStr = recipeCostLabel(p.selectedRecipe);
@@ -2604,7 +2708,11 @@ export class Game {
 
   update(dt, dt0) {
     this.input.pollGamepads();
-    const gamepadNav = [this.input.consumeGamepadNav(0), this.input.consumeGamepadNav(1)];
+    // Peek nav per slot: edges are NOT consumed here. Each UI handler below
+    // returns truthy when it actually used the nav, at which point we
+    // commit the consume so `intent()` doesn't see the same face-button
+    // edges as in-game actions on the same frame.
+    const gamepadNav = [this.input.peekGamepadNav(0), this.input.peekGamepadNav(1)];
     if (this.input.consumeGamepadPause()) {
       if (this._waitingForStart) {
         this.lobby?.startGame?.();
@@ -2619,12 +2727,42 @@ export class Game {
         if (!closedWheel) this._togglePauseMenu();
       }
     }
+    // Lobby/QR screen: drive button focus + click via gamepad while we're
+    // still waiting for any of the start buttons to be pressed.
+    if (this._waitingForStart) {
+      const lobbyNav = gamepadNav[0]?.any ? gamepadNav[0] : (gamepadNav[1]?.any ? gamepadNav[1] : null);
+      if (this._handleLobbyGamepadNav(lobbyNav)) {
+        this.input.consumeGamepadNavEdges(0);
+        this.input.consumeGamepadNavEdges(1);
+      }
+    }
+    // Death screen has a single Restart button. Show a focus ring on it
+    // while #death is open and fire it on A/Start so a downed pair can
+    // recover without reaching for the keyboard. Edges from both slots
+    // count because either player can pick the gamepad up.
+    if (this.dead) {
+      const deathNav = gamepadNav[0]?.confirm || gamepadNav[1]?.confirm;
+      const restartBtn = document.getElementById('restart');
+      if (restartBtn) restartBtn.classList.add('gp-focus');
+      if (deathNav && restartBtn && !restartBtn.disabled) {
+        restartBtn.click();
+        this.input.consumeGamepadNavEdges(0);
+        this.input.consumeGamepadNavEdges(1);
+      }
+    }
     for (let slot = 0; slot < this.players.length; slot++) {
       const nav = gamepadNav[slot];
-      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) continue;
-      const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
-      if (openWheel && openWheel.handleGamepadNav(nav)) continue;
-      if (this._handleGamepadShopNav(slot, nav)) continue;
+      let consumed = false;
+      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) consumed = true;
+      else {
+        const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
+        if (openWheel && openWheel.handleGamepadNav(nav)) consumed = true;
+        else if (this._handleGamepadShopNav(slot, nav)) consumed = true;
+      }
+      if (consumed) {
+        this.input.consumeGamepadNavEdges(slot);
+        continue;
+      }
       if (this.input.consumeGamepadAbility(slot)) this._tryCastAbility(slot);
       if (this.input.consumeGamepadShop(slot)) this._toggleGamepadShop(slot);
     }

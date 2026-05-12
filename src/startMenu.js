@@ -26,7 +26,24 @@ import {
   weaponAffinityFor,
 } from './models.js';
 import { SaveSystem } from './saveSystem.js';
-import { createGamepadNavState, readFirstGamepadNav } from './gamepadNav.js';
+import {
+  createGamepadNavState,
+  readGamepadNavSlot,
+  listConnectedGamepadSlots,
+} from './gamepadNav.js';
+
+// Max gamepads we route into the start menu. The Gamepad API itself
+// exposes 4 slots; almost no consumer setup has more than 2 plugged
+// in, but allocating 4 states up front means we never need to grow
+// the array later.
+const GP_SLOT_COUNT = 4;
+
+// Visual focus-ring colour per gamepad index. Reused as the
+// `.gp-focus-p1` / `.gp-focus-p2` CSS classes so each cursor reads as
+// belonging to its slot's player (blue accent for P1, coral for P2).
+// Slots 3/4 are virtually never reached but reuse P2 colour as a
+// fallback so the cursor remains visible.
+const GP_FOCUS_CLASS = ['gp-focus-p1', 'gp-focus-p2', 'gp-focus-p2', 'gp-focus-p2'];
 
 // Default picks per slot — closest equivalents to the historical
 // P1 cyan-sword / P2 coral-axe loadout in the new wheel palette so a
@@ -113,8 +130,20 @@ export class StartMenu {
     this._weaponRows = [];
     this._rafId = null;
     this._lastT = 0;
-    this._gpNavState = createGamepadNavState();
-    this._gpFocus = { index: 0 };
+    // Per-gamepad nav state (edge tracking + hold-to-repeat timers).
+    // Each pad polls its own slot independently so the second pad
+    // doesn't steal edges from the first and vice versa.
+    this._gpNavStates = Array.from({ length: GP_SLOT_COUNT }, () => createGamepadNavState());
+    // Per-gamepad focus cursor. `regionId` is which region the cursor
+    // is currently scoped to ('shared' / 'slot0' / 'slot1'), and
+    // `row` / `col` index into the 2D grid computed for that region.
+    // `desiredCenterX` survives across row changes so up/down keeps
+    // the cursor visually "in the same column" even when target rows
+    // have a different number of items.
+    this._gpCursors = Array.from({ length: GP_SLOT_COUNT }, (_, i) => ({
+      regionId: this._defaultRegionFor(i),
+      row: 0, col: 0, desiredCenterX: null,
+    }));
 
     this._renderSlots();
     this._bind();
@@ -133,12 +162,28 @@ export class StartMenu {
     this._stopPreviewLoop();
   }
 
+  // Default region for each gamepad slot. Gamepad 0 owns the shared
+  // controls + slot[0]; gamepad 1+ defaults to slot[1] (or slot[0] if
+  // we're in solo / the secondary slot doesn't exist yet).
+  _defaultRegionFor(padIndex) {
+    if (padIndex === 0) return 'shared0';
+    return this.solo ? 'shared0' : 'slot1';
+  }
+
   // ---- View switching ---------------------------------------------------
 
   _showView(name) {
     const views = this.root.querySelectorAll('.start-view');
     views.forEach((v) => v.classList.toggle('active', v.dataset.view === name));
-    this._gpFocus.index = 0;
+    // Reset every cursor to the top-left of its default region whenever
+    // we change views — prevents a stale row index from indexing into a
+    // freshly-rendered view that has a completely different grid shape.
+    for (let i = 0; i < this._gpCursors.length; i++) {
+      this._gpCursors[i].regionId = this._defaultRegionFor(i);
+      this._gpCursors[i].row = 0;
+      this._gpCursors[i].col = 0;
+      this._gpCursors[i].desiredCenterX = null;
+    }
     if (name === 'newgame') {
       const seedInp = this.root.querySelector('#start-seed');
       if (seedInp && !seedInp.value) seedInp.value = this.seed;
@@ -192,6 +237,15 @@ export class StartMenu {
         applySoloUi();
         this._renderSlots();
         this._resizePreviews();
+        // Reset cursors so a gamepad-2 cursor that was on the (now-
+        // hidden) slot[1] doesn't strand. _defaultRegionFor picks
+        // shared0 in solo and slot1 in co-op.
+        for (let i = 0; i < this._gpCursors.length; i++) {
+          this._gpCursors[i].regionId = this._defaultRegionFor(i);
+          this._gpCursors[i].row = 0;
+          this._gpCursors[i].col = 0;
+          this._gpCursors[i].desiredCenterX = null;
+        }
       });
     });
     applySoloUi();
@@ -591,46 +645,242 @@ export class StartMenu {
     this._rafId = requestAnimationFrame(tick);
   }
 
+  // ---- Gamepad navigation (multi-pad, 2D grid, hold-to-repeat) --------
+  //
+  // The start menu polls *every* connected gamepad slot per frame, with
+  // each slot driving its own focus cursor through a region of the UI.
+  // Slot 0 owns the shared header / footer plus the first player panel;
+  // slot 1 owns the second player panel (in co-op) or shares slot 0's
+  // region (in solo). Each cursor moves through a 2D grid of focusable
+  // buttons computed from the actual rendered layout, so e.g. pressing
+  // Down on the bottom colour-swatch row jumps to the weapon picker
+  // instead of scrolling sideways through 13 more swatches.
   _handleGamepadNav() {
     if (!this.root?.classList.contains('open')) return;
-    const nav = readFirstGamepadNav(this._gpNavState);
-    if (!nav?.any) return;
-    const targets = this._gamepadTargets();
-    if (targets.length === 0) return;
+    // Pause menu opens as an overlay (Settings entry); when it's up it
+    // owns the gamepad, so skip our own polling to avoid both layers
+    // reacting to the same press.
+    if (this.pauseMenu?.isOpen) return;
+
+    // Refresh the region cache whenever the active view changes, the
+    // solo/coop toggle flips, or the slot grid is rebuilt. Cheap to
+    // rebuild from scratch every frame; we don't bother memoizing.
+    const regions = this._buildGamepadRegions();
+    if (!regions || regions.shared0.rows.length === 0) return;
+
+    const connectedSlots = listConnectedGamepadSlots();
+    // Toggle the controls-hint visibility based on whether *any* pad
+    // is currently connected. Users who navigate purely by mouse /
+    // keyboard never see the gamepad legend, which keeps the picker
+    // visually clean.
+    this.root.classList.toggle('gp-connected', connectedSlots.length > 0);
+    if (connectedSlots.length === 0) return;
+
+    // Poll each connected pad. Multiple pads can move independently in
+    // the same frame; if two pads happen to confirm the same button on
+    // the same frame we click it twice (harmless — the click handler is
+    // idempotent for swatches/chips).
+    for (const slot of connectedSlots) {
+      const navState = this._gpNavStates[slot];
+      const nav = readGamepadNavSlot(navState, slot, { repeat: true });
+      if (!nav?.any) continue;
+      this._applyGamepadNavToSlot(slot, nav, regions);
+    }
+
+    this._refreshGamepadFocus(regions);
+  }
+
+  // Move cursor `slot` in response to one frame's nav events. Splits
+  // out of `_handleGamepadNav` so the per-pad logic stays readable.
+  _applyGamepadNavToSlot(slot, nav, regions) {
+    const cursor = this._gpCursors[slot];
+    // Back button: bounce to the main view from any sub-view. Confirmed
+    // by gamepad 0 only — if gamepad 1 hits Back we treat it as a
+    // "reset my cursor to my region's top" instead, since slot 2 hitting
+    // Back to leave the picker mid-coop-setup would be jarring.
     if (nav.back) {
-      const active = this.root.querySelector('.start-view.active');
-      if (active?.dataset.view !== 'main') {
-        this._showView('main');
+      if (slot === 0) {
+        const active = this.root.querySelector('.start-view.active');
+        if (active?.dataset.view !== 'main') {
+          this._showView('main');
+          return;
+        }
+      } else {
+        cursor.row = 0;
+        cursor.col = 0;
+        cursor.desiredCenterX = null;
         return;
       }
     }
-    if (nav.up || nav.left || nav.shoulderLeft) this._gpFocus.index = Math.max(0, this._gpFocus.index - 1);
-    if (nav.down || nav.right || nav.shoulderRight || nav.tab) this._gpFocus.index = Math.min(targets.length - 1, this._gpFocus.index + 1);
-    this._refreshGamepadFocus(targets);
+
+    // Resolve which region this cursor sits in for the current view.
+    // Fallback chain handles the case where the user toggled solo/coop
+    // while the secondary cursor was on slot[1] (which no longer exists
+    // in solo) — we drop it back to slot 0's region with a fresh cursor.
+    let region = regions[cursor.regionId];
+    if (!region || region.rows.length === 0) {
+      cursor.regionId = this._defaultRegionFor(slot);
+      region = regions[cursor.regionId];
+      cursor.row = 0; cursor.col = 0; cursor.desiredCenterX = null;
+    }
+    if (!region || region.rows.length === 0) return;
+
+    // Clamp row/col into bounds against the freshly-rebuilt grid — a
+    // re-render between frames may have changed row counts.
+    cursor.row = Math.max(0, Math.min(cursor.row, region.rows.length - 1));
+    let row = region.rows[cursor.row];
+    cursor.col = Math.max(0, Math.min(cursor.col, row.length - 1));
+
+    // Up / down: move between rows, preserving the cursor's visual
+    // column. `desiredCenterX` is sticky across vertical moves so a
+    // run of up-down navigation traces a vertical line through the
+    // UI even when target rows have wildly different counts.
+    if (nav.up || nav.down) {
+      if (cursor.desiredCenterX == null) {
+        cursor.desiredCenterX = this._elementCenterX(row[cursor.col]);
+      }
+      const dir = nav.up ? -1 : 1;
+      cursor.row = Math.max(0, Math.min(region.rows.length - 1, cursor.row + dir));
+      row = region.rows[cursor.row];
+      cursor.col = this._nearestColByCenterX(row, cursor.desiredCenterX);
+    }
+
+    // Left / right: move within the current row. Each lateral move
+    // updates `desiredCenterX` so a subsequent up/down move tracks the
+    // new column position. Shoulder buttons mirror left/right so the
+    // user can flick through long colour rows with LB/RB if they want.
+    if (nav.left || nav.shoulderLeft) {
+      cursor.col = Math.max(0, cursor.col - 1);
+      cursor.desiredCenterX = this._elementCenterX(row[cursor.col]);
+    }
+    if (nav.right || nav.shoulderRight || nav.tab) {
+      cursor.col = Math.min(row.length - 1, cursor.col + 1);
+      cursor.desiredCenterX = this._elementCenterX(row[cursor.col]);
+    }
+
     if (nav.confirm) {
-      const el = targets[this._gpFocus.index];
-      if (el && !el.disabled) el.click();
+      const el = region.rows[cursor.row]?.[cursor.col];
+      if (el && !el.disabled) {
+        // Inputs (the seed field): focus instead of click so on-screen
+        // keyboard / OS edit affordances can take over.
+        if (el.tagName === 'INPUT') el.focus();
+        else el.click();
+      }
     }
   }
 
-  _gamepadTargets() {
-    if (!this.root) return [];
+  // Build a fresh per-region 2D grid of focusable elements from the
+  // current DOM. Regions:
+  //   - 'shared0': everything outside `.start-slot[data-slot="1"]` (in
+  //     newgame view: header seed/mode controls, slot[0] panel, and
+  //     the back/confirm footer). In solo this *is* the whole grid.
+  //   - 'slot1':   focusables inside the second player slot (co-op
+  //     only; absent in solo). Owned by gamepad 1.
+  // Other views (main / load) collapse into a single shared region.
+  //
+  // Rows are detected from the rendered bounding boxes — same `top`
+  // (within ±5px) means "same row" — so flex-wrap colour palettes
+  // become proper multi-row navigation even though they're authored
+  // as a single DOM container.
+  _buildGamepadRegions() {
+    if (!this.root) return null;
     const active = this.root.querySelector('.start-view.active');
-    if (!active) return [];
+    if (!active) return null;
     const selector = 'button:not(:disabled), input[type=text]';
-    return [...active.querySelectorAll(selector)].filter((el) => {
+    const all = [...active.querySelectorAll(selector)].filter((el) => {
       const style = window.getComputedStyle(el);
-      return style.display !== 'none' && style.visibility !== 'hidden';
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
     });
+    if (all.length === 0) return { shared0: { rows: [] }, slot1: { rows: [] } };
+
+    const slot1Container = active.querySelector('.start-slot[data-slot="1"]');
+    const sharedElems = [];
+    const slot1Elems = [];
+    for (const el of all) {
+      if (slot1Container && slot1Container.contains(el)) slot1Elems.push(el);
+      else sharedElems.push(el);
+    }
+
+    return {
+      shared0: { rows: this._groupElementsIntoRows(sharedElems) },
+      slot1: { rows: this._groupElementsIntoRows(slot1Elems) },
+    };
   }
 
-  _refreshGamepadFocus(targets = this._gamepadTargets()) {
-    this.root?.querySelectorAll('.gp-focus').forEach((el) => el.classList.remove('gp-focus'));
-    if (!targets.length) return;
-    this._gpFocus.index = Math.max(0, Math.min(this._gpFocus.index, targets.length - 1));
-    const el = targets[this._gpFocus.index];
-    el.classList.add('gp-focus');
-    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // Group a flat list of elements into rows by rendered Y position.
+  // Tolerance of 6px absorbs sub-pixel layout jitter without merging
+  // legitimately separate rows (the smallest gap between visual rows
+  // in the picker is ~10-12px). Within each row, elements are sorted
+  // by their left edge so left/right nav follows reading order.
+  _groupElementsIntoRows(elems) {
+    const TOLERANCE = 6;
+    const buckets = [];
+    for (const el of elems) {
+      const r = el.getBoundingClientRect();
+      const cy = r.top + r.height / 2;
+      let bucket = buckets.find((b) => Math.abs(b.cy - cy) <= TOLERANCE);
+      if (!bucket) {
+        bucket = { cy, items: [] };
+        buckets.push(bucket);
+      } else {
+        // Recentre the bucket toward the running average so a long row
+        // doesn't slowly drift past the tolerance window.
+        bucket.cy = (bucket.cy * bucket.items.length + cy) / (bucket.items.length + 1);
+      }
+      bucket.items.push({ el, left: r.left });
+    }
+    buckets.sort((a, b) => a.cy - b.cy);
+    return buckets.map((b) => b.items.sort((x, y) => x.left - y.left).map((x) => x.el));
+  }
+
+  _elementCenterX(el) {
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    return r.left + r.width / 2;
+  }
+
+  // Pick the element in `row` whose horizontal centre is closest to
+  // `targetX`. Used after a vertical move to land on the element that
+  // best preserves the cursor's current column.
+  _nearestColByCenterX(row, targetX) {
+    let bestIdx = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < row.length; i++) {
+      const r = row[i].getBoundingClientRect();
+      const d = Math.abs((r.left + r.width / 2) - targetX);
+      if (d < bestD) { bestD = d; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+
+  // Repaint the visual focus rings for every cursor. Each gamepad gets
+  // its own colour class (P1 blue, P2 coral) so simultaneous co-op
+  // configuration is readable at a glance. We strip *all* focus
+  // classes first, then stamp the per-cursor class — cheap (the menu
+  // has on the order of 50 buttons) and avoids tracking which classes
+  // were applied last frame.
+  _refreshGamepadFocus(regions) {
+    if (!this.root) return;
+    if (!regions) regions = this._buildGamepadRegions();
+    if (!regions) return;
+    this.root.querySelectorAll('.gp-focus-p1, .gp-focus-p2, .gp-focus').forEach((el) => {
+      el.classList.remove('gp-focus-p1', 'gp-focus-p2', 'gp-focus');
+    });
+    const connectedSlots = listConnectedGamepadSlots();
+    if (connectedSlots.length === 0) return;
+    for (const slot of connectedSlots) {
+      const cursor = this._gpCursors[slot];
+      const region = regions[cursor.regionId];
+      if (!region || region.rows.length === 0) continue;
+      const row = region.rows[Math.min(cursor.row, region.rows.length - 1)];
+      if (!row || row.length === 0) continue;
+      const el = row[Math.min(cursor.col, row.length - 1)];
+      if (!el) continue;
+      el.classList.add(GP_FOCUS_CLASS[slot] || 'gp-focus-p1');
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
 
   _stopPreviewLoop() {

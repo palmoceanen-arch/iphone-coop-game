@@ -316,11 +316,24 @@ export class Enemy {
   _playAttackAnim() {
     const action = this._character?.actions?.[this._attackAnimKey];
     if (!action) return;
+    // Fade out any other attack-slot action still bleeding influence
+    // from a prior swing (e.g. an interrupted attack that never
+    // completed its post-swing fadeOut). Without this the previous
+    // followthrough pose stays clamped at full weight and blends on
+    // top of the new swing.
+    const acts = this._character.actions;
+    for (const [slot, a] of Object.entries(acts)) {
+      if (!a || slot === this._attackAnimKey) continue;
+      if (!slot.startsWith('attack_')) continue;
+      if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.18);
+    }
     // setEffectiveWeight(1) defends against a pool acquire that just zeroed
     // every action's weight: without it `_effectiveWeight = 0 * fadeIn` and
     // the swing animation would be invisible on a recycled enemy.
     action.reset().setEffectiveWeight(1.0);
-    action.fadeIn(0.05).play();
+    // 0.12s fadeIn (was 0.05s) reads as the enemy's arms ramping into
+    // the swing rather than snapping into the wind-up pose.
+    action.fadeIn(0.12).play();
   }
 
   _aimTarget(players) {
@@ -353,7 +366,7 @@ export class Enemy {
     this.knockback.z += (dz / len) * knockback;
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xfff7a0, 6, 4, 0.3);
     this.effects.damageNumber(new THREE.Vector3(this.pos.x, 1.8 + this.radius, this.pos.z), amount, '#fff7a0');
-    this.sound.enemyHit();
+    this.sound.enemyHit({ kind: this.kind, elite: this.elite });
     if (this.hp <= 0) this.die();
     return true;
   }

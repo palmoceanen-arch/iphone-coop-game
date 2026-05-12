@@ -127,6 +127,7 @@
       .shop-col.p2 h3 .who { color: #ff8a8a; }
       .upg { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin: 6px 0; background: #1a2029; border-radius: 8px; font-size: 13px; }
       .upg.gp-focus { outline: 2px solid #ffd166; background: #253044; box-shadow: 0 0 0 3px rgba(255,209,102,0.18); }
+      .inv-item.gp-focus, .inv-ability.gp-focus { outline: 2px solid #ffd166; background: #253044; box-shadow: 0 0 0 3px rgba(255,209,102,0.18); }
       .upg .lvl { font-size: 11px; opacity: 0.7; }
       .upg .price { color: #ffd166; font-weight: 700; }
       .upg.locked { opacity: 0.4; }
@@ -221,12 +222,14 @@
       .lobby-slots .slot.on { opacity: 1; background: #233040; border-color: currentColor; }
       .lobby-or { text-align: center; opacity: 0.45; font-size: 12px; margin-top: 14px; letter-spacing: 1px; text-transform: uppercase; }
       .lobby-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 6px; flex-wrap: wrap; }
+      .lobby-buttons button.gp-focus:not(:disabled) { outline: 2px solid #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.2), 0 0 18px rgba(255,209,102,0.18); }
       #start-keyboard { background: #2a313b !important; box-shadow: none !important; }
       #death { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); pointer-events: auto; }
       #death.open { display: flex; }
       #death .panel { background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 22px 24px; text-align: center; }
       #death h1 { margin: 0 0 12px; color: #ff6a6a; }
       #death button { margin-top: 12px; background: #2a313b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 10px 22px; font-size: 15px; border-radius: 10px; cursor: pointer; }
+      #death button.gp-focus { outline: 2px solid #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.2), 0 0 18px rgba(255,209,102,0.18); }
       #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; background: #0c1015; z-index: 30; }
       #loading.hidden { opacity: 0; transition: opacity 200ms; pointer-events: none; }
       #loading .panel { text-align: center; padding: 18px 26px; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; background: rgba(8,12,18,0.7); }
@@ -289,6 +292,12 @@
       }
       .preset-row button:hover { background: #1a2029; }
       .preset-row button.active { border-color: #3b82f6; color: #fff; background: #1a2740; }
+      /* Gamepad focus ring inside the pause menu — applied to whichever
+         interactive child (tab, preset, segment button, toggle, slider,
+         or footer button) is currently focused by the gamepad. */
+      #pause .gp-focus:not(:disabled),
+      #pause .toggle.gp-focus { outline: 2px solid #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.2), 0 0 18px rgba(255,209,102,0.18); }
+      #pause input[type=range].gp-focus { outline: 2px solid #ffd166; outline-offset: 4px; }
       .pause-footer {
         display: flex; justify-content: space-between; align-items: center; gap: 10px;
         margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
@@ -429,6 +438,42 @@
         box-shadow: 0 0 0 2px rgba(59,130,246,0.7), 0 1px 3px rgba(0,0,0,0.45);
         z-index: 3;
       }
+      /* Per-gamepad focus rings. P1 gets a cyan ring (matches the
+         #6ad0ff slot accent), P2 gets coral (#ff8a8a). When solo, both
+         cursors share gamepad 0 so the rings overlap on the same
+         element — the box-shadow stack still reads as a single ring. */
+      #start-menu .gp-focus-p1 {
+        outline: 2px solid #6ad0ff !important;
+        box-shadow: 0 0 0 3px rgba(106,208,255,0.22), 0 0 14px rgba(106,208,255,0.18) !important;
+        z-index: 4;
+      }
+      #start-menu .gp-focus-p2 {
+        outline: 2px solid #ff8a8a !important;
+        box-shadow: 0 0 0 3px rgba(255,138,138,0.22), 0 0 14px rgba(255,138,138,0.18) !important;
+        z-index: 4;
+      }
+      /* Both cursors on the same element (solo mode, gamepads moving
+         together): stack outlines as a thicker dual-colour ring. */
+      #start-menu .gp-focus-p1.gp-focus-p2 {
+        outline: 2px solid #6ad0ff !important;
+        box-shadow: 0 0 0 3px rgba(106,208,255,0.22), 0 0 0 5px rgba(255,138,138,0.22), 0 0 14px rgba(255,138,138,0.18) !important;
+      }
+      /* Gamepad controls hint at the bottom of the picker. Stays out of
+         the way visually (small + low contrast) but always reachable for
+         a user picking up a pad for the first time. */
+      .start-gp-hint {
+        display: none; /* shown only while a gamepad is connected (JS toggles) */
+        margin-top: 10px; padding: 6px 10px;
+        font-size: 11px; opacity: 0.55; text-align: center; line-height: 1.6;
+        border-top: 1px solid rgba(255,255,255,0.05);
+        letter-spacing: 0.3px;
+      }
+      .start-gp-hint kbd {
+        background: #20262e; border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 4px; padding: 1px 5px; font-size: 10.5px; font-family: ui-monospace, monospace;
+        color: #cfd6e0;
+      }
+      #start-menu.gp-connected .start-gp-hint { display: block; }
       .start-weapon-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
       }
@@ -739,6 +784,13 @@
               <div class="start-footer">
                 <button data-back="main">Назад</button>
                 <button id="start-btn-confirm" class="primary">Применить и начать</button>
+              </div>
+              <div class="start-gp-hint">
+                <kbd>D-Pad</kbd>/<kbd>Stick</kbd> — перемещение ·
+                <kbd>A</kbd> — выбрать ·
+                <kbd>B</kbd> — назад ·
+                <kbd>LB</kbd>/<kbd>RB</kbd> — быстрая прокрутка ·
+                второй геймпад управляет панелью игрока 2
               </div>
             </div>
 

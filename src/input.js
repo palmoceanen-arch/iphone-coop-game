@@ -59,6 +59,15 @@ function faceButtons(pad) {
     : { attack: 0, dash: 1, interact: 2, buildMenu: 3 };
 }
 
+// Hold-to-repeat parameters for the directional nav edges below. Mirrors
+// the values used by gamepadNav.js so menu polling and in-game UI nav
+// feel identical: a long-ish initial delay so a tap doesn't auto-repeat,
+// then a fast interval so holding the stick / D-pad zips through long
+// lists. Face / shoulder edges stay strict edge-only — holding A to
+// spam confirm is virtually never wanted in a menu.
+const NAV_REPEAT_DELAY = 0.32;
+const NAV_REPEAT_INTERVAL = 0.085;
+
 function blankGamepadSlot() {
   return {
     index: null,
@@ -86,6 +95,18 @@ function blankGamepadSlot() {
     navLeftEdge: false,
     navRightEdge: false,
     buttonsDown: new Set(),
+    // Per-direction hold + fire-clock for hold-to-repeat. Same scheme as
+    // gamepadNav.js: `_navHold` accumulates the held duration (seconds),
+    // `_navLastFire` is the wall-clock of the last edge-or-repeat fire.
+    _navHold: { up: 0, down: 0, left: 0, right: 0 },
+    _navLastFire: { up: 0, down: 0, left: 0, right: 0 },
+    _lastReadT: 0,
+    // 'gamepad' once this slot has any face/d-pad/stick activity. Reset
+    // to 'keyboard' when the player presses one of their keyboard keys
+    // (see Input._onDown). Read by inputPrompts.promptLabelFor() to pick
+    // the right glyph for in-world prompts (E vs A vs B vs Y).
+    inputKind: 'keyboard',
+    nintendo: false,
   };
 }
 
@@ -151,10 +172,29 @@ export class Input {
       { moveX: 0, moveZ: 0, attackHeld: false, dashHeld: false, attackEdge: false, dashEdge: false, interactEdge: false, buildMenuEdge: false },
     ];
     this.gamepads = [blankGamepadSlot(), blankGamepadSlot()];
+    // Map of every keyboard key in the per-slot keymaps below to the slot
+    // index. Used by `_onDown` to flip the slot's `inputKind` back to
+    // 'keyboard' the moment that player touches their assigned keys.
+    this._keyOwners = new Map();
+    const recordKeys = (slot, map) => {
+      for (const codes of Object.values(map)) {
+        for (const code of codes) this._keyOwners.set(code, slot);
+      }
+    };
+    recordKeys(0, P1_KEYS);
+    recordKeys(1, P2_KEYS);
     this._onDown = (e) => {
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(e.code)) e.preventDefault();
       if (!this.down.has(e.code)) this.pressed.add(e.code);
       this.down.add(e.code);
+      const owner = this._keyOwners.get(e.code);
+      if (owner != null) this.gamepads[owner].inputKind = 'keyboard';
+      // Global keys (Tab/Esc/Space etc) flip both slots — they are
+      // shared between players in keyboard mode.
+      else if (e.code === 'Tab' || e.code === 'Escape' || e.code === 'Space') {
+        this.gamepads[0].inputKind = 'keyboard';
+        this.gamepads[1].inputKind = 'keyboard';
+      }
     };
     this._onUp = (e) => { this.down.delete(e.code); };
     this._onBlur = () => { this.down.clear(); this.pressed.clear(); };
@@ -236,6 +276,7 @@ export class Input {
     }
     const edge = (idx) => buttonsNow.has(idx) && !gp.buttonsDown.has(idx);
     const face = faceButtons(pad);
+    gp.nintendo = nintendoLike(pad);
 
     const sx = stickAxis(pad.axes[0]);
     const sz = stickAxis(pad.axes[1]);
@@ -253,6 +294,13 @@ export class Input {
     gp.interactHeld = buttonDown(pad, face.interact);
     gp.seedCycleHeld = buttonDown(pad, GAMEPAD_BUTTON.seedCycle);
 
+    // Any activity on this pad flips the slot's input kind to 'gamepad'
+    // so in-world prompts switch to controller glyphs. Cheap to compute:
+    // a single OR across stick magnitude + button-set size.
+    if (buttonsNow.size > 0 || Math.hypot(sx, sz) > 0.45 || Math.hypot(gp.lookX, gp.lookZ) > 0.45) {
+      gp.inputKind = 'gamepad';
+    }
+
     if (edge(face.attack)) gp.attackEdge = true;
     if (edge(face.dash)) gp.dashEdge = true;
     if (edge(face.interact)) gp.interactEdge = true;
@@ -268,20 +316,67 @@ export class Input {
     const extra = extraAxisDir(pad);
     const leftDirX = axisDir(leftX);
     const leftDirY = axisDir(leftY);
-    const prevLeftDirX = axisDir(gp._lastLeftX);
-    const prevLeftDirY = axisDir(gp._lastLeftY);
-    const prevExtraX = axisDir(gp._lastExtraX);
-    const prevExtraY = axisDir(gp._lastExtraY);
-    if (edge(GAMEPAD_BUTTON.dpadUp) || (leftDirY < 0 && prevLeftDirY >= 0) || (extra.y < 0 && prevExtraY >= 0)) gp.navUpEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadDown) || (leftDirY > 0 && prevLeftDirY <= 0) || (extra.y > 0 && prevExtraY <= 0)) gp.navDownEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadLeft) || (leftDirX < 0 && prevLeftDirX >= 0) || (extra.x < 0 && prevExtraX >= 0)) gp.navLeftEdge = true;
-    if (edge(GAMEPAD_BUTTON.dpadRight) || (leftDirX > 0 && prevLeftDirX <= 0) || (extra.x > 0 && prevExtraX <= 0)) gp.navRightEdge = true;
+
+    // Held flag combines D-pad button + stick axis + extra axis/hat so
+    // hold-to-repeat fires whether the user is on stick or D-pad.
+    const heldUp = buttonsNow.has(GAMEPAD_BUTTON.dpadUp) || leftDirY < 0 || extra.y < 0;
+    const heldDown = buttonsNow.has(GAMEPAD_BUTTON.dpadDown) || leftDirY > 0 || extra.y > 0;
+    const heldLeft = buttonsNow.has(GAMEPAD_BUTTON.dpadLeft) || leftDirX < 0 || extra.x < 0;
+    const heldRight = buttonsNow.has(GAMEPAD_BUTTON.dpadRight) || leftDirX > 0 || extra.x > 0;
+
+    const nowSec = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) / 1000;
+    const dt = gp._lastReadT > 0 ? Math.max(0, Math.min(0.1, nowSec - gp._lastReadT)) : 0;
+    gp._lastReadT = nowSec;
+
+    // Edge OR hold-to-repeat fire. Same semantics as gamepadNav.js so
+    // menu polling and in-game UI nav feel identical.
+    const fireDir = (dir, held) => {
+      if (!held) {
+        gp._navHold[dir] = 0;
+        gp._navLastFire[dir] = 0;
+        return false;
+      }
+      if (gp._navHold[dir] <= 0) {
+        gp._navHold[dir] = Math.max(dt, 0.001);
+        gp._navLastFire[dir] = nowSec;
+        return true;
+      }
+      gp._navHold[dir] += dt;
+      if (gp._navHold[dir] >= NAV_REPEAT_DELAY && nowSec - gp._navLastFire[dir] >= NAV_REPEAT_INTERVAL) {
+        gp._navLastFire[dir] = nowSec;
+        return true;
+      }
+      return false;
+    };
+    if (fireDir('up', heldUp)) gp.navUpEdge = true;
+    if (fireDir('down', heldDown)) gp.navDownEdge = true;
+    if (fireDir('left', heldLeft)) gp.navLeftEdge = true;
+    if (fireDir('right', heldRight)) gp.navRightEdge = true;
+
     gp._lastLeftX = leftX;
     gp._lastLeftY = leftY;
     gp._lastExtraX = extra.x;
     gp._lastExtraY = extra.y;
 
     gp.buttonsDown = buttonsNow;
+  }
+
+  // Active input kind for player `slot` — 'keyboard' or 'gamepad'.
+  // Drives the dynamic prompt labels in inputPrompts.js so the world
+  // shows e.g. "A: Открыть сундук" on controller and "E: ..." on KB.
+  lastInputKind(slot) {
+    const gp = this.gamepads[slot];
+    if (!gp) return 'keyboard';
+    if (gp.inputKind === 'gamepad' && gp.index === null) return 'keyboard';
+    return gp.inputKind || 'keyboard';
+  }
+
+  // True if the pad currently driving slot `slot` looks like a Nintendo
+  // controller (Switch Pro / Joy-Cons). Used to swap A/B labels on the
+  // confirm / back glyphs.
+  isNintendoSlot(slot) {
+    const gp = this.gamepads[slot];
+    return !!(gp && gp.nintendo && gp.index !== null);
   }
 
   _clearGamepadSlot(slot) {
@@ -325,18 +420,25 @@ export class Input {
     return -1;
   }
 
-  consumeGamepadNav(slot) {
+  // Build a nav-like view of the current edges WITHOUT consuming them.
+  // `intent()` reads the same face/shoulder edges for in-game actions
+  // (attack/dash/interact/build wheel/seed/ability), so we hand the caller
+  // a peek and let it commit the consume via `consumeGamepadNavEdges(slot)`
+  // only after a UI handler (altar / build wheel / phone shop / lobby)
+  // actually accepted the input. Otherwise the edges fall through to
+  // `intent()` for the gameplay handlers.
+  peekGamepadNav(slot) {
     const gp = this.gamepads[slot];
     const nav = {
-      up: this._consumeGamepadEdge(slot, 'navUpEdge'),
-      down: this._consumeGamepadEdge(slot, 'navDownEdge'),
-      left: this._consumeGamepadEdge(slot, 'navLeftEdge'),
-      right: this._consumeGamepadEdge(slot, 'navRightEdge'),
-      confirm: this._consumeGamepadEdge(slot, 'attackEdge'),
-      back: this._consumeGamepadEdge(slot, 'dashEdge'),
-      tab: this._consumeGamepadEdge(slot, 'buildMenuEdge'),
-      shoulderLeft: this._consumeGamepadEdge(slot, 'seedCycleEdge'),
-      shoulderRight: this._consumeGamepadEdge(slot, 'abilityEdge'),
+      up: !!gp.navUpEdge,
+      down: !!gp.navDownEdge,
+      left: !!gp.navLeftEdge,
+      right: !!gp.navRightEdge,
+      confirm: !!gp.attackEdge,
+      back: !!gp.dashEdge,
+      tab: !!gp.buildMenuEdge,
+      shoulderLeft: !!gp.seedCycleEdge,
+      shoulderRight: !!gp.abilityEdge,
       lookX: gp.lookX,
       lookZ: gp.lookZ,
       connected: gp.index !== null,
@@ -344,6 +446,20 @@ export class Input {
     nav.any = nav.up || nav.down || nav.left || nav.right || nav.confirm || nav.back || nav.tab ||
       nav.shoulderLeft || nav.shoulderRight || Math.hypot(nav.lookX, nav.lookZ) > 0.45;
     return nav;
+  }
+
+  consumeGamepadNavEdges(slot) {
+    if (slot < 0 || slot >= this.gamepads.length) return;
+    const gp = this.gamepads[slot];
+    gp.navUpEdge = false;
+    gp.navDownEdge = false;
+    gp.navLeftEdge = false;
+    gp.navRightEdge = false;
+    gp.attackEdge = false;
+    gp.dashEdge = false;
+    gp.buildMenuEdge = false;
+    gp.seedCycleEdge = false;
+    gp.abilityEdge = false;
   }
 
   intent(playerIndex) {

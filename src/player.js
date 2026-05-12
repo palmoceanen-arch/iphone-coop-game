@@ -603,7 +603,17 @@ export class Player {
     this.effects.burst(this.pos.x, 1.0, this.pos.z, 0xff8080, 24, 6, 0.7);
     this.sound.death();
     const death = this._character?.actions?.death;
-    if (death) { death.reset(); death.fadeIn(0.1).play(); }
+    if (death) {
+      // Fade out whatever locomotion / attack pose is still active so
+      // the death clip blends in instead of replacing the previous
+      // frame with a snap.
+      for (const [slot, a] of Object.entries(this._character.actions)) {
+        if (!a || slot === 'death') continue;
+        if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.18);
+      }
+      death.reset();
+      death.fadeIn(0.18).play();
+    }
   }
 
   revive(hpFraction = 1.0) {
@@ -612,9 +622,13 @@ export class Player {
     this.invuln = 1.5;
     this.reviveProgress = 0;
     if (this._character?.actions) {
-      // stop death pose, return to idle
-      this._character.actions.death?.stop();
-      crossFadeTo(this._character.actions, 'idle', 0.0);
+      // Crossfade the death pose into idle over 0.2s so the revive
+      // reads as the character rising rather than teleporting to the
+      // standing pose. The explicit `.stop()` is intentionally
+      // skipped — crossFadeTo fades the death action's weight down
+      // while idle fades in, and once the fade finishes Three.js
+      // disables the death action automatically.
+      crossFadeTo(this._character.actions, 'idle', 0.20);
       this._animState = 'idle';
     }
     if (this._reviveBar) this._reviveBar.visible = false;
@@ -1048,7 +1062,11 @@ export class Player {
         // Without this fade-out the LoopOnce action would clamp on its
         // last frame and freeze the arms in the followthrough pose.
         const a = this._character?.actions?.[as.animKey];
-        if (a) a.fadeOut(0.18);
+        // Fade the upper-body attack action back into whatever
+        // locomotion is playing underneath. 0.22s reads as the arms
+        // settling rather than snapping; shorter than this and the
+        // followthrough pose visibly pops out of the swing.
+        if (a) a.fadeOut(0.22);
         this._activeSwing = null;
       } else if (this.swingFxFired && this.attackAnim <= as.impactAt) {
         // Damage window is open: from the FX trigger up to (and
@@ -1178,11 +1196,36 @@ export class Player {
     // (FULL_BODY_SLOTS) so the whole rig rotates.
     const action = this._character?.actions?.[animKey];
     if (action) {
+      this._fadeOutOtherAttacks(animKey);
       action.reset();
       const srcDur = Math.max(action.getClip().duration, 0.05);
       action.timeScale = srcDur / Math.max(swing, 0.1);
       action.setEffectiveWeight(10.0);
-      action.fadeIn(0.05).play();
+      // 0.12s fadeIn (was 0.05s): long enough to read as the arms
+      // ramping into the swing, short enough that the wind-up isn't
+      // delayed. Paired with `_fadeOutOtherAttacks` above so a swing
+      // landing on the previous swing's tail blends instead of
+      // popping.
+      action.fadeIn(0.12).play();
+    }
+  }
+
+  // Fade out any currently-running attack-slot action other than the
+  // one we're about to play. Without this, starting a new swing while
+  // a previous swing's followthrough is still clamped at its final
+  // frame would leave the old upper-body pose blended on top of the
+  // new one (LoopOnce + clampWhenFinished keeps it influencing the
+  // mixer until weight reaches 0). `setEffectiveWeight(10.0)` on the
+  // new action mostly hides this, but switching weapons mid-combat or
+  // chaining a tap into a charge attack with a different `animKey`
+  // would otherwise leave a stale arm pose blended in.
+  _fadeOutOtherAttacks(keepKey) {
+    const acts = this._character?.actions;
+    if (!acts) return;
+    for (const [slot, a] of Object.entries(acts)) {
+      if (!a || slot === keepKey) continue;
+      if (!slot.startsWith('attack_') && slot !== 'dodge_forward') continue;
+      if (a.isRunning() && a.weight > 0.001) a.fadeOut(0.18);
     }
   }
 
@@ -1236,11 +1279,12 @@ export class Player {
     };
     const action = this._character?.actions?.[spec.animKey];
     if (action) {
+      this._fadeOutOtherAttacks(spec.animKey);
       action.reset();
       const srcDur = Math.max(action.getClip().duration, 0.05);
       action.timeScale = srcDur / Math.max(swing, 0.1);
       action.setEffectiveWeight(10.0);
-      action.fadeIn(0.05).play();
+      action.fadeIn(0.12).play();
     }
     return swing;
   }
@@ -1398,11 +1442,12 @@ export class Player {
     const animKey = 'attack_spell_raise';
     const action = this._character?.actions?.[animKey];
     if (action) {
+      this._fadeOutOtherAttacks(animKey);
       action.reset();
       const srcDur = Math.max(action.getClip().duration, 0.05);
       action.timeScale = srcDur / Math.max(0.55 * attackCdMult, 0.1);
       action.setEffectiveWeight(10.0);
-      action.fadeIn(0.05).play();
+      action.fadeIn(0.12).play();
     }
     // Visual: ring + flash in the bound element's colour, plus a
     // higher cast tone so the ear distinguishes enchant from bolt.
@@ -1552,11 +1597,12 @@ export class Player {
     const swing = ra.swing ?? 0.5;
     const action = this._character?.actions?.[animKey];
     if (action) {
+      this._fadeOutOtherAttacks(animKey);
       action.reset();
       const srcDur = Math.max(action.getClip().duration, 0.05);
       action.timeScale = srcDur / Math.max(swing, 0.1);
       action.setEffectiveWeight(10.0);
-      action.fadeIn(0.05).play();
+      action.fadeIn(0.12).play();
     }
 
     // Cast SFX — distinct, lighter pitch than the melee whoosh so the
