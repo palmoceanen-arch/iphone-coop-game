@@ -38,6 +38,7 @@ import { spawnHarvestDrops } from './pickups.js';
 import { Altar, ALTAR_USE_RADIUS, REROLL_COST } from './altar.js';
 import { AltarUI } from './altarUI.js';
 import { BuildWheel } from './buildWheel.js';
+import { TutorialPanel } from './tutorial.js';
 import { Minimap } from './minimap.js';
 import { iconHTML } from './icons.js';
 import { SaveSystem } from './saveSystem.js';
@@ -355,6 +356,7 @@ export class Game {
     // the world from scratch via restart(). Wiring goes through PauseMenu
     // so the actual button click is handled inside that module.
     if (this.pauseMenu) this.pauseMenu.onResetProgress = () => this._resetProgress();
+    this.tutorialPanel = new TutorialPanel(0);
     // Only restore from localStorage if the caller explicitly asked for
     // it (e.g. the start-menu's "Загрузить" path). The "Новая игра" path
     // passes loadSave=false so we always start with a clean slate even
@@ -447,6 +449,7 @@ export class Game {
       if (e.code === 'KeyP') this.paused = !this.paused;
       if (e.code === 'Escape') {
         e.preventDefault();
+        if (this.tutorialPanel?.isOpen) { this.tutorialPanel.close(); return; }
         // Esc closes the altar UI before falling through to the pause menu
         // so it works as the universal "back" key.
         if (this.altarOpen) { this.altarUI.close(); return; }
@@ -2736,6 +2739,8 @@ export class Game {
         this._startGame();
       } else if (this.altarOpen) {
         this.altarUI.close();
+      } else if (this.tutorialPanel?.isOpen) {
+        this.tutorialPanel.close();
       } else {
         let closedWheel = false;
         for (const w of this.buildWheels || []) {
@@ -2770,7 +2775,8 @@ export class Game {
     for (let slot = 0; slot < this.players.length; slot++) {
       const nav = gamepadNav[slot];
       let consumed = false;
-      if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) consumed = true;
+      if (this.tutorialPanel?.isOpen && slot === 0 && this.tutorialPanel.handleGamepadNav(nav)) consumed = true;
+      else if (this.altarOpen && this.altarUI.handleGamepadNav(nav)) consumed = true;
       else {
         const openWheel = this.buildWheels?.find((w) => w?.isOpen && w.playerIdx === slot);
         if (openWheel && openWheel.handleGamepadNav(nav)) consumed = true;
@@ -3522,6 +3528,7 @@ export class Game {
     // at open() time and don't react to the player picking up wood
     // while the picker is up.
     for (const w of this.buildWheels || []) w?.refresh?.();
+    this.tutorialPanel?.refresh?.();
     // leash overlay
     const leashEl = document.getElementById('leash');
     if (leashEl) leashEl.style.opacity = String(this.leashRatio * 0.85);

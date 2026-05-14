@@ -200,6 +200,32 @@
       .build-wheel.p1 .slice { border-left: 2px solid #6ad0ff; }
       .build-wheel.p2 .slice { border-left: 2px solid #ff8a8a; }
       .build-wheel .close-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); font-size: 11px; opacity: 0.6; font-style: italic; pointer-events: none; }
+      #tutorial { position: absolute; left: 16px; bottom: 16px; z-index: 35; pointer-events: none; }
+      #tutorial-toggle { pointer-events: auto; display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border: 1px solid rgba(255,209,102,0.45); border-radius: 999px; background: linear-gradient(180deg,rgba(28,34,44,0.92),rgba(13,17,23,0.92)); color: #fff; font-weight: 800; font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.35); cursor: pointer; }
+      #tutorial-toggle:hover { filter: brightness(1.08); }
+      #tutorial .tutorial-panel { position: absolute; left: 0; bottom: 48px; width: min(520px, calc(100vw - 32px)); max-height: min(66vh, 560px); display: none; flex-direction: column; overflow: hidden; pointer-events: auto; background: linear-gradient(180deg,rgba(22,27,34,0.98),rgba(12,16,22,0.98)); border: 1px solid rgba(255,255,255,0.14); border-radius: 16px; box-shadow: 0 14px 44px rgba(0,0,0,0.58); }
+      #tutorial.open .tutorial-panel { display: flex; }
+      .tutorial-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+      .tutorial-head h2 { margin: 0; font-size: 17px; letter-spacing: 0.2px; }
+      #tutorial-close { width: 30px; height: 30px; border: 1px solid rgba(255,255,255,0.12); border-radius: 9px; background: #202833; color: #fff; cursor: pointer; font-size: 18px; line-height: 1; }
+      .tutorial-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+      .tutorial-tabs button { border: 1px solid rgba(255,255,255,0.1); border-radius: 999px; background: #202833; color: rgba(255,255,255,0.82); padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+      .tutorial-tabs button.active { background: #2b3b5e; color: #fff; border-color: rgba(106,208,255,0.65); box-shadow: 0 0 0 2px rgba(106,208,255,0.12); }
+      .tutorial-body { overflow-y: auto; padding: 12px 14px 14px; display: grid; gap: 10px; font-size: 13px; line-height: 1.45; }
+      .tutorial-card { background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 11px 12px; }
+      .tutorial-card h3 { margin: 0 0 6px; font-size: 14px; color: #ffd166; }
+      .tutorial-card p { margin: 0; opacity: 0.9; }
+      .tutorial-card ul { margin: 0; padding-left: 19px; }
+      .tutorial-card li + li { margin-top: 5px; }
+      .tutorial-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .tutorial-controls div { display: grid; gap: 2px; padding: 7px 8px; background: rgba(0,0,0,0.18); border-radius: 9px; }
+      .tutorial-controls b { color: #6ad0ff; font-size: 12px; }
+      .tutorial-controls span { opacity: 0.9; }
+      .tutorial-key { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 7px; margin: 0 1px; border-radius: 5px; background: #20262e; border: 1px solid rgba(255,255,255,0.16); border-bottom-width: 2px; color: #fff; font: 700 11px ui-monospace, monospace; white-space: nowrap; }
+      @media (max-width: 720px) {
+        .tutorial-controls { grid-template-columns: 1fr; }
+        #tutorial .tutorial-panel { max-height: min(72vh, 560px); }
+      }
       kbd { background: #20262e; border: 1px solid rgba(255,255,255,0.1); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-family: ui-monospace, monospace; color: #cfd6e0; }
       #help .row + .row { margin-top: 4px; }
       #help .who.p1 { color: #6ad0ff; font-weight: 700; }
@@ -599,6 +625,17 @@
           <span class="hint">L:поставить · K:отмена · J:поворот · Shift/Ctrl:уровень</span>
         </div>
         <canvas id="minimap" width="220" height="220" aria-label="Карта местности"></canvas>
+        <div id="tutorial" aria-live="polite">
+          <button id="tutorial-toggle" type="button" aria-controls="tutorial-panel">📘 Обучение</button>
+          <div class="tutorial-panel" id="tutorial-panel" role="dialog" aria-label="Обучение">
+            <div class="tutorial-head">
+              <h2>Обучение</h2>
+              <button id="tutorial-close" type="button" aria-label="Закрыть обучение">×</button>
+            </div>
+            <div class="tutorial-tabs" id="tutorial-tabs" role="tablist"></div>
+            <div class="tutorial-body" id="tutorial-body"></div>
+          </div>
+        </div>
         <div id="toast"></div>
         <div id="shop">
           <div class="shop-panel">

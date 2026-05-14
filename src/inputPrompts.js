@@ -13,14 +13,44 @@
 // (kept colocated here so the prompt strings stay in lockstep with the
 // playable keys — change one and the other shouts via grep).
 const KB_LABELS = [
-  { interact: 'E', seedCycle: 'Q', ability: 'G', confirm: 'F', dash: 'R', buildMenu: 'B', back: 'Esc' },
-  { interact: 'J', seedCycle: 'U', ability: 'H', confirm: 'L', dash: 'K', buildMenu: 'N', back: 'Esc' },
+  {
+    move: 'WASD/стрелки',
+    attack: 'F/Space',
+    interact: 'E',
+    seedCycle: 'Q',
+    ability: 'G',
+    confirm: 'F',
+    dash: 'R/Shift',
+    buildMenu: 'B',
+    shop: 'Tab',
+    pause: 'Esc',
+    buildLayerUp: 'Shift',
+    buildLayerDown: 'Ctrl',
+    back: 'Esc',
+  },
+  {
+    move: 'стрелки',
+    attack: 'L',
+    interact: 'J',
+    seedCycle: 'U',
+    ability: 'H',
+    confirm: 'L',
+    dash: 'K',
+    buildMenu: 'N',
+    shop: 'Tab',
+    pause: 'Esc',
+    buildLayerUp: 'Shift',
+    buildLayerDown: 'Ctrl',
+    back: 'Esc',
+  },
 ];
 
 // XInput-style face button labels (Xbox / generic). Maps the same
 // semantic actions to their Xbox glyphs. `confirm` is the south face
 // button, `back` is east.
 const GP_XINPUT = {
+  move: 'Левый стик',
+  attack: 'A',
   interact: 'X',
   seedCycle: 'LB',
   ability: 'RB',
@@ -28,11 +58,17 @@ const GP_XINPUT = {
   back: 'B',
   dash: 'B',
   buildMenu: 'Y',
+  shop: 'View',
+  pause: 'Menu',
+  buildLayerUp: 'RT',
+  buildLayerDown: 'LT',
 };
 
 // Nintendo Pro / Switch face labels — same physical positions but
 // labelled differently (A/B and X/Y are swapped vs. XInput).
 const GP_NINTENDO = {
+  move: 'Левый стик',
+  attack: 'B',
   interact: 'Y',
   seedCycle: 'L',
   ability: 'R',
@@ -40,6 +76,10 @@ const GP_NINTENDO = {
   back: 'A',
   dash: 'A',
   buildMenu: 'X',
+  shop: '−',
+  pause: '+',
+  buildLayerUp: 'ZR',
+  buildLayerDown: 'ZL',
 };
 
 // Active Input reference, wired by Game on construction. Optional so
@@ -49,6 +89,11 @@ let _input = null;
 
 export function bindInput(input) {
   _input = input;
+}
+
+export function activeInputKind(slot) {
+  const slotIdx = slot === 1 ? 1 : 0;
+  return _kind(slotIdx);
 }
 
 function _kind(slot) {
