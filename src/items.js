@@ -16,10 +16,10 @@ import { defaultRandom } from './utils.js';
 // предметов делается на алтаре (altar.js).
 
 export const RARITY = {
-  common:    { weight: 60, color: 0xb8c7d6, label: 'common',    sacrificeGold: 30  },
-  uncommon:  { weight: 28, color: 0x66d97a, label: 'uncommon',  sacrificeGold: 80  },
-  rare:      { weight: 10, color: 0x6aa6ff, label: 'rare',      sacrificeGold: 200 },
-  legendary: { weight: 2,  color: 0xffb84d, label: 'legendary', sacrificeGold: 500 },
+  common:    { weight: 60, color: 0xb8c7d6, label: 'обычный',    sacrificeGold: 30  },
+  uncommon:  { weight: 28, color: 0x66d97a, label: 'необычный',  sacrificeGold: 80  },
+  rare:      { weight: 10, color: 0x6aa6ff, label: 'редкий',      sacrificeGold: 200 },
+  legendary: { weight: 2,  color: 0xffb84d, label: 'легендарный', sacrificeGold: 500 },
 };
 
 export const RARITY_ORDER = ['common', 'uncommon', 'rare', 'legendary'];

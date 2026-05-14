@@ -601,7 +601,7 @@ export class StartMenu {
       if (!profile) continue;
       const affinity = weaponAffinityFor(def, id);
       const bonus = affinity > 1 ? ` · ★ +${Math.round((affinity - 1) * 100)}%` : '';
-      chip.title = `${profile.label} · DMG ×${profile.damageMult.toFixed(1)} · CD ${profile.cooldown.toFixed(2)}c${bonus}`;
+      chip.title = `${profile.label} · урон ×${profile.damageMult.toFixed(1)} · КД ${profile.cooldown.toFixed(2)}с${bonus}`;
       chip.classList.toggle('affinity', affinity > 1);
     }
   }

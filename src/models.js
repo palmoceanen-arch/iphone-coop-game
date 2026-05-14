@@ -1143,7 +1143,7 @@ export const WEAPONS = {
   // override (toggling the built-in mesh wins), so the donor never
   // double-stacks for Knight.
   sword_1h: {
-    label: 'Sword',
+    label: 'Меч',
     showNodes: ['1H_Sword', 'Round_Shield'],
     attach: 'sword_1h_donor',
     attackAnim: 'attack_1h_horiz',  // 1H horizontal slice (~1.0s baked)
@@ -1159,7 +1159,7 @@ export const WEAPONS = {
   // button charges a 360° spin super (see `superAttack` below) that uses a
   // different clip + AOE collider + ring VFX.
   sword_2h: {
-    label: 'Greatsword',
+    label: 'Двуручный меч',
     showNodes: ['2H_Sword'],
     attach: 'sword_2h_donor',
     attackAnim: 'attack_2h_slice',  // 2H horizontal sweep (~1.1s baked)
@@ -1190,7 +1190,7 @@ export const WEAPONS = {
   // weightier than a sword tip; a warm-steel slash colour to read distinct
   // from the sword in coop play.
   axe_1h: {
-    label: 'Axe',
+    label: 'Топор',
     showNodes: ['Round_Shield'],   // axe in main hand, shield offhand
     attach: 'axe_1h',
     attackAnim: 'attack_1h_horiz',  // 1H horizontal slice
@@ -1212,7 +1212,7 @@ export const WEAPONS = {
   // (post-trim duration is ~55 % of source) while staying inside
   // KayKit's 0.85x natural-length floor.
   axe_2h: {
-    label: 'Battle Axe',
+    label: 'Боевой топор',
     showNodes: [],
     attach: 'axe_2h',
     attackAnim: 'attack_2h_slice_fast',  // trimmed 2H horizontal sweep
@@ -1240,7 +1240,7 @@ export const WEAPONS = {
   // through to the melee horizontal sweep defined here, so close-range
   // brawls still work without swapping weapons.
   staff: {
-    label: 'Staff',
+    label: 'Посох',
     showNodes: [],
     attach: 'staff',
     attackAnim: 'attack_2h_slice',  // 1.10s baked — wide horizontal sweep
@@ -1277,7 +1277,7 @@ export const WEAPONS = {
   // forward jab profile below — same melee feel the wand had before
   // the ranged attack was added.
   wand: {
-    label: 'Wand',
+    label: 'Жезл',
     showNodes: [],
     attach: 'wand',
     attackAnim: 'attack_spell',     // 0.93s baked — short cast + jab

@@ -1,6 +1,6 @@
 {
-  "name": "Twin Hearts Controller",
-  "short_name": "Controller",
+  "name": "Сердце Героя: контроллер",
+  "short_name": "Контроллер",
   "start_url": "/controller",
   "scope": "/",
   "display": "fullscreen",

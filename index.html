@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>Twin Hearts — Coop Adventure</title>
+    <title>Сердце Героя: открытый мир</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E" />
     <!-- PWA: installable Chrome app + iOS Add-to-Home-Screen. The
          manifest declares display:fullscreen so once installed the
@@ -17,7 +17,7 @@
     <meta name="theme-color" content="#0c1015" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Twin Hearts" />
+    <meta name="apple-mobile-web-app-title" content="Сердце Героя" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <style>
       :root { color-scheme: dark; }
@@ -547,7 +547,7 @@
         <div id="leash"></div>
         <div id="grey"></div>
         <div id="topbar">
-          <span id="clock">Day · 06:00</span>
+          <span id="clock">День · 06:00</span>
           <span class="dot" id="clockdot"></span>
           <span class="sep"></span>
           <span class="wood" title="Дерево (общее)"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14M5 10h14M5 14h14M5 18h14"/></svg> <span id="wood">0</span></span>
@@ -559,8 +559,8 @@
           <div class="hpbar"><div class="fill" id="hp1" style="width:100%"></div><span class="text" id="hpval1">100 / 100</span></div>
           <div class="meta">
             <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold1">0</span></span>
-            <span>LV <span id="lvl1">1</span></span>
-            <span>DMG <span id="dmg1">10</span></span>
+            <span>Ур. <span id="lvl1">1</span></span>
+            <span>Урон <span id="dmg1">10</span></span>
           </div>
           <div class="item-bar" id="items1"></div>
           <div class="food-bar" id="food1"></div>
@@ -574,8 +574,8 @@
           <div class="name">Игрок 2</div>
           <div class="hpbar"><div class="fill" id="hp2" style="width:100%"></div><span class="text" id="hpval2">100 / 100</span></div>
           <div class="meta">
-            <span>DMG <span id="dmg2">10</span></span>
-            <span>LV <span id="lvl2">1</span></span>
+            <span>Урон <span id="dmg2">10</span></span>
+            <span>Ур. <span id="lvl2">1</span></span>
             <span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="gold2">0</span></span>
           </div>
           <div class="item-bar" id="items2"></div>
@@ -590,20 +590,20 @@
           <span class="recipe" id="bb1-name">—</span>
           <span class="cost" id="bb1-cost"></span>
           <span class="cost" id="bb1-layer"></span>
-          <span class="hint">F:поставить · R:отмена · E:поворот · Shift/Ctrl:этаж</span>
+          <span class="hint">F:поставить · R:отмена · E:поворот · Shift/Ctrl:уровень</span>
         </div>
         <div class="buildbar" id="buildbar2">
           <span class="recipe" id="bb2-name">—</span>
           <span class="cost" id="bb2-cost"></span>
           <span class="cost" id="bb2-layer"></span>
-          <span class="hint">L:поставить · K:отмена · J:поворот · Shift/Ctrl:этаж</span>
+          <span class="hint">L:поставить · K:отмена · J:поворот · Shift/Ctrl:уровень</span>
         </div>
         <canvas id="minimap" width="220" height="220" aria-label="Карта местности"></canvas>
         <div id="toast"></div>
         <div id="shop">
           <div class="shop-panel">
-            <h2>Campfire Upgrades</h2>
-            <p>Spend gold to permanently upgrade your hero. Press <kbd>Tab</kbd> to close.</p>
+            <h2>Улучшения у костра</h2>
+            <p>Трать золото на постоянные улучшения героя. Нажми <kbd>Tab</kbd>, чтобы закрыть.</p>
             <div class="shop-row">
               <div class="shop-col p1">
                 <h3><span class="who">Игрок 1</span><span class="gold"><svg class="glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9h6M9 12h6M9 15h6"/></svg> <span id="shop-gold1">0</span></span></h3>
@@ -620,9 +620,9 @@
         </div>
         <div id="death">
           <div class="panel">
-            <h1>You both fell.</h1>
-            <p>Stay close to each other — the bond is your lifeline.</p>
-            <button id="restart">Restart</button>
+            <h1>Вы оба пали.</h1>
+            <p>Держитесь рядом — связь между вами спасает жизнь.</p>
+            <button id="restart">Начать заново</button>
           </div>
         </div>
         <div id="fps">FPS … · — ms</div>
@@ -708,7 +708,7 @@
               </div>
 
               <div class="pause-row">
-                <div class="label">Поле зрения (FOV)<span class="desc">55 — кинематографично, 75 — обзорно.</span></div>
+                <div class="label">Поле зрения<span class="desc">55 — кинематографично, 75 — обзорно.</span></div>
                 <div class="control"><div class="slider">
                   <input type="range" min="50" max="80" step="1" data-key="fov" data-type="slider">
                   <span class="val" data-for="fov">60°</span>
@@ -716,7 +716,7 @@
               </div>
 
               <div class="pause-row">
-                <div class="label">Счётчик FPS<span class="desc">Показать FPS и frametime в углу экрана.</span></div>
+                <div class="label">Счётчик кадров<span class="desc">Показать частоту кадров и время кадра в углу экрана.</span></div>
                 <div class="control"><div class="toggle" data-key="showFps" data-type="toggle"></div></div>
               </div>
             </div>
@@ -731,7 +731,7 @@
               </div>
 
               <div class="pause-row">
-                <div class="label">Эффекты (SFX)<span class="desc">Удары, взрывы, шаги.</span></div>
+                <div class="label">Звуковые эффекты<span class="desc">Удары, взрывы, шаги.</span></div>
                 <div class="control"><div class="slider">
                   <input type="range" min="0" max="100" step="1" data-key="sfxVolume" data-type="slider-pct">
                   <span class="val" data-for="sfxVolume">100%</span>
@@ -793,7 +793,7 @@
                 <button id="start-btn-confirm" class="primary">Применить и начать</button>
               </div>
               <div class="start-gp-hint">
-                <kbd>D-Pad</kbd>/<kbd>Stick</kbd> — перемещение ·
+                <kbd>Крестовина</kbd>/<kbd>Стик</kbd> — перемещение ·
                 <kbd>A</kbd> — выбрать ·
                 <kbd>B</kbd> — назад ·
                 <kbd>LB</kbd>/<kbd>RB</kbd> — быстрая прокрутка ·
@@ -819,7 +819,7 @@
         </div>
         <div id="intro" style="display:none;">
           <div class="panel">
-            <h1>Twin Hearts</h1>
+            <h1>Сердце Героя: открытый мир</h1>
             <p>Кооп-приключение на двоих. Не уходите далеко друг от друга — мир сереет и здоровье тает.</p>
             <p>Убивайте врагов, собирайте золото и еду, прокачивайтесь у костра. Доживите до утра.</p>
             <div class="lobby">
@@ -834,8 +834,8 @@
                   </div>
                   <div class="lobby-instr">Зайди с iPhone на<br><a id="lobby-url" href="#" target="_blank" rel="noreferrer noopener">…</a><br>и введи код.</div>
                   <div class="lobby-slots">
-                    <span class="slot p1" id="lobby-slot-1">P1</span>
-                    <span class="slot p2" id="lobby-slot-2">P2</span>
+                    <span class="slot p1" id="lobby-slot-1">Игрок 1</span>
+                    <span class="slot p2" id="lobby-slot-2">Игрок 2</span>
                   </div>
                 </div>
               </div>

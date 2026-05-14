@@ -113,7 +113,7 @@ export async function showInterstitial(reason = 'unknown') {
   if (isMockMode()) {
     if (Date.now() - _lastInterstitialAt < INTERSTITIAL_COOLDOWN_MS) return false;
     _markInterstitialShown();
-    return _mockOverlay(`Interstitial (${reason})`, 1500);
+    return _mockOverlay(`Межстраничная реклама (${reason})`, 1500);
   }
   if (!isYandexBuild()) return false;
   if (Date.now() - _lastInterstitialAt < INTERSTITIAL_COOLDOWN_MS) {
@@ -142,7 +142,7 @@ export async function showInterstitial(reason = 'unknown') {
 // any kind of error. Call sites MUST gate the reward on this return value.
 export async function showRewardedAd(reason = 'unknown') {
   if (isMockMode()) {
-    const ok = await _mockOverlay(`Rewarded ad (${reason})`, 2000);
+    const ok = await _mockOverlay(`Реклама за награду (${reason})`, 2000);
     if (ok) _markInterstitialShown();
     return ok;
   }
@@ -209,12 +209,12 @@ function _mockOverlay(label, durationMs) {
       'flex-direction:column', 'gap:14px', 'padding:24px',
     ].join(';');
     const title = document.createElement('div');
-    title.textContent = `[MOCK] ${label}`;
+    title.textContent = `[ТЕСТ] ${label}`;
     title.style.cssText = 'font-size:18px;opacity:0.9;';
     const sub = document.createElement('div');
     sub.style.cssText = 'font-size:13px;opacity:0.6;';
     const skip = document.createElement('button');
-    skip.textContent = 'Skip (no reward)';
+    skip.textContent = 'Пропустить без награды';
     skip.style.cssText = 'margin-top:8px;padding:8px 14px;background:#2a313b;color:#fff;border:1px solid #ffffff22;border-radius:8px;cursor:pointer;';
     skip.onclick = () => { cleanup(); resolve(false); };
     root.appendChild(title);
@@ -222,7 +222,7 @@ function _mockOverlay(label, durationMs) {
     root.appendChild(skip);
     document.body.appendChild(root);
     let remaining = Math.ceil(durationMs / 1000);
-    const update = () => { sub.textContent = `Resolves in ${remaining}s — Skip to deny reward`; };
+    const update = () => { sub.textContent = `Завершится через ${remaining}с — пропусти, чтобы не получить награду`; };
     update();
     const interval = setInterval(() => {
       remaining -= 1;

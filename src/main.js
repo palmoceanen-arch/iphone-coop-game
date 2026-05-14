@@ -208,7 +208,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (loadingEl) loadingEl.remove();
     const intro = document.getElementById('intro');
     if (intro) {
-      intro.innerHTML = `<div class="panel"><h1>Failed to start</h1><pre style="white-space:pre-wrap;text-align:left;">${String(err && err.stack || err)}</pre></div>`;
+      intro.innerHTML = `<div class="panel"><h1>Не удалось запустить игру</h1><pre style="white-space:pre-wrap;text-align:left;">${String(err && err.stack || err)}</pre></div>`;
     }
   }
 });

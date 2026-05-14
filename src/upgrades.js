@@ -4,10 +4,10 @@ import { iconHTML } from './icons.js';
 
 // Upgrade definitions and shop UI logic.
 export const UPGRADES = [
-  { id: 'damage', name: 'Fight Skill', desc: '+2 damage', baseCost: 20, growth: 1.6 },
-  { id: 'hp', name: 'Stout Heart', desc: '+10 max HP', baseCost: 25, growth: 1.55 },
-  { id: 'speed', name: 'Light Boots', desc: '+0.1 move speed', baseCost: 22, growth: 1.6 },
-  { id: 'attackSpeed', name: 'Quick Hands', desc: '-4% attack cooldown', baseCost: 28, growth: 1.7 },
+  { id: 'damage', name: 'Боевой навык', desc: '+2 к урону', baseCost: 20, growth: 1.6 },
+  { id: 'hp', name: 'Крепкое сердце', desc: '+10 к макс. HP', baseCost: 25, growth: 1.55 },
+  { id: 'speed', name: 'Лёгкие сапоги', desc: '+0.1 к скорости движения', baseCost: 22, growth: 1.6 },
+  { id: 'attackSpeed', name: 'Быстрые руки', desc: '-4% к перезарядке атаки', baseCost: 28, growth: 1.7 },
 ];
 
 export function priceFor(player, upg) {
@@ -40,7 +40,7 @@ export function renderShop(player1, player2, onBuy) {
       const idxKey = playerKey[idx];
       div.innerHTML = `
         <div>
-          <div>${u.name} <span class="lvl">Lv ${lvl}</span></div>
+          <div>${u.name} <span class="lvl">Ур. ${lvl}</span></div>
           <div style="opacity:0.65;font-size:11px;">${u.desc}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">

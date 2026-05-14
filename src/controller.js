@@ -13,7 +13,7 @@ import {
 } from './controllerLayout.js';
 
 const PLAYER_COLORS = ['#6ad0ff', '#ff8a8a'];
-const PLAYER_NAMES = ['Cyan', 'Coral'];
+const PLAYER_NAMES = ['Голубой', 'Коралловый'];
 
 const lobby = document.getElementById('lobby');
 const controllerEl = document.getElementById('controller');
@@ -823,7 +823,7 @@ socket.on('state:player', (s) => {
       row.className = 'upg-row' + (can ? '' : ' locked');
       row.innerHTML = `
         <div>
-          <div class="name">${u.name} <span class="lvl">Lv ${u.level}</span></div>
+          <div class="name">${u.name} <span class="lvl">Ур. ${u.level}</span></div>
           <div class="desc">${u.desc}</div>
         </div>
         <button class="price-btn" data-id="${u.id}"><span class="price-ico">${iconHTML('coin', { size: 14 })}</span>${u.price}</button>

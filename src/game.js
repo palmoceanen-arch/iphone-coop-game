@@ -2633,7 +2633,7 @@ export class Game {
         p.level += 1;
         p.maxHP += 8;
         if (p.alive) p.hp += 8;
-        this.effects.toast(`P${p.index+1} reached level ${p.level}!`, p.index === 0 ? '#6ad0ff' : '#ff8a8a');
+        this.effects.toast(`Игрок ${p.index + 1}: уровень ${p.level}!`, p.index === 0 ? '#6ad0ff' : '#ff8a8a');
         this.effects.ring(p.pos.x, 0.06, p.pos.z, 0xfff7a0, 2.2, 0.5);
       }
     }
@@ -2719,7 +2719,7 @@ export class Game {
       const maxMs = this._fpsMaxDt * 1000;
       this._fpsAcc = 0; this._fpsFrames = 0; this._fpsMaxDt = 0;
       const el = document.getElementById('fps');
-      if (el) el.textContent = `FPS ${this._fps} · ${avgMs.toFixed(1)} ms (max ${maxMs.toFixed(0)})`;
+      if (el) el.textContent = `Кадры ${this._fps} · ${avgMs.toFixed(1)} мс (пик ${maxMs.toFixed(0)})`;
     }
   }
 
@@ -3424,7 +3424,7 @@ export class Game {
         dead._renderPos = { x: dead.pos.x, z: dead.pos.z };
         dead.knockback = { x: 0, z: 0 };
         this.effects.ring(dead.pos.x, 0.2, dead.pos.z, 0x7aff8a, 2.5, 0.6);
-        this.effects.toast(`P${dead.index + 1} revived!`, '#7aff8a');
+        this.effects.toast(`Игрок ${dead.index + 1} возрождён!`, '#7aff8a');
         this.sound.bell?.();
       }
     }
@@ -3465,7 +3465,7 @@ export class Game {
     const total = this.world.dayTime * 24;
     const hh = Math.floor(total).toString().padStart(2, '0');
     const mm = Math.floor((total % 1) * 60).toString().padStart(2, '0');
-    const phase = this.world.isNight() ? 'Night' : 'Day';
+    const phase = this.world.isNight() ? 'Ночь' : 'День';
     set('clock', `${phase} · ${hh}:${mm}`);
     const dot = document.getElementById('clockdot');
     if (dot) dot.style.background = this.world.isNight() ? '#7aa6ff' : '#ffd166';
@@ -3514,7 +3514,7 @@ export class Game {
         // "Этаж" reads more naturally to a Russian speaker than "слой"
         // for vertical level — same noun used for building floors in
         // real architecture.
-        layerEl.textContent = `этаж ${b.cursorLayer | 0}`;
+        layerEl.textContent = `уровень ${b.cursorLayer | 0}`;
       }
     }
     // Live affordability re-paint for any open build-wheel — without

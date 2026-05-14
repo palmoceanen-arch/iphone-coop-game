@@ -1,7 +1,7 @@
 {
-  "name": "Twin Hearts",
-  "short_name": "Twin Hearts",
-  "description": "Two-player local-coop top-down adventure.",
+  "name": "Сердце Героя: открытый мир",
+  "short_name": "Сердце Героя",
+  "description": "Приключение с видом сверху в открытом мире.",
   "id": "/?source=pwa",
   "start_url": "/?source=pwa",
   "scope": "/",
@@ -10,7 +10,7 @@
   "orientation": "landscape",
   "background_color": "#0c1015",
   "theme_color": "#0c1015",
-  "lang": "en",
+  "lang": "ru",
   "categories": ["games", "entertainment"],
   "icons": [
     {
