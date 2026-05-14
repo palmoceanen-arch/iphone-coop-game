@@ -360,10 +360,12 @@ export class StartMenu {
     slot.className = `start-slot start-slot-p${index + 1}`;
     slot.setAttribute('data-slot', String(index));
 
-    const head = document.createElement('h3');
-    head.className = 'start-slot-title';
-    head.textContent = SLOT_TITLES[index];
-    slot.appendChild(head);
+    if (!this.forceSolo) {
+      const head = document.createElement('h3');
+      head.className = 'start-slot-title';
+      head.textContent = SLOT_TITLES[index];
+      slot.appendChild(head);
+    }
 
     // ---- 3D preview canvas ----
     const canvas = document.createElement('canvas');

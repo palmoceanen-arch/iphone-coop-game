@@ -17,6 +17,8 @@ import {
   isMockMode,
   showInterstitial,
   showRewardedAd,
+  adCooldownRemainingMs,
+  canShowAd,
   gameReady,
   gameplayStart,
   gameplayStop,
@@ -124,10 +126,7 @@ function _hookDeathScreen(game, state) {
 }
 
 function _onDeathShown(game, state) {
-  // Trigger a game-over interstitial. Rate-limited inside the SDK facade
-  // so morning + death within ~1 min won't both fire.
   gameplayStop();
-  showInterstitial('death').catch(() => {});
 
   // The default panel copy ("You both fell. — the bond is your lifeline.")
   // reads as a bug in single-player. Replace it with solo-appropriate
@@ -135,10 +134,12 @@ function _onDeathShown(game, state) {
   // solo) and existing solo mode in the multiplayer build.
   if (game.solo) _localiseDeathPanelForSolo();
 
-  // Revive button is single-use per run. After the player consumes it
-  // we just keep the regular "Restart" button as the only path forward,
-  // which conveniently lines up with the post-restart interstitial slot.
-  if (state.revivesUsed >= REVIVE_PER_RUN) return;
+  // Keep the first death focused on the rewarded revive. Once the revive is
+  // spent, later game-overs can show the regular interstitial instead.
+  if (state.revivesUsed >= REVIVE_PER_RUN) {
+    showInterstitial('death').catch(() => {});
+    return;
+  }
   _injectReviveButton(game, state);
 }
 
@@ -162,6 +163,7 @@ function _injectReviveButton(game, state) {
   btn.innerHTML = _adIconSvg() + '<span>Возродиться</span>';
   btn.title = 'Посмотреть видеорекламу и возродиться с 60% HP';
   btn.addEventListener('click', async () => {
+    if (!_canStartRewardedAd(game)) return;
     btn.disabled = true;
     const ok = await showRewardedAd('revive');
     if (!ok) {
@@ -232,6 +234,7 @@ function _maybeInjectShopAdRow(game, state) {
         _toast(game, 'Награда уже получена в этом визите.', '#ffd166');
         return;
       }
+      if (!_canStartRewardedAd(game)) return;
       row.style.pointerEvents = 'none';
       row.style.opacity = '0.5';
       const ok = await showRewardedAd('shop-gold');
@@ -296,6 +299,7 @@ function _offerChestDoubleLoot(game, state, chest) {
     cleanup();
   });
   overlay.querySelector('.yandex-chest-prompt-inner')?.addEventListener('click', async () => {
+    if (!_canStartRewardedAd(game)) return;
     clearTimeout(timer);
     overlay.style.pointerEvents = 'none';
     overlay.style.opacity = '0.6';
@@ -332,6 +336,13 @@ function _toast(game, msg, color = '#ffd166') {
   } else {
     console.log('[yandex toast]', msg);
   }
+}
+
+function _canStartRewardedAd(game) {
+  if (canShowAd()) return true;
+  const seconds = Math.ceil(adCooldownRemainingMs() / 1000);
+  _toast(game, `Реклама будет доступна через ${seconds}с.`, '#ffd166');
+  return false;
 }
 
 function _adIconSvg(size = 16) {

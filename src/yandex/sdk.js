@@ -14,10 +14,10 @@ const SDK_URL = '/sdk.js';
 
 let sdkScriptPromise = null;
 let ysdkPromise = null;
-let _lastInterstitialAt = 0;
-// Yandex's policy is a 60s minimum between interstitials. Pad to 65s so a
+let _lastAdAt = 0;
+// Yandex's policy is a 60s minimum between ad impressions. Pad to 65s so a
 // slightly clock-skewed runtime never triggers their server-side rejection.
-const INTERSTITIAL_COOLDOWN_MS = 65_000;
+const AD_COOLDOWN_MS = 65_000;
 
 export function isYandexBuild() {
   return import.meta.env.VITE_PLATFORM === 'yandex';
@@ -101,22 +101,30 @@ export async function gameplayStop() {
   }
 }
 
-// Reset the interstitial cooldown — call after any rewarded video, since
+// Reset the shared ad cooldown — call after any rewarded video, since
 // Yandex counts both ad kinds against the same "ad shown recently" pacing.
-function _markInterstitialShown() {
-  _lastInterstitialAt = Date.now();
+function _markAdShown() {
+  _lastAdAt = Date.now();
+}
+
+export function adCooldownRemainingMs() {
+  return Math.max(0, AD_COOLDOWN_MS - (Date.now() - _lastAdAt));
+}
+
+export function canShowAd() {
+  return adCooldownRemainingMs() <= 0;
 }
 
 // Returns true if an interstitial was actually shown to the user. False if
 // we're still inside the cooldown window or the SDK failed to play one.
 export async function showInterstitial(reason = 'unknown') {
   if (isMockMode()) {
-    if (Date.now() - _lastInterstitialAt < INTERSTITIAL_COOLDOWN_MS) return false;
-    _markInterstitialShown();
+    if (!canShowAd()) return false;
+    _markAdShown();
     return _mockOverlay(`Межстраничная реклама (${reason})`, 1500);
   }
   if (!isYandexBuild()) return false;
-  if (Date.now() - _lastInterstitialAt < INTERSTITIAL_COOLDOWN_MS) {
+  if (!canShowAd()) {
     return false;
   }
   const ysdk = await initYandexSDK();
@@ -125,7 +133,7 @@ export async function showInterstitial(reason = 'unknown') {
     let shown = false;
     ysdk.adv.showFullscreenAdv({
       callbacks: {
-        onOpen: () => { shown = true; _markInterstitialShown(); },
+        onOpen: () => { shown = true; _markAdShown(); },
         onClose: (wasShown) => resolve(shown || !!wasShown),
         onError: (err) => {
           console.warn('[yandex] interstitial error', err);
@@ -141,9 +149,10 @@ export async function showInterstitial(reason = 'unknown') {
 // False if they dismissed early, the network failed, or the SDK reported
 // any kind of error. Call sites MUST gate the reward on this return value.
 export async function showRewardedAd(reason = 'unknown') {
+  if (!canShowAd()) return false;
   if (isMockMode()) {
     const ok = await _mockOverlay(`Реклама за награду (${reason})`, 2000);
-    if (ok) _markInterstitialShown();
+    if (ok) _markAdShown();
     return ok;
   }
   if (!isYandexBuild()) return false;
@@ -153,7 +162,7 @@ export async function showRewardedAd(reason = 'unknown') {
     let rewarded = false;
     ysdk.adv.showRewardedVideo({
       callbacks: {
-        onOpen: () => { _markInterstitialShown(); },
+        onOpen: () => { _markAdShown(); },
         onRewarded: () => { rewarded = true; },
         onClose: () => resolve(rewarded),
         onError: (err) => {
