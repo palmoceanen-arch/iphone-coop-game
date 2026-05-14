@@ -304,6 +304,14 @@ export class Game {
     this.phoneShopOpen = [false, false];
     this._gamepadShopFocus = [{ idx: 0 }, { idx: 0 }];
     this.lobby = null; // injected from main.js
+    // Optional platform integration (Yandex Games, etc) — installed by
+    // main.js when a build is targeting a specific portal. Game.js calls
+    // optional-chained hooks (onChestOpened, onShopOpen/Close, onMorning,
+    // onRestart) so the cross-platform code paths stay untouched.
+    this.platform = null;
+    // Tracks night→day transitions so the platform's `onMorning` hook only
+    // fires once per sunrise instead of every frame the sun is up.
+    this._wasNight = false;
     this._stateSyncT = 0;
     this.dead = false;
     this.leashRatio = 0;
@@ -567,7 +575,10 @@ export class Game {
   _refreshShopState() {
     // Game pauses if EITHER phone is in shop OR keyboard shop is open.
     const anyPhoneShop = this.phoneShopOpen[0] || this.phoneShopOpen[1];
+    const prev = this.shopOpen;
     this.shopOpen = !!(this._keyboardShop || anyPhoneShop);
+    if (this.shopOpen && !prev) this.platform?.onShopOpen?.();
+    else if (!this.shopOpen && prev) this.platform?.onShopClose?.();
     // Show PC shop panel when phone OR keyboard opens shop — monitor
     // has room for full descriptions/inventory that phone lacks.
     const showPc = !!(this._keyboardShop || anyPhoneShop);
@@ -994,6 +1005,9 @@ export class Game {
     this._spawnInitialEnemies();
     this._spawnStarterChest();
     document.getElementById('death').classList.remove('open');
+    // Platform hook — lets a portal integration hand out a fresh per-run
+    // revive on the next death and clear any in-flight overlay state.
+    this.platform?.onRestart?.();
     // Death-restart resets most of the run state — make sure the save
     // catches the new (revived) baseline so a tab close right after
     // restart doesn't restore the pre-death state.
@@ -3139,6 +3153,14 @@ export class Game {
     // budget to the otherwise-safe base-building / farming loop.
     this._tickNightWalkers(dt);
 
+    // Day/night transition watcher. Fires `platform.onMorning()` exactly
+    // once on the night→day boundary so a portal integration can slot a
+    // (rate-limited) interstitial into the natural cadence break between
+    // night-walker waves and the calmer daytime exploration loop.
+    const night = !!this.world?.isNight?.();
+    if (this._wasNight && !night) this.platform?.onMorning?.();
+    this._wasNight = night;
+
     // Update enemies
     const ctx = {
       spawnProjectile: (opts) => {
@@ -3201,6 +3223,11 @@ export class Game {
         if (chest.chunkKey) {
           this.world.markChestConsumed(chest.chunkKey, chest.pos.x, chest.pos.z);
         }
+        // Platform hook: lets a portal integration (e.g. Yandex Games)
+        // offer a rewarded-ad "double loot" toast right after the lid
+        // pops open. Optional-chained so non-portal builds compile to a
+        // single no-op call.
+        this.platform?.onChestOpened?.(chest);
       },
     );
     compactInPlace(this.chests, c => c.alive, c => {

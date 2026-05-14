@@ -1,25 +1,45 @@
 import { ABILITY_BY_ID } from './abilities.js';
 import { Game } from './game.js';
 import { ITEMS } from './items.js';
-import { Lobby } from './lobby.js';
 import { preloadModels, preloadWeapons } from './models.js';
 import { PauseMenu } from './pause.js';
 import { getSettings } from './settings.js';
 import { StartMenu } from './startMenu.js';
+import { isMockMode } from './yandex/sdk.js';
+
+// Yandex Games builds bootstrap differently: no LAN lobby, no QR overlay,
+// no mobile→controller redirect, solo-only character picker, plus a
+// `gameReady()` SDK ping once the first playable frame renders. The
+// `import.meta.env.VITE_PLATFORM` check is replaced at build time by
+// Vite's define plugin (see vite.config.js), so the `!== 'yandex'`
+// branches collapse to dead code and Rollup tree-shakes the entire
+// lobby + socket.io-client dependency tree out of dist-yandex.
+const YANDEX_STATIC = import.meta.env.VITE_PLATFORM === 'yandex';
 
 window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('error', (e) => {
     console.error('[fatal]', e.error || e.message);
   });
 
+  // `?devAdMock=1` lets a developer preview the Yandex ad flow inside a
+  // normal web build by stubbing the SDK with fake overlays. It does NOT
+  // disable the lobby — we just install the integration on top of the
+  // existing LAN-coop bootstrap so the ad UI can be exercised end-to-end.
+  const MOCK = !YANDEX_STATIC && isMockMode();
+
   // The host page renders a 3D world and is intended for the desktop/laptop
   // running the game. On iPhone/Android, redirect to the controller page so
   // players don't accidentally hit the WebGL canvas (which struggles on
   // mobile Safari memory).
+  //
+  // EXCEPTION: Yandex Games runs the same single-player build on mobile
+  // browsers (Yandex's own iframe shrinks the canvas to fit phone screens),
+  // so we never redirect in Yandex mode — the player gets the full game on
+  // their phone directly through Yandex's app.
   const ua = (navigator.userAgent || '').toLowerCase();
   const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
   const params = new URLSearchParams(window.location.search);
-  if (isMobile && !params.has('host')) {
+  if (!YANDEX_STATIC && isMobile && !params.has('host')) {
     const url = new URL('controller', window.location.href);
     // forward seed code if present so /controller?code=... still works
     for (const [k, v] of params.entries()) url.searchParams.set(k, v);
@@ -59,9 +79,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     // the heavy Game constructor runs. We defer Game creation here on
     // purpose — picking a seed up-front means the World terrain is generated
     // from the chosen seed, not the URL fallback.
-    const startMenu = new StartMenu({ pauseMenu });
+    //
+    // Yandex builds force solo=true and hide the coop toggle inside the
+    // start menu (see startMenu.js).
+    const startMenu = new StartMenu({ pauseMenu, forceSolo: YANDEX_STATIC || MOCK });
     startMenu.open();
     const config = await new Promise((resolve) => { startMenu.onStart = resolve; });
+    if (YANDEX_STATIC || MOCK) config.solo = true;
 
     // Reflect the chosen seed in the URL so a refresh keeps the same world,
     // and so the rest of the app (already URL-driven) sees a consistent
@@ -95,40 +119,71 @@ window.addEventListener('DOMContentLoaded', async () => {
       game.players[1].setAbility(Object.keys(ABILITY_BY_ID)[1] || Object.keys(ABILITY_BY_ID)[0]);
     }
 
-    // Reveal the lobby/QR overlay now that the world is built. Game's own
-    // `_waitingForStart` flag still freezes the simulation until the user
-    // clicks one of the lobby start buttons below.
-    const introEl = document.getElementById('intro');
-    if (introEl) introEl.style.display = 'flex';
+    // Install the Yandex ad integration whenever we're in a build that
+    // shows ads (real Yandex bundle, or any build with ?devAdMock=1).
+    if (YANDEX_STATIC || MOCK) {
+      const [{ installYandexIntegration }, { gameReady }] = await Promise.all([
+        import('./yandex/integration.js'),
+        import('./yandex/sdk.js'),
+      ]);
+      installYandexIntegration(game);
+      gameReady().catch(() => {});
+    }
 
-    lobby = new Lobby({ solo: !!config.solo });
-    lobby.connect();
-    window.__lobby = lobby;
-    game.lobby = lobby;
-
-    // Mobile controllers feed remote state straight into the game's Input.
-    lobby.onInputState = (slot, state) => {
-      if (game && game.input) game.input.setRemoteState(slot, state);
-    };
-    // Edge events (attack/dash/shop/buy) routed through Game so it can also
-    // handle gamepad-driven shop & purchases.
-    lobby.onInputEvent = (slot, event) => {
-      if (game) game.handleRemoteEvent(slot, event);
-    };
-    lobby.onControllerJoined = (slot) => {
-      if (game) game._pushPlayerState(slot);
-    };
-
-    const startBtn = document.getElementById('lobby-start');
-    if (startBtn) startBtn.addEventListener('click', () => {
-      lobby.startGame();
+    // The `import.meta.env.VITE_PLATFORM !== 'yandex'` check below is
+    // inlined intentionally so Rollup can fold it to `false` at build
+    // time for `vite build --mode yandex`, eliminating the entire else
+    // branch *and* its dynamic `import('./lobby.js')`. Hiding it behind
+    // a local `const` confuses the tree-shaker enough that the lobby
+    // chunk still gets emitted as a dead 70 kB orphan in dist-yandex/.
+    if (import.meta.env.VITE_PLATFORM === 'yandex') {
+      // Yandex single-player path: skip the lobby/QR overlay entirely and
+      // jump straight into the game. _startGame() flips the engine out of
+      // its _waitingForStart freeze so the player just sees gameplay.
+      const introEl = document.getElementById('intro');
+      if (introEl) introEl.style.display = 'none';
       game._startGame();
-    });
-    const kbBtn = document.getElementById('start-keyboard');
-    if (kbBtn) kbBtn.addEventListener('click', () => {
-      lobby.startGame();
-      game._startGame();
-    });
+    } else {
+      // Reveal the lobby/QR overlay now that the world is built. Game's own
+      // `_waitingForStart` flag still freezes the simulation until the user
+      // clicks one of the lobby start buttons below.
+      const introEl = document.getElementById('intro');
+      if (introEl) introEl.style.display = 'flex';
+
+      // Lazy-import Lobby so the socket.io-client dependency tree only
+      // pulls into builds that actually need it. In yandex builds the
+      // SKIP_LOBBY guard above evaluates to true statically, so this
+      // branch and its dynamic import are eliminated by Rollup.
+      const { Lobby } = await import('./lobby.js');
+      lobby = new Lobby({ solo: !!config.solo });
+      lobby.connect();
+      window.__lobby = lobby;
+      game.lobby = lobby;
+
+      // Mobile controllers feed remote state straight into the game's Input.
+      lobby.onInputState = (slot, state) => {
+        if (game && game.input) game.input.setRemoteState(slot, state);
+      };
+      // Edge events (attack/dash/shop/buy) routed through Game so it can also
+      // handle gamepad-driven shop & purchases.
+      lobby.onInputEvent = (slot, event) => {
+        if (game) game.handleRemoteEvent(slot, event);
+      };
+      lobby.onControllerJoined = (slot) => {
+        if (game) game._pushPlayerState(slot);
+      };
+
+      const startBtn = document.getElementById('lobby-start');
+      if (startBtn) startBtn.addEventListener('click', () => {
+        lobby.startGame();
+        game._startGame();
+      });
+      const kbBtn = document.getElementById('start-keyboard');
+      if (kbBtn) kbBtn.addEventListener('click', () => {
+        lobby.startGame();
+        game._startGame();
+      });
+    }
   } catch (err) {
     console.error(err);
     if (loadingEl) loadingEl.remove();

@@ -7,7 +7,9 @@
     "dev": "node server.js",
     "start": "NODE_ENV=production node server.js",
     "build": "vite build",
+    "build:yandex": "vite build --mode yandex",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "preview:yandex": "vite preview --mode yandex --host 0.0.0.0 --port 3000",
     "lint": "eslint \"src/**/*.js\" \"server.js\""
   },
   "dependencies": {

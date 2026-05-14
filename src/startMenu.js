@@ -89,9 +89,14 @@ function hexToCss(hex) {
 }
 
 export class StartMenu {
-  constructor({ pauseMenu }) {
+  constructor({ pauseMenu, forceSolo = false } = {}) {
     this.root = document.getElementById('start-menu');
     this.pauseMenu = pauseMenu;
+    // forceSolo locks the menu into single-player mode and hides the
+    // coop toggle entirely. Set by main.js for Yandex Games builds, where
+    // there is no LAN lobby and the secondary slot would never get a
+    // controller anyway.
+    this.forceSolo = !!forceSolo;
     if (!this.root) return;
 
     this.onStart = null;
@@ -119,7 +124,9 @@ export class StartMenu {
     // Solo mode: when true, the second slot is hidden in the picker and
     // only one Player is configured. Game still builds a phantom slot 2
     // (hidden, invulnerable) so partner-aware code keeps its 2-slot shape.
-    this.solo = false;
+    // Yandex builds force this to true so the menu can't expose a coop
+    // option that would never resolve (no lobby → no second controller).
+    this.solo = this.forceSolo;
 
     // 3D preview state per slot, set up lazily inside _renderSlots(): each
     // entry is `{ renderer, scene, camera, mixer, character }`.
@@ -229,25 +236,32 @@ export class StartMenu {
       });
       this.root.classList.toggle('solo', this.solo);
     };
-    soloBtns.forEach((b) => {
-      b.addEventListener('click', () => {
-        const next = b.dataset.soloMode === 'solo';
-        if (next === this.solo) return;
-        this.solo = next;
-        applySoloUi();
-        this._renderSlots();
-        this._resizePreviews();
-        // Reset cursors so a gamepad-2 cursor that was on the (now-
-        // hidden) slot[1] doesn't strand. _defaultRegionFor picks
-        // shared0 in solo and slot1 in co-op.
-        for (let i = 0; i < this._gpCursors.length; i++) {
-          this._gpCursors[i].regionId = this._defaultRegionFor(i);
-          this._gpCursors[i].row = 0;
-          this._gpCursors[i].col = 0;
-          this._gpCursors[i].desiredCenterX = null;
-        }
+    if (this.forceSolo) {
+      // Hide the coop toggle row in builds that don't support it. The
+      // surrounding container collapses cleanly when both buttons are
+      // gone, so the seed input + confirm button slide up unchanged.
+      soloBtns.forEach((b) => { b.style.display = 'none'; });
+    } else {
+      soloBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+          const next = b.dataset.soloMode === 'solo';
+          if (next === this.solo) return;
+          this.solo = next;
+          applySoloUi();
+          this._renderSlots();
+          this._resizePreviews();
+          // Reset cursors so a gamepad-2 cursor that was on the (now-
+          // hidden) slot[1] doesn't strand. _defaultRegionFor picks
+          // shared0 in solo and slot1 in co-op.
+          for (let i = 0; i < this._gpCursors.length; i++) {
+            this._gpCursors[i].regionId = this._defaultRegionFor(i);
+            this._gpCursors[i].row = 0;
+            this._gpCursors[i].col = 0;
+            this._gpCursors[i].desiredCenterX = null;
+          }
+        });
       });
-    });
+    }
     applySoloUi();
 
     r.querySelector('#start-btn-confirm').addEventListener('click', () => {
