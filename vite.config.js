@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
   const isYandex = mode === 'yandex';
   return {
     root: '.',
+    // Yandex Games packages relative paths inside the uploaded zip; forcing
+    // './' ensures generated JS/CSS asset URLs work from the iframe path
+    // instead of resolving to the host root as `/assets/...`.
+    base: isYandex ? './' : '/',
     define: {
       'import.meta.env.VITE_PLATFORM': JSON.stringify(isYandex ? 'yandex' : 'web'),
     },
@@ -22,10 +26,6 @@ export default defineConfig(({ mode }) => {
       outDir: isYandex ? 'dist-yandex' : 'dist',
       sourcemap: true,
       target: 'es2020',
-      // Yandex Games packages relative paths inside the uploaded zip;
-      // forcing './' ensures all asset URLs work whether the host serves
-      // from a subdirectory or the root of the iframe.
-      ...(isYandex ? { base: './' } : {}),
       rollupOptions: {
         input: isYandex
           ? { main: path.resolve(__dirname, 'index.html') }
