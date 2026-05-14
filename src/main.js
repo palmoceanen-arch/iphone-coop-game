@@ -84,6 +84,31 @@ window.addEventListener('DOMContentLoaded', async () => {
       loadSave,
     });
     window.__game = game;
+
+    // Promo / screenshot mode: ?promo=1 in the URL opens the free-fly
+    // camera + capture panel for composing icon/cover stills. Lazy-
+    // imported so the module isn't paid for in a normal player session.
+    // Auto-starts the game (skips the lobby/QR overlay) and binds F11
+    // as a runtime toggle so a developer can flip in/out without reload.
+    const promoRequested = params.get('promo') === '1';
+    if (promoRequested) {
+      const { PromoMode } = await import('./promoMode.js');
+      const promo = new PromoMode(game);
+      window.__promo = promo;
+      // Wait for one frame so FollowCamera has placed itself, then
+      // bypass the lobby (hide intro, flip _waitingForStart) and open
+      // the promo panel.
+      setTimeout(() => {
+        const intro = document.getElementById('intro');
+        if (intro) intro.style.display = 'none';
+        game._startGame();
+        promo.enable();
+      }, 150);
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'F11') { e.preventDefault(); promo.active ? promo.disable() : promo.enable(); }
+      });
+    }
+
     if (params.get('testInventory') === '1') {
       for (const player of game.players) {
         for (let i = 0; i < ITEMS.length; i++) {

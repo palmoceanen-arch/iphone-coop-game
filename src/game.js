@@ -2632,7 +2632,7 @@ export class Game {
     // decay, FPS counter, FX pulses, input event drain, shop UI) tick
     // even when the simulation is paused. Inside Game.update() the
     // dt<=0 branch handles this case explicitly.
-    const sleeping = this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this._waitingForStart || this.dead;
+    const sleeping = this.paused || this.menuPaused || this.shopOpen || this.altarOpen || this._waitingForStart || this.dead || this._promoActive;
     if (sleeping) {
       this._fixedAccum = 0;
       this.update(0, dt0);
@@ -3632,6 +3632,13 @@ export class Game {
   }
 
   render() {
+    // Promo / screenshot mode owns the camera and runs its own render
+    // pass on its own RAF — bail here so we don't overwrite the
+    // free-fly pose with FollowCamera's player-centred update. The
+    // promo's tick also freezes the simulation (the game loop's
+    // `sleeping` branch checks _promoActive), so meshes don't drift
+    // out from under the still being composed.
+    if (this._promoActive) return;
     // Render-side interpolation. alpha is how far we are between the
     // last completed sim step and the next pending one — clamped to
     // [0,1] in case a partial step was queued.
