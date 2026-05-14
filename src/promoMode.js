@@ -8,6 +8,8 @@
 // Activated only when `?promo=1` is in the URL — never reachable in a
 // normal player session, so production builds incur zero overhead.
 import * as THREE from 'three';
+import { CHARACTERS, CHARACTER_BY_ID, crossFadeTo, spawnCharacter, setEquippedWeapon } from './models.js';
+import { CAPE_COLOR_PRESETS, PLAYER_COLOR_PRESETS } from './player.js';
 
 // Pre-canned resolutions the promo panel exposes as one-tap buttons.
 // Yandex Games asks for 512×512 (icon), the cover is typically 800×800
@@ -23,6 +25,23 @@ const RES_PRESETS = [
   { w: 1920, h: 1080, label: '1920×1080 16:9' },
 ];
 
+const PROMO_ANIMS = [
+  { key: 'idle', label: 'Idle' },
+  { key: 'walk', label: 'Walk' },
+  { key: 'run', label: 'Run' },
+  { key: 'attack_1h_horiz', label: '1H slice' },
+  { key: 'attack_2h_slice', label: '2H slice' },
+  { key: 'attack_2h_spinning', label: 'Spin' },
+  { key: 'attack_spell', label: 'Spell' },
+  { key: 'attack_spell_long', label: 'Long spell' },
+  { key: 'attack_throw', label: 'Throw' },
+  { key: 'dodge_forward', label: 'Dodge' },
+  { key: 'hit', label: 'Hit' },
+  { key: 'death', label: 'Death' },
+];
+const PROMO_DEFAULT_WEAPON = 'sword_1h';
+const PROMO_CHARACTER_SCALE = 0.6;
+
 export class PromoMode {
   constructor(game) {
     this.game = game;
@@ -34,8 +53,8 @@ export class PromoMode {
     this.yaw = 0;     // around Y
     this.pitch = -0.4; // looking slightly down by default
     this.fov = 55;
-    this.flySpeed = 14;        // m/s with W/A/S/D
-    this.flySpeedBoost = 36;   // m/s while Shift held
+    this.flySpeed = 5;         // m/s with W/A/S/D
+    this.flySpeedBoost = 18;   // m/s while Shift held
     this.lookSpeedMouse = 0.0025; // rad per pixel
 
     // Frame-local input state.
@@ -47,12 +66,22 @@ export class PromoMode {
     this._panel = null;
     this._badge = null;
     this._hideStyle = null;
+    this._characterMenu = null;
+    this._raycaster = new THREE.Raycaster();
+    this._pointerNdc = new THREE.Vector2();
+    this._groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this._promoCharacters = [];
+    this._selectedCharacter = null;
+    this._spawnArmed = false;
+    this._deleteArmed = false;
+    this._hidePlayer = false;
 
     // Bound handlers for clean remove.
     this._onKeyDown = (e) => this._handleKey(e, true);
     this._onKeyUp = (e) => this._handleKey(e, false);
     this._onMouseMove = (e) => this._handleMouseMove(e);
-    this._onClick = (e) => this._handlePointerLock(e);
+    this._onClick = (e) => this._handleCanvasClick(e);
+    this._onContextMenu = (e) => this._handleContextMenu(e);
     this._onWheel = (e) => this._handleWheel(e);
     this._onPointerLockChange = () => {
       this._pointerLocked = document.pointerLockElement === this.game.canvas;
@@ -89,6 +118,7 @@ export class PromoMode {
     this.game._promoActive = false;
 
     this._removeInput();
+    this._removeCharacterMenu();
     this._removePanel();
     this._removeHudHider();
     if (document.pointerLockElement) document.exitPointerLock();
@@ -141,7 +171,7 @@ export class PromoMode {
       <div class="promo-title">📷 PROMO MODE</div>
       <div class="promo-row promo-help">
         WASD/стрелки — лететь · Q/E — вверх/вниз · Shift — ускорить<br>
-        ЛКМ по сцене — захват мыши (Esc — отпустить) · Колесо — FOV
+        ЛКМ — выбрать персонажа / поставить / удалить · ПКМ — захват мыши · Колесо — FOV
       </div>
       <div class="promo-row">
         <label>Время суток</label>
@@ -154,7 +184,15 @@ export class PromoMode {
         <span id="promo-fov-label">55°</span>
       </div>
       <div class="promo-row">
-        <button id="promo-hide-player">👻 Скрыть героя</button>
+        <button id="promo-hide-player">Скрыть игроков</button>
+        <button id="promo-spawn-character">Спавн персонажа</button>
+        <button id="promo-delete-character">Удалить персонажа</button>
+      </div>
+      <div class="promo-row">
+        <label>Кого спавнить</label>
+        <select id="promo-character-kind">
+          ${CHARACTERS.map((c) => `<option value="${c.id}">${c.label}</option>`).join('')}
+        </select>
       </div>
       <div class="promo-row">
         <label>Скриншот →</label>
@@ -180,6 +218,7 @@ export class PromoMode {
       #promo-panel .promo-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
       #promo-panel label { min-width: 100px; opacity: 0.85; }
       #promo-panel input[type=range] { flex: 1; min-width: 140px; }
+      #promo-panel select { flex: 1; min-width: 140px; background: #151a22; color: #eee; border: 1px solid rgba(255,255,255,0.18); border-radius: 6px; padding: 4px 6px; }
       #promo-panel button {
         background: rgba(255,255,255,0.08); color: #eee;
         border: 1px solid rgba(255,255,255,0.18); border-radius: 6px;
@@ -188,6 +227,18 @@ export class PromoMode {
       #promo-panel button:hover { background: rgba(255,255,255,0.16); }
       #promo-panel button.armed { background: #ffb84d; color: #000; border-color: #ffb84d; }
       #promo-panel #promo-exit { background: #c33; color: #fff; border-color: #c33; }
+      #promo-character-menu {
+        position: fixed; z-index: 100000; width: 260px; padding: 10px;
+        background: rgba(8,12,18,0.94); color: #eee; border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 10px; font: 12px/1.4 system-ui, sans-serif; pointer-events: auto; user-select: none;
+      }
+      #promo-character-menu .promo-menu-title { color: #ffb84d; font-weight: 700; margin-bottom: 6px; }
+      #promo-character-menu .promo-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+      #promo-character-menu select { flex: 1; min-width: 120px; background: #151a22; color: #eee; border: 1px solid rgba(255,255,255,0.18); border-radius: 6px; padding: 4px 6px; }
+      #promo-character-menu button { background: rgba(255,255,255,0.08); color: #eee; border: 1px solid rgba(255,255,255,0.18); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 11px; }
+      #promo-character-menu button:hover { background: rgba(255,255,255,0.16); }
+      #promo-character-menu button.armed { background: #ffb84d; color: #000; border-color: #ffb84d; }
+      #promo-character-menu .danger { background: #7a2a2a; border-color: #a44; }
       #promo-badge {
         position: fixed; left: 12px; bottom: 12px; z-index: 99999;
         background: rgba(8,12,18,0.85); color: #ffb84d;
@@ -202,7 +253,7 @@ export class PromoMode {
 
     const badge = document.createElement('div');
     badge.id = 'promo-badge';
-    badge.textContent = 'promo mode · WASD-fly · ЛКМ для захвата мыши';
+    badge.textContent = 'promo mode · WASD-fly · ПКМ для захвата мыши';
     document.body.appendChild(badge);
     this._badge = badge;
 
@@ -240,6 +291,19 @@ export class PromoMode {
       this._applyPlayerVisibility();
     });
 
+    const spawnBtn = panel.querySelector('#promo-spawn-character');
+    const deleteBtn = panel.querySelector('#promo-delete-character');
+    spawnBtn.addEventListener('click', () => {
+      this._spawnArmed = !this._spawnArmed;
+      if (this._spawnArmed) this._deleteArmed = false;
+      this._syncPanelButtons();
+    });
+    deleteBtn.addEventListener('click', () => {
+      this._deleteArmed = !this._deleteArmed;
+      if (this._deleteArmed) this._spawnArmed = false;
+      this._syncPanelButtons();
+    });
+
     panel.querySelectorAll('.promo-shot').forEach((btn) => {
       btn.addEventListener('click', () => {
         const i = parseInt(btn.getAttribute('data-i'), 10);
@@ -265,6 +329,198 @@ export class PromoMode {
     }
   }
 
+  _syncPanelButtons() {
+    const spawnBtn = this._panel?.querySelector('#promo-spawn-character');
+    const deleteBtn = this._panel?.querySelector('#promo-delete-character');
+    spawnBtn?.classList.toggle('armed', this._spawnArmed);
+    deleteBtn?.classList.toggle('armed', this._deleteArmed);
+    if (this._badge) {
+      if (this._spawnArmed) this._badge.textContent = 'promo mode · ЛКМ по земле — поставить персонажа';
+      else if (this._deleteArmed) this._badge.textContent = 'promo mode · ЛКМ по персонажу — удалить';
+      else this._badge.textContent = 'promo mode · WASD-fly · ПКМ для захвата мыши';
+    }
+  }
+
+  _pickGroundPoint(e) {
+    const cam = this.game.followCam?.cam;
+    const canvas = this.game.canvas;
+    if (!cam || !canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    this._pointerNdc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(this._pointerNdc, cam);
+    const point = new THREE.Vector3();
+    if (!this._raycaster.ray.intersectPlane(this._groundPlane, point)) return null;
+    return point;
+  }
+
+  _pickPromoCharacter(e) {
+    const cam = this.game.followCam?.cam;
+    const canvas = this.game.canvas;
+    if (!cam || !canvas || this._promoCharacters.length === 0) return null;
+    const rect = canvas.getBoundingClientRect();
+    this._pointerNdc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(this._pointerNdc, cam);
+    const roots = this._promoCharacters.map((p) => p.root);
+    const hits = this._raycaster.intersectObjects(roots, true);
+    for (const hit of hits) {
+      const picked = this._promoCharacters.find((p) => {
+        let obj = hit.object;
+        while (obj) {
+          if (obj === p.root) return true;
+          obj = obj.parent;
+        }
+        return false;
+      });
+      if (picked) return picked;
+    }
+    return null;
+  }
+
+  _spawnPromoCharacter(point) {
+    const select = this._panel?.querySelector('#promo-character-kind');
+    const charId = select?.value || CHARACTERS[0].id;
+    const def = CHARACTER_BY_ID[charId] || CHARACTERS[0];
+    const body = PLAYER_COLOR_PRESETS[this._promoCharacters.length % PLAYER_COLOR_PRESETS.length]?.body ?? 0xffffff;
+    const cape = CAPE_COLOR_PRESETS[this._promoCharacters.length % CAPE_COLOR_PRESETS.length]?.body ?? null;
+    const character = spawnCharacter(def.kind, {
+      tint: body,
+      capeTint: cape,
+      scale: PROMO_CHARACTER_SCALE,
+      skinAware: !!def.skinAware,
+      characterDef: def,
+    });
+    const root = character.root;
+    root.position.set(point.x, 0, point.z);
+    root.rotation.y = this.yaw + Math.PI;
+    root.userData.promoCharacter = true;
+    this.game.scene.add(root);
+    setEquippedWeapon(character, def.defaultWeapon || PROMO_DEFAULT_WEAPON);
+    const item = {
+      root,
+      character,
+      def,
+      animKey: 'idle',
+      paused: false,
+      weaponKind: def.defaultWeapon || PROMO_DEFAULT_WEAPON,
+    };
+    this._promoCharacters.push(item);
+    this._playCharacterAnimation(item, 'idle');
+    this._selectedCharacter = item;
+    this._openCharacterMenu(item, 0, 0);
+  }
+
+  _deletePromoCharacter(item) {
+    this._removeCharacterMenu();
+    const idx = this._promoCharacters.indexOf(item);
+    if (idx >= 0) this._promoCharacters.splice(idx, 1);
+    item.character?.mixer?.stopAllAction();
+    item.root?.parent?.remove(item.root);
+    this._selectedCharacter = null;
+  }
+
+  _playCharacterAnimation(item, animKey) {
+    const action = item?.character?.actions?.[animKey];
+    if (!item || !action) return;
+    item.animKey = animKey;
+    item.paused = false;
+    for (const a of Object.values(item.character.actions)) {
+      if (!a) continue;
+      a.paused = false;
+      a.setEffectiveTimeScale(1);
+      a.setEffectiveWeight(1);
+      a.setLoop(THREE.LoopRepeat);
+      a.clampWhenFinished = false;
+    }
+    crossFadeTo(item.character.actions, animKey, 0.12);
+    this._refreshCharacterMenu();
+  }
+
+  _toggleCharacterPause(item) {
+    if (!item?.character?.actions) return;
+    item.paused = !item.paused;
+    for (const a of Object.values(item.character.actions)) {
+      if (a) a.paused = item.paused;
+    }
+    this._refreshCharacterMenu();
+  }
+
+  _openCharacterMenu(item, x, y) {
+    this._selectedCharacter = item;
+    if (!this._characterMenu) {
+      const menu = document.createElement('div');
+      menu.id = 'promo-character-menu';
+      menu.innerHTML = `
+        <div class="promo-menu-title">Персонаж</div>
+        <div class="promo-row">
+          <label>Анимация</label>
+          <select id="promo-anim-select">
+            ${PROMO_ANIMS.map((a) => `<option value="${a.key}">${a.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="promo-row">
+          <button id="promo-anim-pause">Пауза</button>
+          <button id="promo-char-delete" class="danger">Удалить</button>
+          <button id="promo-char-close">Закрыть</button>
+        </div>
+      `;
+      document.body.appendChild(menu);
+      this._characterMenu = menu;
+      menu.querySelector('#promo-anim-select')?.addEventListener('change', (ev) => {
+        if (this._selectedCharacter) this._playCharacterAnimation(this._selectedCharacter, ev.target.value);
+      });
+      menu.querySelector('#promo-anim-pause')?.addEventListener('click', () => {
+        if (this._selectedCharacter) this._toggleCharacterPause(this._selectedCharacter);
+      });
+      menu.querySelector('#promo-char-delete')?.addEventListener('click', () => {
+        if (this._selectedCharacter) this._deletePromoCharacter(this._selectedCharacter);
+      });
+      menu.querySelector('#promo-char-close')?.addEventListener('click', () => this._removeCharacterMenu());
+    }
+    if (x || y) {
+      const pad = 12;
+      const left = Math.min(window.innerWidth - 280, Math.max(pad, x + pad));
+      const top = Math.min(window.innerHeight - 150, Math.max(pad, y + pad));
+      this._characterMenu.style.left = `${left}px`;
+      this._characterMenu.style.top = `${top}px`;
+    } else {
+      this._characterMenu.style.left = '12px';
+      this._characterMenu.style.top = '12px';
+    }
+    this._refreshCharacterMenu();
+  }
+
+  _refreshCharacterMenu() {
+    if (!this._characterMenu || !this._selectedCharacter) return;
+    const item = this._selectedCharacter;
+    const select = this._characterMenu.querySelector('#promo-anim-select');
+    if (select) {
+      for (const opt of select.options) {
+        opt.disabled = !item.character?.actions?.[opt.value];
+      }
+      select.value = item.animKey;
+    }
+    const pause = this._characterMenu.querySelector('#promo-anim-pause');
+    if (pause) {
+      pause.textContent = item.paused ? 'Продолжить' : 'Пауза';
+      pause.classList.toggle('armed', item.paused);
+    }
+    const title = this._characterMenu.querySelector('.promo-menu-title');
+    if (title) title.textContent = item.def?.label || 'Персонаж';
+  }
+
+  _removeCharacterMenu() {
+    if (this._characterMenu && this._characterMenu.parentNode) {
+      this._characterMenu.parentNode.removeChild(this._characterMenu);
+    }
+    this._characterMenu = null;
+  }
+
   // ---- Input ------------------------------------------------------------
 
   _installInput() {
@@ -272,6 +528,7 @@ export class PromoMode {
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('mousemove', this._onMouseMove);
     this.game.canvas?.addEventListener('click', this._onClick);
+    this.game.canvas?.addEventListener('contextmenu', this._onContextMenu);
     this.game.canvas?.addEventListener('wheel', this._onWheel, { passive: false });
     document.addEventListener('pointerlockchange', this._onPointerLockChange);
   }
@@ -281,6 +538,7 @@ export class PromoMode {
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('mousemove', this._onMouseMove);
     this.game.canvas?.removeEventListener('click', this._onClick);
+    this.game.canvas?.removeEventListener('contextmenu', this._onContextMenu);
     this.game.canvas?.removeEventListener('wheel', this._onWheel);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange);
     this._keys.clear();
@@ -306,10 +564,29 @@ export class PromoMode {
     if (this.pitch < -lim) this.pitch = -lim;
   }
 
-  _handlePointerLock(e) {
-    // Don't steal clicks that landed on our panel.
+  _handleContextMenu(e) {
+    e.preventDefault();
     if (this._panel && this._panel.contains(e.target)) return;
+    if (this._characterMenu && this._characterMenu.contains(e.target)) return;
     this.game.canvas?.requestPointerLock?.();
+  }
+
+  _handleCanvasClick(e) {
+    if (this._panel && this._panel.contains(e.target)) return;
+    if (this._characterMenu && this._characterMenu.contains(e.target)) return;
+    if (this._deleteArmed) {
+      const hit = this._pickPromoCharacter(e);
+      if (hit) this._deletePromoCharacter(hit);
+      return;
+    }
+    if (this._spawnArmed) {
+      const point = this._pickGroundPoint(e);
+      if (point) this._spawnPromoCharacter(point);
+      return;
+    }
+    const hit = this._pickPromoCharacter(e);
+    if (hit) this._openCharacterMenu(hit, e.clientX, e.clientY);
+    else this._removeCharacterMenu();
   }
 
   _handleWheel(e) {
@@ -388,6 +665,9 @@ export class PromoMode {
     // the game loop's next tick.
     const g = this.game;
     if (g.renderer && g.scene) {
+      for (const item of this._promoCharacters) {
+        if (!item.paused) item.character?.mixer?.update(dt);
+      }
       g.renderer.render(g.scene, cam);
     }
   }
