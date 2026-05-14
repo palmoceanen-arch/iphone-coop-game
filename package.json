@@ -1,0 +1,31 @@
+{
+  "name": "physball-arena",
+  "version": "0.1.0",
+  "description": "Two-player local-coop top-down adventure (Three.js + Socket.IO).",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "NODE_ENV=production node server.js",
+    "build": "vite build",
+    "build:yandex": "vite build --mode yandex",
+    "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "preview:yandex": "vite preview --mode yandex --host 0.0.0.0 --port 3000",
+    "lint": "eslint \"src/**/*.js\" \"server.js\""
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "selfsigned": "^5.5.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "three": "^0.165.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.10.0",
+    "globals": "^17.5.0",
+    "vite": "^5.4.0"
+  },
+  "license": "MIT"
+}
