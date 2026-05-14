@@ -18,6 +18,29 @@ const P1_KEYS = {
   // movement+combat reach stays uncluttered.
   seedCycle: ['KeyQ'],
 };
+// Extra solo-only alternates that get merged into P1's keymap when the
+// Input is constructed with `{ solo: true }`. We don't add these to the
+// base P1_KEYS because in coop they conflict with P2 (arrows / Shift /
+// Space are all P2 bindings) and the right-hand cluster of P2 would also
+// steal the alt-attack from P1. In solo the arrow + Space + ShiftLeft
+// trio is the de-facto browser-game default, so a Yandex player who
+// never read the controls page can still play.
+const P1_KEYS_SOLO_EXTRA = {
+  up: ['ArrowUp'],
+  down: ['ArrowDown'],
+  left: ['ArrowLeft'],
+  right: ['ArrowRight'],
+  attack: ['Space'],
+  dash: ['ShiftLeft'],
+};
+function _mergeKeymaps(base, extra) {
+  const out = {};
+  for (const k of Object.keys(base)) out[k] = base[k].slice();
+  for (const k of Object.keys(extra)) {
+    out[k] = (out[k] || []).concat(extra[k]);
+  }
+  return out;
+}
 const P2_KEYS = {
   up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
   attack: ['KeyL', 'Slash'], dash: ['KeyK', 'ShiftRight'], interact: ['KeyJ', 'Period'],
@@ -161,10 +184,16 @@ function extraAxisDir(pad) {
 }
 
 export class Input {
-  constructor() {
+  constructor({ solo = false } = {}) {
     this.down = new Set();
     this.pressed = new Set(); // edge-triggered, cleared after consume
     this.consumedThisFrame = new Set();
+    // Effective P1 keymap. In coop we keep the original WASD-only set so
+    // arrow keys / Space stay free for P2. In solo we extend P1 with the
+    // P2-shaped right-hand cluster so single-player keyboard users get
+    // both WASD *and* arrow-keys + Space + ShiftLeft as alternates.
+    this._p1Map = solo ? _mergeKeymaps(P1_KEYS, P1_KEYS_SOLO_EXTRA) : P1_KEYS;
+    this._solo = !!solo;
     // Remote (mobile) state per slot. Each entry: { moveX, moveZ, attackHeld, dashHeld }
     // Edge events (attack/dash) come through pressed flags below, set true once and consumed by .intent().
     this.remote = [
@@ -181,8 +210,12 @@ export class Input {
         for (const code of codes) this._keyOwners.set(code, slot);
       }
     };
-    recordKeys(0, P1_KEYS);
-    recordKeys(1, P2_KEYS);
+    recordKeys(0, this._p1Map);
+    // P2 keys are only registered when a second player can ever consume
+    // them. In solo this would steal SPACE / arrows from P1, since the
+    // _onDown handler flips the *owning* slot's inputKind glyph back to
+    // keyboard — we don't want P2's UI prompts surfacing in solo.
+    if (!solo) recordKeys(1, P2_KEYS);
     this._onDown = (e) => {
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab'].includes(e.code)) e.preventDefault();
       if (!this.down.has(e.code)) this.pressed.add(e.code);
@@ -463,7 +496,7 @@ export class Input {
   }
 
   intent(playerIndex) {
-    const map = playerIndex === 0 ? P1_KEYS : P2_KEYS;
+    const map = playerIndex === 0 ? this._p1Map : P2_KEYS;
     const r = this.remote[playerIndex];
     const g = this.gamepads[playerIndex];
     let mx = 0, mz = 0;

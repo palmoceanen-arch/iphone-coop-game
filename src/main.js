@@ -21,6 +21,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     console.error('[fatal]', e.error || e.message);
   });
 
+  // Yandex Games 1.6.2.6: right-click on the playfield must NOT open the
+  // browser context menu. We swallow contextmenu globally rather than just
+  // on the canvas so the rule also covers HUD overlays / death panel
+  // backgrounds. Buttons inside #pause / #shop / #death are still clickable
+  // because contextmenu is only triggered by the secondary mouse button,
+  // not by normal left-click input.
+  document.addEventListener('contextmenu', (e) => e.preventDefault());
+
   // `?devAdMock=1` lets a developer preview the Yandex ad flow inside a
   // normal web build by stubbing the SDK with fake overlays. It does NOT
   // disable the lobby — we just install the integration on top of the
@@ -121,13 +129,18 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // Install the Yandex ad integration whenever we're in a build that
     // shows ads (real Yandex bundle, or any build with ?devAdMock=1).
+    // We hold off on the SDK's `LoadingAPI.ready` ping until the first
+    // playable frame has actually rendered (see two requestAnimationFrames
+    // below) — Yandex's own loading spinner hides on that ping, and
+    // hiding it before the canvas paints leaves a black flash for users.
+    let _signalGameReady = () => {};
     if (YANDEX_STATIC || MOCK) {
       const [{ installYandexIntegration }, { gameReady }] = await Promise.all([
         import('./yandex/integration.js'),
         import('./yandex/sdk.js'),
       ]);
       installYandexIntegration(game);
-      gameReady().catch(() => {});
+      _signalGameReady = () => gameReady().catch(() => {});
     }
 
     // The `import.meta.env.VITE_PLATFORM !== 'yandex'` check below is
@@ -143,6 +156,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       const introEl = document.getElementById('intro');
       if (introEl) introEl.style.display = 'none';
       game._startGame();
+      // Two RAFs: the first tick lets game's update/render schedule its
+      // first frame, the second runs *after* the renderer has painted.
+      // Only then do we ping the SDK's LoadingAPI so Yandex's platform-
+      // level loading overlay is replaced by the actual game canvas
+      // with no visible black gap.
+      requestAnimationFrame(() => requestAnimationFrame(_signalGameReady));
     } else {
       // Reveal the lobby/QR overlay now that the world is built. Game's own
       // `_waitingForStart` flag still freezes the simulation until the user

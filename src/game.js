@@ -158,7 +158,10 @@ export class Game {
     // for nearby water and read the live day-weight without us threading
     // the world through every call.
     this.sound.setWorld(this.world);
-    this.input = new Input();
+    // Input takes `solo` so it can extend P1's keymap with arrow-keys +
+    // Space + ShiftLeft when there's no P2 to compete for those. See
+    // P1_KEYS_SOLO_EXTRA in input.js for the merge rules.
+    this.input = new Input({ solo: !!opts.solo });
     // Hand the prompt helper a reference so world prompts (chest, altar,
     // rune, planters, gates, campfires) can ask for the right glyph
     // based on the player's active input device.

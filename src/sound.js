@@ -229,6 +229,7 @@ export class Sound {
     this.master.connect(this.ctx.destination);
     this._applyGains();
     this._buildAmbient();
+    this._bindVisibilityMute();
   }
 
   resume() {
@@ -238,6 +239,39 @@ export class Sound {
     // first user gesture so the first swing isn't silent. Less-common
     // samples still load on demand; the loader is idempotent.
     this._prefetch(['swing', 'hitFlesh', 'enemyVoice', 'enemyVoiceBomber', 'enemyVoiceLegendary', 'hurt', 'enemyDie']);
+  }
+
+  // Yandex Games requirement 1.3 (and a general courtesy on every host):
+  // game audio must stop when the tab/window is minimised, hidden, or
+  // the user switches to another tab. We do this by suspending the
+  // AudioContext so processing actually halts (zero CPU) rather than
+  // just zeroing the master gain. Idempotent — the same handler is
+  // safe to fire while already suspended (no-op) and on the resume
+  // side AudioContext.resume() is a no-op if already running.
+  _bindVisibilityMute() {
+    if (typeof document === 'undefined') return;
+    if (this._visibilityBound) return;
+    this._visibilityBound = true;
+    const onChange = () => {
+      if (!this.ctx) return;
+      if (document.visibilityState === 'hidden') {
+        if (this.ctx.state === 'running') this.ctx.suspend().catch(() => {});
+      } else if (document.visibilityState === 'visible') {
+        // Only resume if the user already kicked off audio via a gesture
+        // (i.e. we ever called resume()). Re-suspending an autoplay-blocked
+        // context with no user interaction would warn in Chrome.
+        if (this.ctx.state === 'suspended' && !this.muted) {
+          this.ctx.resume().catch(() => {});
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onChange);
+    // pagehide fires on bfcache navigation away (iOS Safari especially)
+    // where visibilitychange alone can lag; suspending here matches the
+    // "sound stops within 2 s of leaving the tab" allowance in 1.3.
+    window.addEventListener('pagehide', () => {
+      try { this.ctx?.suspend?.(); } catch { /* ignore */ }
+    });
   }
 
   setWorld(world) { this._world = world; }
