@@ -18,10 +18,20 @@ export class FollowCamera {
     this.canvas = canvas;
     this.handleResize();
     window.addEventListener('resize', () => this.handleResize());
+    // See the matching comment in `game.js#syncRendererSize`. iOS Safari
+    // refines `visualViewport.height` for ~600ms after first paint as the
+    // URL bar settles; without these listeners the camera aspect would
+    // bake in the wrong landscape ratio and the renderer would leave a
+    // black bar at the bottom until the user rotates the device.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => this.handleResize());
+    }
+    [50, 200, 600, 1200].forEach((ms) => setTimeout(() => this.handleResize(), ms));
   }
 
   handleResize() {
-    const w = window.innerWidth, h = window.innerHeight;
+    const w = window.visualViewport?.width ?? window.innerWidth;
+    const h = window.visualViewport?.height ?? window.innerHeight;
     this.cam.aspect = w / h;
     this.cam.updateProjectionMatrix();
   }

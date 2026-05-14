@@ -129,7 +129,10 @@ export class Game {
     this.canvas = document.getElementById('canvas');
     this.renderer = createRenderer(this.canvas);
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setSize(
+      window.visualViewport?.width ?? window.innerWidth,
+      window.visualViewport?.height ?? window.innerHeight,
+    );
     // Shadows are disabled on mobile/integrated GPUs to avoid context loss.
     const enableShadows = !isLikelyLowEndGPU();
     this.renderer.shadowMap.enabled = enableShadows;
@@ -377,9 +380,36 @@ export class Game {
     this._spawnStarterChest();
 
     this._bindUI();
-    window.addEventListener('resize', () => {
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+    // Resize handling has three subtleties on mobile:
+    //   1. iOS Safari fires `resize` on orientation changes, but the
+    //      *first* resize after page load is dispatched before the
+    //      browser chrome (URL bar) finishes collapsing. The renderer
+    //      ends up sized to the smaller-than-final viewport, leaving a
+    //      black bar at the bottom in landscape — which goes away the
+    //      moment the user rotates twice (because that *does* fire a
+    //      second resize after chrome settles).
+    //   2. `visualViewport.resize` fires when the URL bar shows/hides
+    //      and on pinch-zoom, but NOT on all browsers' orientation
+    //      change paths.
+    //   3. `window.innerHeight` reads the layout viewport on iOS,
+    //      whereas `visualViewport.height` reads the *visual* viewport
+    //      (what the player actually sees). We always want the visual
+    //      one when present so the canvas never overshoots into hidden
+    //      toolbar space.
+    const syncRendererSize = () => {
+      const w = window.visualViewport?.width ?? window.innerWidth;
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      this.renderer.setSize(w, h);
+    };
+    window.addEventListener('resize', syncRendererSize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncRendererSize);
+    }
+    // Defer-resize storm: iOS keeps refining the viewport size for
+    // ~600ms after first paint as the URL bar / safe-area-inset bake in.
+    // We re-sync a handful of times so the canvas catches up without
+    // relying on the user rotating their device.
+    [50, 200, 600, 1200].forEach((ms) => setTimeout(syncRendererSize, ms));
 
     // Dev/cheat helpers, exposed via `window.__game.cheat` for quick
     // manual testing (free building, fast gold). Side-effect-only —

@@ -6,6 +6,7 @@ import { PauseMenu } from './pause.js';
 import { getSettings } from './settings.js';
 import { StartMenu } from './startMenu.js';
 import { isMockMode } from './yandex/sdk.js';
+import { installMobileHUD, prepareMobileUI, shouldShowMobileHUD } from './yandex/mobile.js';
 
 // Yandex Games builds bootstrap differently: no LAN lobby, no QR overlay,
 // no mobile→controller redirect, solo-only character picker, plus a
@@ -47,7 +48,19 @@ window.addEventListener('DOMContentLoaded', async () => {
   const ua = (navigator.userAgent || '').toLowerCase();
   const isMobile = /iphone|ipad|ipod|android|mobile/.test(ua);
   const params = new URLSearchParams(window.location.search);
-  if (!YANDEX_STATIC && isMobile && !params.has('host')) {
+  // In Yandex mode the Vite bundle is the full game on every form factor
+  // (the platform iframe shrinks to fit), so the on-screen mobile HUD is
+  // what makes it playable on phones. We still let testers opt in on the
+  // LAN web build with ?mobile=1 so the same code path can be exercised
+  // without the Yandex SDK harness.
+  const MOBILE_HUD = (YANDEX_STATIC || isMockMode()) && shouldShowMobileHUD();
+  // Apply the mh-mobile body class + inject the panel stylesheet as soon as
+  // we know the HUD will be installed — the start menu (with its 3D preview,
+  // colour/weapon pickers, and the «Применить и начать» CTA) opens before the
+  // game/HUD bootstrap, so without this the menu would render with the
+  // desktop padding/footer layout on phones.
+  if (MOBILE_HUD) prepareMobileUI();
+  if (!YANDEX_STATIC && isMobile && !params.has('host') && !MOBILE_HUD) {
     const url = new URL('controller', window.location.href);
     // forward seed code if present so /controller?code=... still works
     for (const [k, v] of params.entries()) url.searchParams.set(k, v);
@@ -142,6 +155,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       installYandexIntegration(game);
       _signalGameReady = () => gameReady().catch(() => {});
     }
+
+    // Mobile/touch HUD: on-screen joystick + diamond cluster of action
+    // buttons. Only installs on touch viewports (or ?mobile=1) inside
+    // Yandex/mock builds — the desktop coop path keeps its keyboard +
+    // gamepad layout untouched.
+    if (MOBILE_HUD) installMobileHUD(game);
 
     // The `import.meta.env.VITE_PLATFORM !== 'yandex'` check below is
     // inlined intentionally so Rollup can fold it to `false` at build
