@@ -27,8 +27,17 @@
          the right-click / long-tap context menu. Applied to #app + canvas
          so the whole game canvas + UI region is inert in this respect;
          interactive HUD elements (buttons in #shop, #pause, #death) opt
-         back in via their own cursor:pointer rules. */
-      #app, canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+         back in via their own cursor:pointer rules.
+
+         `touch-action: none` is only on <canvas> so that swipes on the
+         playfield never trigger browser pan/zoom, but scrollable overlay
+         panels above it (start menu, pause/settings, shop) can still pan
+         with a touch. `touch-action` walks up the ancestor tree, so if we
+         put `none` on #app it would silently block scrolling inside any
+         descendant — which is exactly what happened on the Yandex mobile
+         start screen before this fix. */
+      #app, canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      canvas { touch-action: none; }
       #app { position: fixed; inset: 0; }
       canvas { display: block; width: 100%; height: 100%; }
       #ui-root { position: absolute; inset: 0; pointer-events: none; }
@@ -280,6 +289,9 @@
         width: min(640px, 94vw); max-height: 90vh; overflow-y: auto;
         background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
         padding: 22px 26px;
+        touch-action: pan-y;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
       }
       .pause-panel h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 0.5px; }
       .pause-panel .sub { margin: 0 0 18px; font-size: 13px; opacity: 0.65; }
@@ -383,6 +395,9 @@
         width: min(880px, 94vw); max-height: 92vh; overflow-y: auto;
         background: #161b22; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
         padding: 22px 24px;
+        touch-action: pan-y;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
       }
       .start-view { display: none; }
       .start-view.active { display: block; }

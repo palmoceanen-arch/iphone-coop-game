@@ -201,6 +201,57 @@ function ensureStyles() {
       bottom: calc(env(safe-area-inset-bottom, 0px) + 200px);
       font-size: 11px; padding: 6px 9px;
     }
+    /* Start menu + pause/settings panels on mobile.
+       The overlay panels are already overflow-y: auto, but the index.html
+       fix turned <canvas>'s touch-action: none rule into a canvas-only
+       rule so panel scrolling works on touch screens too. On a phone in
+       landscape (the orientation we nag the player into) the panel still
+       easily exceeds the viewport because of the 220px 3D preview canvas
+       and the three pickers stacked under it, so on mobile we shrink the
+       preview, tighten paddings, and pin the footer (Назад /
+       Применить и начать) to the bottom of the scroll viewport so
+       the primary CTA is always reachable without scrolling. */
+    body.mh-mobile .start-panel,
+    body.mh-mobile .pause-panel {
+      max-height: calc(100vh - 12px);
+      max-height: calc(100dvh - 12px);
+      width: min(720px, 96vw);
+      padding: 14px 16px 0;
+    }
+    body.mh-mobile .start-panel { padding-top: 12px; }
+    body.mh-mobile .start-preview { height: 130px; margin: 2px 0 6px; }
+    body.mh-mobile .start-seed-row { padding: 6px 10px; margin: 0 0 8px; }
+    body.mh-mobile .start-seed-row input[type=text] { padding: 6px 8px; font-size: 12px; }
+    body.mh-mobile .start-seed-row .control button { padding: 6px 10px; font-size: 11px; }
+    body.mh-mobile .start-mode-row { margin: 0 0 6px; }
+    body.mh-mobile .start-mode-btn { padding: 6px 12px; font-size: 11px; }
+    body.mh-mobile .start-slot { padding: 8px 10px 10px; }
+    body.mh-mobile .start-slot-title { font-size: 13px; margin: 0 0 2px; }
+    body.mh-mobile .start-section-label { margin: 4px 0 2px; font-size: 9px; }
+    body.mh-mobile .start-color-row { gap: 4px; margin: 2px 0 6px; }
+    body.mh-mobile .start-swatch { width: 22px; height: 22px; }
+    body.mh-mobile .start-character-grid,
+    body.mh-mobile .start-weapon-grid { gap: 3px; margin: 2px 0 6px; }
+    body.mh-mobile .start-character-chip,
+    body.mh-mobile .start-weapon-chip { padding: 5px 3px; font-size: 10.5px; }
+    body.mh-mobile .start-main-actions { margin: 10px auto; gap: 8px; max-width: 320px; }
+    body.mh-mobile .start-main-actions button { padding: 11px 16px; font-size: 14px; }
+    body.mh-mobile .start-footer,
+    body.mh-mobile .pause-footer {
+      position: sticky; bottom: 0;
+      background: #161b22;
+      margin: 12px -16px 0;
+      padding: 10px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      z-index: 2;
+    }
+    body.mh-mobile .pause-panel {
+      padding: 14px 16px 0;
+    }
+    body.mh-mobile .pause-panel h1 { font-size: 18px; }
+    body.mh-mobile .pause-panel .sub { margin: 0 0 12px; font-size: 12px; }
+    body.mh-mobile .pause-tabs { margin-bottom: 10px; }
+    body.mh-mobile .pause-tabs button { padding: 8px 12px; font-size: 12px; }
     /* Build wheel: re-centre on mobile so it doesn't overlap the joystick.
        Desktop coop positions the per-player wheels in the bottom corners
        since each player owns a half of the keyboard; in solo mobile we
@@ -380,6 +431,17 @@ function dispatchKey(code) {
   } catch { /* ignore in non-DOM contexts */ }
 }
 
+// Set the body class + inject the stylesheet that the rest of the mobile UI
+// keys off (start-panel paddings, sticky footer, shrunken HUD bars). Safe to
+// call before the renderer / game object exists — used by main.js to apply
+// the mobile menu styling _before_ StartMenu opens, since the full HUD only
+// installs after `gameReady`.
+export function prepareMobileUI() {
+  if (typeof document === 'undefined') return;
+  ensureStyles();
+  document.body.classList.add('mh-mobile');
+}
+
 function watchOrientation(rotateEl) {
   const apply = () => {
     const w = window.innerWidth || 0;
@@ -398,8 +460,7 @@ export function installMobileHUD(game) {
   if (!shouldShowMobileHUD()) return null;
   if (typeof document === 'undefined') return null;
 
-  ensureStyles();
-  document.body.classList.add('mh-mobile');
+  prepareMobileUI();
 
   // Bring the on-screen renderer in line with the smaller display + the
   // limited fill-rate budget of mobile GPUs. The game already caps to 2
