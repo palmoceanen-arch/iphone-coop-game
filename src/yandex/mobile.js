@@ -202,25 +202,109 @@ function ensureStyles() {
       font-size: 11px; padding: 6px 9px;
     }
     /* Start menu + pause/settings panels on mobile.
-       The overlay panels are already overflow-y: auto, but the index.html
-       fix turned <canvas>'s touch-action: none rule into a canvas-only
-       rule so panel scrolling works on touch screens too. On a phone in
-       landscape (the orientation we nag the player into) the panel still
-       easily exceeds the viewport because of the 220px 3D preview canvas
-       and the three pickers stacked under it, so on mobile we shrink the
-       preview, tighten paddings, and pin the footer (Назад /
-       Применить и начать) to the bottom of the scroll viewport so
-       the primary CTA is always reachable without scrolling. */
-    body.mh-mobile .start-panel,
+       Earlier we tried position:sticky on the footer + overflow-y:auto on
+       the whole panel. On iOS Safari this combo is unreliable inside
+       fixed-position parents — the scroll either no-ops or jitters,
+       which is exactly what testers saw. The robust pattern is to make
+       the panel itself non-scrolling (overflow:hidden), turn the panel
+       into a flex column, and let one inner child be the scroll
+       container. touch-action: pan-y then lives on a dedicated leaf
+       element, and the footer becomes a static flex child instead of
+       a sticky-positioned one (sticky is the part that jitters). */
+
+    /* PAUSE / SETTINGS PANEL — flex column with internal scroll.
+       The panel itself has overflow:hidden so touch panning can't escape
+       to ancestors. The active tab is the only scroll container, so all
+       touch panning happens on a dedicated element. min-height:0 lets
+       the flex child shrink below its intrinsic size, which is what
+       lets the overflow:auto actually clip+scroll. */
     body.mh-mobile .pause-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      width: min(720px, calc(100vw - 12px));
       max-height: calc(100vh - 12px);
       max-height: calc(100dvh - 12px);
-      width: min(720px, 96vw);
-      padding: 14px 16px 0;
+      padding: 10px 14px 0;
+      box-sizing: border-box;
     }
-    body.mh-mobile .start-panel { padding-top: 12px; }
-    body.mh-mobile .start-preview { height: 130px; margin: 2px 0 6px; }
-    body.mh-mobile .start-seed-row { padding: 6px 10px; margin: 0 0 8px; }
+    /* Hide "Пауза / Нажми Esc..." header — no Esc key on a phone, and
+       the real estate matters. */
+    body.mh-mobile .pause-panel > h1,
+    body.mh-mobile .pause-panel > .sub { display: none; }
+    body.mh-mobile .pause-tabs { flex-shrink: 0; margin: 0 0 8px; }
+    body.mh-mobile .pause-tabs button { padding: 8px 12px; font-size: 12px; }
+    body.mh-mobile .pause-tab.active {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding-right: 2px;
+    }
+    body.mh-mobile .pause-row { margin: 4px 0; padding: 8px 10px; }
+    body.mh-mobile .pause-panel > .pause-footer {
+      flex-shrink: 0;
+      position: static;
+      margin: 8px -14px 0;
+      padding: 10px 14px;
+      background: #161b22;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    /* START PANEL — only the newgame view needs internal scroll (its
+       character pickers are the tall content). We DON'T flex-column the
+       whole panel because that would force every view (main, load) to
+       fill the screen with empty space.
+       Instead: the panel stays auto-sized, max-height capped. The
+       newgame view, when active, becomes the flex column with its own
+       scroll on #start-slots and a pinned footer. Main + load views
+       keep their natural block layout. */
+    body.mh-mobile .start-panel {
+      display: flex;
+      flex-direction: column;
+      width: min(720px, calc(100vw - 12px));
+      max-height: calc(100vh - 12px);
+      max-height: calc(100dvh - 12px);
+      padding: 10px 14px 0;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    /* The active newgame view fills the panel as a flex child. Without
+       this, the panel could shrink (max-height hit) but the view would
+       keep its own intrinsic height and #start-slots wouldn't get the
+       overflow:auto kick-in. With flex: 1 1 auto + min-height: 0 the
+       view tracks the panel and #start-slots can shrink to scroll. */
+    body.mh-mobile .start-view[data-view="newgame"].active {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    body.mh-mobile .start-view[data-view="newgame"] > .start-seed-row,
+    body.mh-mobile .start-view[data-view="newgame"] > .start-mode-row {
+      flex-shrink: 0;
+    }
+    body.mh-mobile .start-view[data-view="newgame"] > #start-slots {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    body.mh-mobile .start-view[data-view="newgame"] > .start-footer {
+      flex-shrink: 0;
+      position: static;
+      margin: 8px -14px 0;
+      padding: 10px 14px;
+      background: #161b22;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    body.mh-mobile .start-view[data-view="newgame"] > .start-gp-hint { display: none; }
+    body.mh-mobile .start-preview { height: 120px; margin: 2px 0 6px; }
+    body.mh-mobile .start-seed-row { padding: 6px 10px; margin: 0 0 6px; }
     body.mh-mobile .start-seed-row input[type=text] { padding: 6px 8px; font-size: 12px; }
     body.mh-mobile .start-seed-row .control button { padding: 6px 10px; font-size: 11px; }
     body.mh-mobile .start-mode-row { margin: 0 0 6px; }
@@ -234,24 +318,8 @@ function ensureStyles() {
     body.mh-mobile .start-weapon-grid { gap: 3px; margin: 2px 0 6px; }
     body.mh-mobile .start-character-chip,
     body.mh-mobile .start-weapon-chip { padding: 5px 3px; font-size: 10.5px; }
-    body.mh-mobile .start-main-actions { margin: 10px auto; gap: 8px; max-width: 320px; }
-    body.mh-mobile .start-main-actions button { padding: 11px 16px; font-size: 14px; }
-    body.mh-mobile .start-footer,
-    body.mh-mobile .pause-footer {
-      position: sticky; bottom: 0;
-      background: #161b22;
-      margin: 12px -16px 0;
-      padding: 10px 16px;
-      border-top: 1px solid rgba(255,255,255,0.08);
-      z-index: 2;
-    }
-    body.mh-mobile .pause-panel {
-      padding: 14px 16px 0;
-    }
-    body.mh-mobile .pause-panel h1 { font-size: 18px; }
-    body.mh-mobile .pause-panel .sub { margin: 0 0 12px; font-size: 12px; }
-    body.mh-mobile .pause-tabs { margin-bottom: 10px; }
-    body.mh-mobile .pause-tabs button { padding: 8px 12px; font-size: 12px; }
+    body.mh-mobile .start-main-actions { margin: 6px auto; gap: 10px; max-width: 320px; }
+    body.mh-mobile .start-main-actions button { padding: 12px 16px; font-size: 14px; }
     /* Build wheel: re-centre on mobile so it doesn't overlap the joystick.
        Desktop coop positions the per-player wheels in the bottom corners
        since each player owns a half of the keyboard; in solo mobile we

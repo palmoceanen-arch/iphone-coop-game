@@ -21,7 +21,11 @@
     <link rel="apple-touch-icon" href="/icon.svg" />
     <style>
       :root { color-scheme: dark; }
-      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1015; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e8e8; overscroll-behavior: none; }
+      /* `100dvh` matches the *visual* viewport on iOS (excludes the
+         URL bar / safe-area), which is what the canvas + overlays
+         actually need to occupy. Falls back to `100%` on browsers that
+         don't ship dvh yet. On desktop the two are equivalent. */
+      html, body { margin: 0; padding: 0; height: 100%; height: 100dvh; overflow: hidden; background: #0c1015; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e8e8e8; overscroll-behavior: none; }
       /* Yandex Games 1.6.2.6 / 1.10: the playfield must never trigger
          text selection, the iOS magnifying-glass long-tap callout, or
          the right-click / long-tap context menu. Applied to #app + canvas
